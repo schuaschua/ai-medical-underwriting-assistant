@@ -69,7 +69,7 @@ describe("1.3 role switcher", () => {
       screen.getByRole("button", { name: "Continue as Customer" }),
     );
     await screen.findByText("The server sees you as: Customer.");
-    expect(navigationLinks()).toEqual(["/customer"]);
+    expect(navigationLinks()).toEqual(["/customer", "/customer/upload"]);
     const callsAsCustomer = server.calls.length;
 
     await user.click(screen.getByRole("radio", { name: "Underwriter" }));

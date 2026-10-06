@@ -9,8 +9,8 @@ dependencies = [
     "azure-identity==1.26.0",
     "azure-monitor-opentelemetry==1.8.10",
     "fastapi==0.142.2",
-    # AD-3: the client for calls through the Dapr sidecar, which start with story 1.5.
-    # FastAPI's test client needs it already.
+    # AD-3: the client for calls through the Dapr sidecar (adapters/dapr.py).
+    # FastAPI's test client needs it too.
     "httpx==0.28.1",
     "pydantic==2.13.5",
     "pydantic-settings==2.15.0",

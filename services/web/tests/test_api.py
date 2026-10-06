@@ -197,8 +197,9 @@ def test_story_1_3_wrong_method_is_answered_in_the_error_shape(
 ) -> None:
     response = client.post("/")
 
-    assert response.status_code == 422
-    assert error_of(response.json())[0] == "validation_failed"
+    # Story 1.5 gave 405 a code of its own; it was answered as 422 before.
+    assert response.status_code == 405
+    assert error_of(response.json())[0] == "method_not_allowed"
 
 
 @pytest.mark.parametrize("path", ["/api", "/api/"])
@@ -211,11 +212,14 @@ def test_story_1_3_bare_api_path_is_404_in_the_error_shape(
     assert error_of(response.json())[0] == "not_found"
 
 
-def test_story_1_3_wrong_method_on_an_api_route_is_404(client: TestClient) -> None:
+def test_story_1_3_wrong_method_on_an_api_route_is_answered_in_the_error_shape(
+    client: TestClient,
+) -> None:
     response = client.post("/api/me", headers={"X-Demo-Role": "customer"})
 
-    assert response.status_code == 404
-    assert error_of(response.json())[0] == "not_found"
+    # Story 1.5: a path that exists is 405; only an unknown path is 404.
+    assert response.status_code == 405
+    assert error_of(response.json())[0] == "method_not_allowed"
 
 
 def test_story_1_3_health_answers_head(client: TestClient) -> None:

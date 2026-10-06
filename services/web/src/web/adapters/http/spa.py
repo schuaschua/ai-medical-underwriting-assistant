@@ -2,11 +2,15 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
 from contracts.errors import DomainError, ErrorCode
-from web.adapters.http.errors import NOT_FOUND_MESSAGE, is_api_path
+from web.adapters.http.errors import (
+    NOT_FOUND_MESSAGE,
+    is_api_path,
+    unmatched_api_error,
+)
 
 INDEX_FILE = "index.html"
 # The build puts every file it names by content hash in this folder.
@@ -27,10 +31,11 @@ def build_spa_router(spa_dir: Path) -> APIRouter:
     router = APIRouter()
 
     @router.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def spa(path: str) -> FileResponse:
+    async def spa(path: str, request: Request) -> FileResponse:
         if is_api_path(f"/{path}"):
-            # An unknown `/api` path is an API error, never the SPA's HTML.
-            raise _not_found()
+            # An `/api` path no API route took is an API error, never the SPA's
+            # HTML: 405 if the path exists under another method, else 404.
+            raise unmatched_api_error(request)
         try:
             candidate = (root / path).resolve()
             # A path that climbs out of the SPA folder is never served.

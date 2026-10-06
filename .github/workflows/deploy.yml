@@ -104,6 +104,19 @@ jobs:
             --file services/web/Dockerfile \
             .
 
+      - name: Build and push the intake image
+        # The `app` stack runs this image too. Its database migrations are not
+        # run here yet: until this workflow has a migration step
+        # (terraform.md rule 36), an operator runs them as described in
+        # infra/bootstrap/README.md, section 4, and intake reports "not
+        # ready" until that is done.
+        run: |
+          az acr build \
+            --registry "$REGISTRY_NAME" \
+            --image "intake:${GITHUB_SHA}" \
+            --file services/intake/Dockerfile \
+            .
+
       - name: Init
         run: terraform -chdir="$APP_STACK" init -no-color -lockfile=readonly
 
@@ -153,6 +166,31 @@ jobs:
           echo "::error::No ready revision runs ${expected}."
           exit 1
 
+      - name: intake runs this commit's image
+        # Read-only. intake's latest revision must be this commit's image. It
+        # is not required to be ready: readiness needs the database role and
+        # the migrations, which are still a manual step
+        # (infra/bootstrap/README.md, section 4).
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw intake_container_app_id)"
+          expected="${REGISTRY_LOGIN_SERVER}/intake:${GITHUB_SHA}"
+          for attempt in $(seq 1 30); do
+            latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+            image=""
+            if [[ -n "$latest" ]]; then
+              image="$(az resource show --ids "${app_id}/revisions/${latest}" \
+                --query 'properties.template.containers[0].image' --output tsv)"
+            fi
+            if [[ "$image" == "$expected" ]]; then
+              echo "intake's latest revision ${latest} runs ${image}."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: latest=${latest} image=${image}"
+            sleep 10
+          done
+          echo "::error::intake's latest revision does not run ${expected}."
+          exit 1
+
       - name: Smoke check
         # Read-only: the health route, and the SPA's entry page (an image
         # without the built SPA would answer the first and not the second).
@@ -168,4 +206,18 @@ jobs:
           if [[ "$content_type" != text/html* ]]; then
             echo "::error::${url}/ answered with content type '${content_type}', not HTML."
             exit 1
+          fi
+
+      - name: Say whether intake is ready
+        # Read-only, and never fails the run: it ends the run with a notice
+        # when intake is not ready, so a green deploy is not read as "uploads work".
+        if: ${{ success() }}
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw intake_container_app_id)"
+          latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+          ready="$(az resource show --ids "$app_id" --query properties.latestReadyRevisionName --output tsv)"
+          if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+            echo "::notice::intake is ready (revision ${latest})."
+          else
+            echo "::warning::intake is NOT ready (latest=${latest}, ready=${ready}). Uploads will be answered with 502 until its database role exists and its migrations have run: infra/bootstrap/README.md, section 4."
           fi

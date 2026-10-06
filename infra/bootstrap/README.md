@@ -106,12 +106,21 @@ for name in $(az cognitiveservices account list-deleted \
   az cognitiveservices account purge -l westus3 -g rg-aiuw-demo-wus3 -n "$name"
 done
 
-# 4. Confirm the group is empty and still there.
+# 4. Remove the alert rule that Application Insights creates on its own
+#    ("Failure Anomalies - appi-aiuw-demo-wus3"). Terraform does not manage it,
+#    so the destroy leaves it behind. It costs nothing.
+az resource list -g rg-aiuw-demo-wus3 \
+  --resource-type microsoft.alertsmanagement/smartDetectorAlertRules --query "[].id" -o tsv |
+  while IFS= read -r id; do az resource delete --ids "$id"; done
+
+# 5. Confirm the group is empty and still there.
 az resource list -g rg-aiuw-demo-wus3 -o table
 az group show -n rg-aiuw-demo-wus3 --query "{name:name,tags:tags}"
 ```
 
-What to expect on a teardown and re-create (from the configuration and Azure's documented behaviour; not yet observed):
+Observed on 2026-10-06 over two full cycles: a bring-up takes about 11 minutes in one apply; a teardown takes about 26 minutes, nearly all of it the Container Apps environment, plus about 3 minutes to purge the three AI accounts. After a re-create, the plan run straight after the apply reports no changes.
+
+What to expect on a teardown and re-create:
 
 - **Resource group:** kept. Never run `az group delete` on it: that would also remove the deployment identity's role assignments.
 - **Cognitive Services accounts** (Foundry, Document Intelligence, Azure AI Language): soft-deleted on destroy, so step 3 is needed. Purging needs Contributor or Owner on the subscription or resource group.
@@ -121,12 +130,101 @@ What to expect on a teardown and re-create (from the configuration and Azure's d
 - **Model quota:** a deleted deployment frees its quota within minutes.
 - **State:** the file `demo/foundation.tfstate` should stay in the `aiuw` container, empty of resources.
 
+## 4. Database role for `intake`
+
+Added by story 1.5. **None of the commands in this section has been run yet**: they are written from the configuration and from Azure's documentation, so read each step's output before going on. Add each run to the log below.
+
+`intake` is the first service with a database schema (spine AD-4). PostgreSQL access is not an Azure role, so Terraform cannot grant it: after the `foundation` stack is up, an operator does the steps below once, and again after every teardown, because the re-created identity has a new principal id. The deploy workflow has no migration step yet (`terraform.md` rule 36), so the migrations are run here by hand as well. Until this section is done, `intake` reports "not ready" and an upload is answered with 502.
+
+You need to be one of the server's Entra administrators (`TF_VAR_postgresql_extra_admin_object_ids` at bring-up, section 2), with `psql`, `uv` and this repository checked out. Run the steps in this order, in one shell, from the repository root. The order matters: the roles first, then the migrations (which create the schema), then the grants (which need the schema and its tables to exist).
+
+**Step 0. Set up the shell, and open the firewall for your address.** The `trap` removes the firewall rule and the token when the shell exits, also after a failed step; `set -e` stops at the first error.
+
+```bash
+set -euo pipefail
+
+SERVER="$(terraform -chdir=infra/demo/foundation output -raw postgresql_server_name)"
+HOST="$(terraform -chdir=infra/demo/foundation output -raw postgresql_fqdn)"
+DATABASE="$(terraform -chdir=infra/demo/foundation output -raw postgresql_database_name)"
+ME="$(az ad signed-in-user show --query id -o tsv)"   # your database role is named after your object id
+SERVICE_ROLE="id-aiuw-demo-wus3-intake"               # must equal: terraform -chdir=infra/demo/app output intake_database_role
+DEPLOY_ROLE="id-aiuw-demo-wus3-deploy"                # the pipeline's role, which will run migrations later
+
+cleanup() {
+  # Always: the temporary firewall rule (azure.md rule 13) and the token.
+  az postgres flexible-server firewall-rule delete -g rg-aiuw-demo-wus3 -n "$SERVER" \
+    --rule-name operator-bootstrap --yes || true
+  unset PGPASSWORD
+}
+trap cleanup EXIT
+
+az postgres flexible-server firewall-rule create -g rg-aiuw-demo-wus3 -n "$SERVER" \
+  --rule-name operator-bootstrap --start-ip-address "$(curl -s https://api.ipify.org)"
+
+# An Entra token is the password. It lasts about an hour.
+export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+```
+
+**Step 1. Roles.** Principals are created in the `postgres` database; the service's role is named after its identity. Your own role is made a member of the pipeline's role, which step 3 needs.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
+select * from pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+GRANT "$DEPLOY_ROLE" TO "$ME";
+SQL
+```
+
+If the first statement says the role already exists, the identity was not re-created since the last run; go on with the second statement alone.
+
+**Step 2. Schema and migrations.** The service never migrates at start-up, and its readiness probe fails until the schema is at the migration head bundled in its image. This creates schema `intake`, its tables and its version table. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
+
+```bash
+INTAKE_DATABASE_HOST="$HOST" INTAKE_DATABASE_NAME="$DATABASE" INTAKE_DATABASE_USER="$ME" \
+INTAKE_DATABASE_ENTRA_AUTH=true \
+  uv run alembic -c services/intake/alembic.ini upgrade head
+```
+
+**Step 3. Grants.** The service role gets data rights on its own schema and nothing else: no `CREATE`, because only migrations change the schema, and read-only on the version table, so the service can check its revision but never change it. Sequences are included for tables that later get one. The schema and its tables are handed to the pipeline's role, so that it owns them as the spine's conventions say and its later migrations need no further grant.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
+-- Hand the schema and everything in it to the pipeline's role.
+ALTER SCHEMA intake OWNER TO "$DEPLOY_ROLE";
+ALTER TABLE intake."case" OWNER TO "$DEPLOY_ROLE";
+ALTER TABLE intake.document OWNER TO "$DEPLOY_ROLE";
+ALTER TABLE intake.alembic_version OWNER TO "$DEPLOY_ROLE";
+
+GRANT USAGE ON SCHEMA intake TO "$SERVICE_ROLE";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA intake TO "$SERVICE_ROLE";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA intake TO "$SERVICE_ROLE";
+-- The version table is read-only for the service.
+REVOKE INSERT, UPDATE, DELETE ON intake.alembic_version FROM "$SERVICE_ROLE";
+
+-- Tables and sequences that later migrations add, run by the pipeline's role.
+-- This needs membership of that role, granted in step 1.
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA intake
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "$SERVICE_ROLE";
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA intake
+  GRANT USAGE, SELECT ON SEQUENCES TO "$SERVICE_ROLE";
+SQL
+```
+
+**Step 4. Close up and check.** Leaving the shell runs the `trap`; to stay in the shell, run it now.
+
+```bash
+cleanup; trap - EXIT
+az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
+```
+
+Then the `intake` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run.
+
 ## Out-of-band log
 
 Every command that changed Azure or GitHub outside the pipeline, newest last (`terraform.md` rule 29).
 
 | Date | Who | Command | What it did |
 | --- | --- | --- | --- |
-| 2026-10-06 | Coding agent, as operator | none | Wrote the bootstrap script and the `foundation` stack. Nothing has been changed in Azure or GitHub yet: the bootstrap grants roles, and the agent's session was not permitted to run it. The steps below are still to be run by the owner. |
-| pending | Owner | `bash infra/bootstrap/state-backend.sh` | Creates everything in the table in section 1. |
-| pending | Owner | `terraform -chdir=infra/demo/foundation init`, `plan -out=tfplan`, `apply tfplan` | First apply of the `foundation` stack, run locally under the recorded exception to `terraform.md` rules 26 and 33. |
+| 2026-10-06 | Coding agent, at the owner's request | `bash infra/bootstrap/state-backend.sh` (twice) | First run made 15 changes: resource group, state container, deployment identity, two federated credentials, three scoped roles, the operator's blob role, four repository variables and the `demo` environment. Second run: `No changes.` |
+| 2026-10-06 | Coding agent, as operator | `terraform init`, `plan -out=tfplan`, `apply tfplan` (test session 1) | Applied the `foundation` stack locally under the recorded exception to `terraform.md` rules 26 and 33. The first apply failed on the Foundry project (409, fixed in code); a second apply completed. |
+| 2026-10-06 | Coding agent, as operator | `terraform state rm azurerm_resource_group.this`, `plan -destroy`, `apply`, `az cognitiveservices account purge` x3, `az resource delete` on the auto-created alert rule | Tore down test session 1. The resource group, state container and deployment identity were kept. |
+| 2026-10-06 | Coding agent, as operator | Bring-up and tear-down again (test session 2) | Fresh apply in one run (1 imported, 103 added); the plan straight after showed no changes; then torn down the same way. Nothing is left running. |

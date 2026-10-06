@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { getMe, type Me } from "../api/client";
+import { getMe } from "../api/client";
+import type { Me } from "../api/contracts.gen";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { strings } from "../strings";
 

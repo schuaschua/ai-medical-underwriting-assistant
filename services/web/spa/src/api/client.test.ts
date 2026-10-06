@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRole } from "../role/roleStore";
 import { errorBody, fakeServer, json } from "../test/server";
-import { ApiError, getMe, NetworkError, REQUEST_TIMEOUT_MS } from "./client";
+import {
+  ApiError,
+  getMe,
+  NetworkError,
+  REQUEST_TIMEOUT_MS,
+  UPLOAD_TIMEOUT_MS,
+  uploadDocument,
+} from "./client";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -15,7 +22,13 @@ describe("1.3 API client", () => {
     await expect(getMe()).resolves.toEqual({ role: "underwriter" });
 
     expect(server.calls).toEqual([
-      { path: "/api/me", method: "GET", role: "underwriter" },
+      {
+        path: "/api/me",
+        method: "GET",
+        role: "underwriter",
+        contentType: null,
+        body: null,
+      },
     ]);
   });
 
@@ -109,5 +122,91 @@ describe("1.3 API client", () => {
     setRole("customer");
 
     await expect(getMe()).rejects.toBeInstanceOf(NetworkError);
+  });
+});
+
+describe("1.5 API client", () => {
+  it("sends an upload as the PDF itself, with the role header", async () => {
+    const server = fakeServer();
+    setRole("customer");
+    const file = new Blob(["%PDF-1.7"]);
+
+    await expect(uploadDocument(file)).resolves.toMatchObject({
+      status: "running",
+    });
+
+    expect(server.calls).toEqual([
+      {
+        path: "/api/cases",
+        method: "POST",
+        role: "customer",
+        contentType: "application/pdf",
+        body: file,
+      },
+    ]);
+  });
+
+  it("turns a refused upload into an ApiError with the server's code", async () => {
+    fakeServer();
+    setRole("underwriter");
+
+    const error = await uploadDocument(new Blob(["%PDF-1.7"])).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 403, code: "role_not_allowed" });
+  });
+
+  it.each([
+    ["no case id", { document_id: "d", status: "running" }],
+    ["an unknown status", { case_id: "c", document_id: "d", status: "new" }],
+    ["a list", []],
+  ])(
+    "reports a 201 with %s as an ApiError without a code",
+    async (_n, body) => {
+      fakeServer(() => json(201, body));
+      setRole("customer");
+
+      const error = await uploadDocument(new Blob(["%PDF-1.7"])).catch(
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ code: null, traceId: null });
+    },
+  );
+
+  it("waits longer for an upload than the server's own deadlines", () => {
+    // intake 90 s < web 120 s < browser: the browser outlasts both.
+    expect(UPLOAD_TIMEOUT_MS).toBe(150_000);
+    expect(UPLOAD_TIMEOUT_MS).toBeGreaterThan(120_000);
+  });
+
+  it("gives an upload longer than other calls before giving up", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      setRole("customer");
+
+      const outcome = uploadDocument(new Blob(["%PDF-1.7"])).catch(
+        (caught: unknown) => caught,
+      );
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(UPLOAD_TIMEOUT_MS - REQUEST_TIMEOUT_MS);
+
+      expect(await outcome).toBeInstanceOf(NetworkError);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

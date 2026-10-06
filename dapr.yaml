@@ -19,3 +19,22 @@ apps:
     env:
       WEB_HOST: "127.0.0.1"
       WEB_PORT: "8000"
+  - appID: intake
+    appDirPath: ./services/intake
+    appProtocol: http
+    appPort: 8001
+    daprHTTPPort: 3501
+    # AD-3: uploads are up to 10 MB; Dapr's default limit is 4 MB.
+    maxBodySize: 16Mi
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "intake"]
+    env:
+      INTAKE_HOST: "127.0.0.1"
+      INTAKE_PORT: "8001"
+      # The containers of compose.yaml. PostgreSQL there has no password, and
+      # this value names the blob emulator's built-in account: it is no secret.
+      INTAKE_DATABASE_HOST: "127.0.0.1"
+      INTAKE_DATABASE_NAME: "aiuw"
+      INTAKE_DATABASE_USER: "aiuw"
+      INTAKE_BLOB_CONNECTION_STRING: "UseDevelopmentStorage=true"

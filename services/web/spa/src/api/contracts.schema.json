@@ -703,8 +703,12 @@
         "role_not_allowed",
         "actor_not_human",
         "not_found",
+        "method_not_allowed",
         "file_too_large",
         "unsupported_file_type",
+        "payload_too_large",
+        "unsupported_media_type",
+        "too_many_requests",
         "in_progress",
         "not_redacted",
         "not_awaiting_decision",
@@ -981,6 +985,20 @@
       "title": "FactSetResult",
       "type": "object"
     },
+    "Health": {
+      "additionalProperties": false,
+      "description": "Response of every service's health and readiness routes.",
+      "properties": {
+        "status": {
+          "const": "ok",
+          "default": "ok",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "title": "Health",
+      "type": "object"
+    },
     "HttpMethod": {
       "enum": [
         "GET",
@@ -990,6 +1008,20 @@
       "type": "string"
     },
     "JsonValue": {},
+    "Me": {
+      "additionalProperties": false,
+      "description": "Response of `GET /api/me`: the demo role `web` read from the request.",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/DemoRole"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "title": "Me",
+      "type": "object"
+    },
     "Page": {
       "additionalProperties": false,
       "properties": {
@@ -1731,6 +1763,32 @@
       ],
       "title": "ToolName",
       "type": "string"
+    },
+    "UploadedCase": {
+      "additionalProperties": false,
+      "description": "Response of `POST /api/cases`: the case `intake` created, with its status.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "document_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CaseStatus"
+        }
+      },
+      "required": [
+        "case_id",
+        "document_id",
+        "status"
+      ],
+      "title": "UploadedCase",
+      "type": "object"
     },
     "Verdict": {
       "enum": [

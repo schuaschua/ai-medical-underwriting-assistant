@@ -58,8 +58,12 @@ export type ErrorCode =
   | "role_not_allowed"
   | "actor_not_human"
   | "not_found"
+  | "method_not_allowed"
   | "file_too_large"
   | "unsupported_file_type"
+  | "payload_too_large"
+  | "unsupported_media_type"
+  | "too_many_requests"
   | "in_progress"
   | "not_redacted"
   | "not_awaiting_decision"
@@ -136,8 +140,10 @@ export interface Contracts {
   Fact: Fact;
   FactList: FactList;
   FactSetResult: FactSetResult;
+  Health: Health;
   HttpMethod: HttpMethod;
   JsonValue: JsonValue;
+  Me: Me;
   Page: Page;
   PageBoxes: PageBoxes;
   PageBoxesQuery: PageBoxesQuery;
@@ -167,6 +173,7 @@ export interface Contracts {
   StopAfter: StopAfter;
   SystemReason: SystemReason;
   ToolName: ToolName;
+  UploadedCase: UploadedCase;
   Verdict: Verdict;
   VerdictOutput: VerdictOutput;
   VerdictRun: VerdictRun;
@@ -388,6 +395,18 @@ export interface FactSetResult {
   status: StageStatus;
   unverified_count: number;
 }
+/**
+ * Response of every service's health and readiness routes.
+ */
+export interface Health {
+  status?: "ok";
+}
+/**
+ * Response of `GET /api/me`: the demo role `web` read from the request.
+ */
+export interface Me {
+  role: DemoRole;
+}
 export interface Page {
   case_id: string;
   document_id: string;
@@ -548,6 +567,14 @@ export interface StartCaseRequest {
   eval_run_id?: string | null;
   retriever_configs?: [RetrieverConfig, ...RetrieverConfig[]] | null;
   stop_after?: StopAfter | null;
+}
+/**
+ * Response of `POST /api/cases`: the case `intake` created, with its status.
+ */
+export interface UploadedCase {
+  case_id: string;
+  document_id: string;
+  status: CaseStatus;
 }
 /**
  * What the verdict agent must return; `verdict`'s domain code finishes it (AD-15).

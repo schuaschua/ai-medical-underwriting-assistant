@@ -107,6 +107,11 @@ def _credential(settings: Settings) -> Any:
     return DefaultAzureCredential()
 
 
+def is_traceparent(value: str | None) -> bool:
+    """Whether a header value is a well-formed W3C `traceparent`."""
+    return value is not None and _TRACEPARENT_RE.fullmatch(value) is not None
+
+
 def current_trace_id(traceparent: str | None) -> str | None:
     """The trace id of the request being handled, if there is one.
 

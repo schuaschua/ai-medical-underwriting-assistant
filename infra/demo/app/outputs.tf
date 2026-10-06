@@ -13,6 +13,21 @@ output "web_container_app_id" {
   value       = module.web.resource_id
 }
 
+output "intake_container_app_name" {
+  description = "Name of the intake Container App."
+  value       = module.intake.name
+}
+
+output "intake_container_app_id" {
+  description = "Resource id of the intake Container App."
+  value       = module.intake.resource_id
+}
+
+output "intake_database_role" {
+  description = "Name of the PostgreSQL role the intake service signs in as; the database bootstrap creates it (infra/bootstrap/README.md)."
+  value       = local.intake_identity.name
+}
+
 output "image_tag" {
   description = "Image tag the services run."
   value       = var.image_tag

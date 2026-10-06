@@ -2,7 +2,7 @@
 title: 'Story 1.2: Azure foundation for the demo environment'
 type: 'feature'
 created: '2026-10-06'
-status: 'in-review'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
 baseline_commit: '138587fa76006529339c2b2a18ee34ebb251bed8'
@@ -71,7 +71,7 @@ Greenfield: no `infra/` exists. Verified facts to build on (2026-10-06):
 - [x] `infra/modules/` -- only if a composition is reused; otherwise leave empty with a `.gitkeep`
 - [x] `.github/workflows/infra-pr.yml` -- fmt, validate, plan and plan comment on pull requests touching `infra/`, OIDC login, repository variables for tenant, subscription and client ids
 - [x] `docs/standards/azure.md` -- add the new resource types' abbreviations and name patterns to a project table (`srch`, `di`, `lang`, `dts`, `st`) and the runtime role list placeholder -- rule 2
-- [ ] Run the bootstrap, set the GitHub repository variables and `demo` environment, then `terraform init`, `plan -out=tfplan`, `apply tfplan` for the stack
+- [x] Run the bootstrap, set the GitHub repository variables and `demo` environment, then `terraform init`, `plan -out=tfplan`, `apply tfplan` for the stack
 
 **Acceptance Criteria:**
 - Given the applied stack, when `az resource list -g rg-aiuw-demo-wus3` is read, then every resource in the task list exists in West US 3 with the six tags.
@@ -141,6 +141,21 @@ Changed after review on 2026-10-06 (still nothing run against Azure; only `bash 
 - The pull-request workflow skips fork and Dependabot pull requests, plans without the state lock, keeps one comment per pull request, and adds a shellcheck step.
 
 Not testable until there is a pull request: the `infra-pr.yml` run itself (OIDC sign-in, plan, comment).
+
+
+### Evidence from the live test sessions (2026-10-06, run by the main session after the owner asked for the bootstrap)
+
+- **Bootstrap:** first run made 15 changes (resource group, state container, deployment identity, two federated credentials, three scoped roles, operator blob role, four repository variables, the `demo` environment limited to `main`); second run printed `No changes.`
+- **First real plan:** `1 to import, 103 to add, 0 to change, 0 to destroy`.
+- **Session 1:** the apply failed after about 10 minutes on `azurerm_cognitive_account_project.this` with `409 RequestConflict: Another operation is in progress` on the Foundry account, because the project started while the model deployments were still being created. Fixed with `depends_on = [module.foundry_account]`; the second apply completed (2 added).
+- **Resources while up:** 20 in `westus3` and 2 `global` (the action group, and a `Failure Anomalies` smart detector alert rule that Application Insights creates by itself, untagged and outside Terraform). Every Terraform-created resource carried the six tags.
+- **Authentication:** local auth disabled on `aif-`, `di-` and `lang-aiuw-demo-wus3` and on `srch-aiuw-demo-wus3`; registry admin user off; storage shared key off and public blob access off; PostgreSQL `Standard_B1ms`, version 17, password auth disabled, Entra auth enabled.
+- **Model deployments:** `gpt-5.4` version `2026-03-05`, GlobalStandard, capacity 100, `NoAutoUpgrade`, `Microsoft.DefaultV2`; `text-embedding-3-large` version `1`, GlobalStandard, capacity 50, `NoAutoUpgrade`, `Microsoft.DefaultV2`.
+- **Storage containers:** `cases`, `classifier-training`, `manual`, `originals`.
+- **Drift found in session 1:** a follow-up plan showed 9 in-place changes. Two causes, both fixed: the Verified Modules send `log_analytics_destination_type = "Dedicated"` for the three AI accounts, which those accounts never return (diagnostic settings are now written in the root module without it); and the Foundry account planned to drop its project association (`associated_projects` is now set on the account).
+- **Session 2 (fresh, with the fixes):** one apply, `1 imported, 103 added, 0 changed, 0 destroyed`, in 10 minutes 44 seconds; the plan straight after reported `No changes. Your infrastructure matches the configuration.` (exit 0). All four acceptance criteria are met.
+- **Teardown:** session 1's destroy removed 103 resources in about 26 minutes (the Container Apps environment took most of it), kept the resource group, and the three soft-deleted AI accounts were purged in about 3 minutes. The auto-created alert rule survived the destroy and was deleted by hand; the teardown procedure now includes that step.
+- **Still open:** the pull-request workflow has not run (it needs a pull request touching `infra/`).
 
 ## Spec Change Log
 

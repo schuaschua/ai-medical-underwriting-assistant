@@ -19,8 +19,15 @@ class ErrorCode(StrEnum):
     # AD-10: a human-reserved action came from a non-human actor.
     ACTOR_NOT_HUMAN = "actor_not_human"
     NOT_FOUND = "not_found"
+    # The path exists but does not take the request's method.
+    METHOD_NOT_ALLOWED = "method_not_allowed"
+    # Upload rules (AD-3): the file is over 10 MB, or is not a PDF.
     FILE_TOO_LARGE = "file_too_large"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
+    # A request the framework or a proxy refused before any upload rule ran.
+    PAYLOAD_TOO_LARGE = "payload_too_large"
+    UNSUPPORTED_MEDIA_TYPE = "unsupported_media_type"
+    TOO_MANY_REQUESTS = "too_many_requests"
     # AD-6: the same stage command is still running.
     IN_PROGRESS = "in_progress"
     # Operations table: the document file is asked for before redaction is done.
@@ -51,8 +58,12 @@ HTTP_STATUS: Mapping[ErrorCode, int] = MappingProxyType(
         ErrorCode.ROLE_NOT_ALLOWED: 403,
         ErrorCode.ACTOR_NOT_HUMAN: 403,
         ErrorCode.NOT_FOUND: 404,
+        ErrorCode.METHOD_NOT_ALLOWED: 405,
         ErrorCode.FILE_TOO_LARGE: 413,
         ErrorCode.UNSUPPORTED_FILE_TYPE: 415,
+        ErrorCode.PAYLOAD_TOO_LARGE: 413,
+        ErrorCode.UNSUPPORTED_MEDIA_TYPE: 415,
+        ErrorCode.TOO_MANY_REQUESTS: 429,
         ErrorCode.IN_PROGRESS: 409,
         ErrorCode.NOT_REDACTED: 409,
         ErrorCode.NOT_AWAITING_DECISION: 409,

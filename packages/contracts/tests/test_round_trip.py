@@ -123,6 +123,9 @@ SAMPLES: dict[str, dict[str, Any]] = {
     },
     "AuditRecord": audit("page.kept", actor_kind="human", actor="customer"),
     "CaseCreated": {"case_id": CASE, "document_id": DOCUMENT},
+    "Health": {"status": "ok"},
+    "Me": {"role": "customer"},
+    "UploadedCase": {"case_id": CASE, "document_id": DOCUMENT, "status": "running"},
     "RedactionCommand": {"eval_run_id": EVAL},
     "RedactionResult": {
         "case_id": CASE,

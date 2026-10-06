@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The Dapr app id; also the service name telemetry is reported under.
@@ -19,13 +19,33 @@ _DEFAULT_SPA_DIR = Path(__file__).resolve().parents[2] / "spa" / "dist"
 class Settings(BaseSettings):
     """Read once from environment variables prefixed `WEB_`."""
 
-    model_config = SettingsConfigDict(env_prefix="WEB_", extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(
+        env_prefix="WEB_", extra="ignore", frozen=True, populate_by_name=True
+    )
 
     # Loopback by default; the container image sets WEB_HOST to listen on all interfaces.
     host: str = "127.0.0.1"
     port: Annotated[int, Field(ge=1, le=65535)] = 8000
     # Folder holding the built SPA (index.html and its assets).
     spa_dir: Path = _DEFAULT_SPA_DIR
+
+    # AD-3: the port of this service's own Dapr sidecar, on loopback. Dapr tells
+    # the app its port in DAPR_HTTP_PORT, so that name is read as well.
+    dapr_http_port: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=65535,
+            validation_alias=AliasChoices("WEB_DAPR_HTTP_PORT", "DAPR_HTTP_PORT"),
+        ),
+    ] = 3500
+    # How long a call to another service may take.
+    service_timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
+    # Upload deadlines, shortest first, so each caller outlasts the one it calls:
+    #   intake 90 s (INTAKE_UPLOAD_DEADLINE_SECONDS)  <  web 120 s (this setting)
+    #   <  browser 150 s (UPLOAD_TIMEOUT_MS in the SPA's api/client.ts).
+    # This one bounds the whole call to `intake`, from first byte sent to answer.
+    upload_timeout_seconds: Annotated[float, Field(gt=0)] = 120.0
 
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.

@@ -34,3 +34,4 @@ services/web/spa/coverage/
 
 # Dapr CLI run logs
 .dapr/
+tfdestroy

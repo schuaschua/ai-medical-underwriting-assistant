@@ -232,7 +232,10 @@ module "foundry_account" {
   local_auth_enabled            = false
   public_network_access_enabled = true
   allow_project_management      = true
-  managed_identities            = { system_assigned = true }
+  # The project is created below; naming it here keeps the account from
+  # planning to drop the association on every later run.
+  associated_projects = [local.names.foundry_project]
+  managed_identities  = { system_assigned = true }
 
   cognitive_deployments = {
     for key, deployment in var.model_deployments : key => {
@@ -251,15 +254,6 @@ module "foundry_account" {
     }
   }
 
-  diagnostic_settings = {
-    workspace = {
-      name                  = local.names.diagnostic_setting
-      workspace_resource_id = module.log_analytics_workspace.resource_id
-      log_groups            = []
-      log_categories        = local.ai_account_log_categories
-      metric_categories     = []
-    }
-  }
 
   enable_telemetry = true
   tags             = local.tags
@@ -274,6 +268,10 @@ resource "azurerm_cognitive_account_project" "this" {
   identity {
     type = "SystemAssigned"
   }
+
+  # Wait for the whole account module, not only the account id: the project is
+  # refused with 409 while the model deployments are still being created.
+  depends_on = [module.foundry_account]
 }
 
 # Connects the Foundry account, and so its project, to the one Application
@@ -310,15 +308,6 @@ module "ai_account" {
   public_network_access_enabled = true
   managed_identities            = { system_assigned = true }
 
-  diagnostic_settings = {
-    workspace = {
-      name                  = local.names.diagnostic_setting
-      workspace_resource_id = module.log_analytics_workspace.resource_id
-      log_groups            = []
-      log_categories        = local.ai_account_log_categories
-      metric_categories     = []
-    }
-  }
 
   enable_telemetry = true
   tags             = local.tags
@@ -474,4 +463,26 @@ resource "azurerm_monitor_scheduled_query_rules_alert_v2" "log_cap" {
   }
 
   tags = local.tags
+}
+
+# Diagnostic settings for the three AI accounts are written here, not through
+# the modules: the modules always send a Log Analytics destination type, which
+# these account kinds never return, so every plan would show a change.
+resource "azurerm_monitor_diagnostic_setting" "ai_accounts" {
+  for_each = merge(
+    { foundry = module.foundry_account.resource_id },
+    { for key, account in module.ai_account : key => account.resource_id },
+  )
+
+  name                       = local.names.diagnostic_setting
+  target_resource_id         = each.value
+  log_analytics_workspace_id = module.log_analytics_workspace.resource_id
+
+  dynamic "enabled_log" {
+    for_each = local.ai_account_log_categories
+
+    content {
+      category = enabled_log.value
+    }
+  }
 }

@@ -11,6 +11,9 @@ min_replicas = 0
 
 web_port                      = 8000
 web_health_path               = "/api/health"
+intake_port                   = 8001
+intake_health_path            = "/health"
+intake_ready_path             = "/ready"
 otel_sampling_ratio           = 1
 dapr_http_max_request_size_mb = 16
 

@@ -1,5 +1,5 @@
-# Local stand-ins for the two stateful Azure services (spine, Deployment).
-# Both listen on this machine only. `./tools/dev.sh` starts them.
+# Local stand-ins for the stateful Azure services (spine, Deployment).
+# All listen on this machine only. `./tools/dev.sh` starts them.
 name: aiuw
 
 services:
@@ -38,5 +38,29 @@ services:
       timeout: 2s
       retries: 30
 
+  azurite:
+    # Blob Storage emulator. Only the blob endpoint is started and published.
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
+    command:
+      - azurite-blob
+      - --blobHost
+      - 0.0.0.0
+      - --location
+      - /data
+      # The SDK may speak a newer API version than this emulator release knows.
+      - --skipApiVersionCheck
+      - --disableProductStyleUrl
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - azurite-data:/data
+    healthcheck:
+      # The image has no curl; nc can open the blob port.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
 volumes:
   postgres-data:
+  azurite-data:

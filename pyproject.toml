@@ -5,7 +5,7 @@ name = "aiunderwriter"
 version = "0.0.0"
 description = "AI Medical Underwriting Assistant POC: workspace root"
 requires-python = "==3.13.*"
-dependencies = ["contracts", "web"]
+dependencies = ["contracts", "intake", "web"]
 
 [dependency-groups]
 dev = [
@@ -25,6 +25,7 @@ members = ["packages/*", "services/*"]
 
 [tool.uv.sources]
 contracts = { workspace = true }
+intake = { workspace = true }
 web = { workspace = true }
 synthdata = { workspace = true }
 
@@ -46,16 +47,36 @@ extend-select = ["I", "B", "UP", "S"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
+# Every service has a tests/conftest.py. Naming modules by their path from the
+# repository root (or from a source root below) keeps those apart.
+explicit_package_bases = true
+# One entry per package and service: where its importable code starts.
+mypy_path = [
+    "packages/contracts/src",
+    "packages/synthdata/src",
+    "services/intake/src",
+    # Test doubles shared by a service's tests (also on pytest's pythonpath).
+    "services/intake/tests/support",
+    "services/web/src",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["packages", "services"]
 # Every service will have its own tests/ folder; importlib mode lets test
 # modules in different folders share a file name.
 addopts = "--import-mode=importlib --strict-markers"
+# With importlib mode a test cannot import a module beside it. Test doubles a
+# service's tests share live in its tests/support folder, named here; module
+# names in it start with the service's name so that they stay unique.
+pythonpath = ["services/intake/tests/support"]
+markers = [
+    # Needs the containers of compose.yaml: `docker compose up --detach --wait`.
+    "integration: uses a real PostgreSQL and the local blob emulator",
+]
 
 [tool.coverage.run]
 # What `uv run pytest --cov` measures; each service adds its package here.
-source_pkgs = ["contracts", "synthdata", "web"]
+source_pkgs = ["contracts", "intake", "synthdata", "web"]
 
 [tool.coverage.report]
 # coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.

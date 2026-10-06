@@ -22,8 +22,11 @@ holds the ruff, mypy and pytest settings for every member.
   audit record, enums, the error catalogue, the `rule_id` patterns, the page type mapping, the eval
   query builder and text normalisation. It imports only the standard library and pydantic. A change to
   it is one pull request that updates every affected service.
-- `services/` holds the seven services. So far there is one: `services/web/`, the FastAPI service that
-  serves the React app in `services/web/spa/` and every `/api` route from one origin.
+- `services/` holds the seven services. So far there are two. `services/web/` is the FastAPI service
+  that serves the React app in `services/web/spa/` and every `/api` route from one origin.
+  `services/intake/` owns cases, documents and the stored PDFs: database schema `intake` and the blob
+  containers `originals` and `cases`. `web` calls it through its Dapr sidecar and nothing else does yet.
+  No service imports another service's code.
 
 ### Install and check
 
@@ -33,6 +36,7 @@ Install uv 0.11.8 and Node.js 24.21.0, then from the repository root:
 uv sync
 uv run ruff format --check . && uv run ruff check .
 uv run mypy packages services
+docker compose up --detach --wait postgres azurite   # for the integration tests
 uv run pytest --cov
 
 npm --prefix services/web/spa ci
@@ -43,7 +47,10 @@ npm --prefix services/web/spa run build
 ```
 
 `uv sync` creates `.venv/` and installs the exact versions in `uv.lock`. `pytest --cov` takes its test
-paths, the measured packages and the 80% coverage threshold from the root `pyproject.toml`; the SPA's
+paths, the measured packages and the 80% coverage threshold from the root `pyproject.toml`. The tests
+marked `integration` use a real PostgreSQL and the blob emulator from `compose.yaml` and fail with a
+message saying so if those containers are not running; each makes a database of its own, so your local
+data is left alone, and none calls Azure. `uv run pytest -m "not integration"` leaves them out. The SPA's
 60% threshold is in `services/web/spa/vite.config.ts`. The same checks, plus dependency scans
 (`pip-audit`, `npm audit`), run on every pull request and on every push to `main`
 (`.github/workflows/ci.yml`). Fix a failing check in the code; do not loosen the settings.
@@ -58,29 +65,53 @@ One command starts everything:
 ./tools/dev.sh
 ```
 
-It starts PostgreSQL with pgvector and the Durable Task Scheduler emulator in containers
-(`compose.yaml`), builds the SPA, and runs the `web` service with its Dapr sidecar (`dapr.yaml`; each
-later service is added to that file). If the Dapr runtime is missing it stops and says so. Then open
-<http://localhost:8000/>. The app and its API share that one address: `/api/health` answers without a
-role, and every other `/api` route needs the `X-Demo-Role` header the role switcher sends.
+It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
+containers (`compose.yaml`), applies the database migrations, builds the SPA, and runs the `web` and
+`intake` services, each with its Dapr sidecar (`dapr.yaml`; each later service is added to that file).
+If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
+its API share that one address: `/api/health` answers without a role, and every other `/api` route
+needs the `X-Demo-Role` header the role switcher sends. As the customer, "Upload a document" takes a
+PDF of up to 10 MB (try one from `data/cases/`) and lists the new case.
+
+The services never run migrations when they start, here or in Azure, and `intake` reports "not ready"
+(`/ready`) until its schema is at the newest migration it ships with. Locally, one script stands in
+for the pipeline's migration step. `./tools/dev.sh` runs it for you; run it yourself after pulling a
+change that adds a migration:
+
+```sh
+./tools/migrate-local.sh
+```
+
+It starts the two containers if they are not running, applies `intake`'s migrations to the local
+database (`uv run alembic -c services/intake/alembic.ini upgrade head`, pointed at `localhost`) and
+creates the blob containers `originals` and `cases` in the emulator. It can be run again safely.
 
 | What | Where |
 | --- | --- |
 | The app and its API (`web`) | <http://localhost:8000/> |
 | `web`'s Dapr sidecar | `http://localhost:3500` |
+| `intake` (`/health`, `/ready`, `POST /cases`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
 | PostgreSQL (database and user `aiuw`, no password, this machine only) | `localhost:5432` |
+| Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
 | Durable Task Scheduler emulator, and its dashboard | `localhost:8080`, <http://localhost:8082/> |
 
-Stop with Ctrl+C, then `docker compose down` (add `-v` to delete the local database).
+Stop with Ctrl+C, then `docker compose down` (add `-v` to delete the local database and blobs).
+
+Locally `intake` reaches the emulator with `INTAKE_BLOB_CONNECTION_STRING=UseDevelopmentStorage=true`
+(set in `dapr.yaml`), which names the emulator's built-in account and holds no secret. In Azure that
+variable is never set: the service signs in to Blob Storage and PostgreSQL with its managed identity.
 
 To work on the SPA with hot reload, keep the above running and start `npm --prefix services/web/spa run dev`;
 its dev server passes `/api` calls on to port 8000.
 
-To run the container image instead:
+To run the container images instead (`web` alone serves the app; an upload needs both services and
+their sidecars, which is what `./tools/dev.sh` is for):
 
 ```sh
 docker build -f services/web/Dockerfile -t aiuw-web:dev .
 docker run --rm -p 8000:8000 aiuw-web:dev
+
+docker build -f services/intake/Dockerfile -t aiuw-intake:dev .
 ```
 
 ### Contract types
@@ -99,12 +130,16 @@ and `npm --prefix services/web/spa run contracts:check` compares the TypeScript 
 ### Deploy
 
 The demo environment is two Terraform stacks, applied in order: `infra/demo/foundation` (see
-`infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds one Container App, `web`.
+`infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds two Container Apps: `web`, the
+only one reachable from the internet, and `intake`, with internal ingress only.
 
 The `deploy` workflow (`.github/workflows/deploy.yml`) is started by hand on `main` and deploys only
-the commit `main` is at. It builds the `web` image in the registry, plans `app`, refuses a plan that
-destroys or replaces a resource, applies it, waits until the new revision is the one serving, and then
-checks `/api/health` and the SPA's page. It needs:
+the commit `main` is at. It builds the `web` and `intake` images in the registry, plans `app`, refuses
+a plan that destroys or replaces a resource, applies it, waits until the new `web` revision is the one
+serving, fails unless `intake`'s latest revision runs the same commit's image, checks `/api/health` and
+the SPA's page, and ends by saying whether `intake` is ready. It does not run database migrations yet:
+`intake`'s database role and its migrations are a manual step (`infra/bootstrap/README.md`, section 4),
+and until it is done `intake` stays "not ready" and an upload is answered with 502. It needs:
 
 | What | Set by |
 | --- | --- |

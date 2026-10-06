@@ -38,10 +38,22 @@
   evidence: Flipping any of these still passes fmt, validate and plan. `terraform.md` defers policy tooling until the pipeline works.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
   summary: Move the `Me` and `Health` payloads into the contracts package and add error codes for method not allowed, payload too large, unsupported media type and too many requests.
-  evidence: Both payloads are hand-written in `web` and in the SPA; framework 405, 413, 415 and 429 are answered as 422. Needs a contracts change. Pick up in story 1.5.
+  evidence: Both payloads are hand-written in `web` and in the SPA; framework 405, 413, 415 and 429 are answered as 422. Needs a contracts change. Done in story 1.5.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
   summary: Have the deploy show its plan for review before applying, once the first-build exception is closed.
   evidence: `deploy.yml` plans and applies in one job; `terraform.md` rule 26 wants a reviewed plan. Covered until the demo environment is up by the recorded exception.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
   summary: Run `dapr init` once on the developer machine and prove `./tools/dev.sh` end to end.
   evidence: The Dapr runtime is not initialised here and `dapr init` installs outside the project folder, which the agent may not do. Needs the owner (Darrel).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
+  summary: Make an upload safe to retry (an idempotency key from the browser, or deduplication) so a timeout does not create a second case.
+  evidence: `POST /cases` creates a new case on every call and the stored hash is unused. Pick up in story 1.6.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
+  summary: Find and remove originals that no document row references, and decide how long originals are kept.
+  evidence: A crash between the blob write and the insert leaves an unreferenced original; nothing sweeps the container and no retention rule exists. Owner decision on retention.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
+  summary: Add the migration step to the deploy, run the database bootstrap for `intake`, and prove a real upload over 4 MB through Dapr in the deployed environment, including a call to a service scaled to zero.
+  evidence: The deploy builds `intake` but cannot migrate; the sidecar body limit and scale-from-zero were tested only with a stand-in. Pick up in the first deploy session.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
+  summary: Confirm whether the redaction service's 10 MB limit is decimal or binary and align the upload limit.
+  evidence: The upload rule allows 10 x 1024 x 1024 bytes. Unverified; low if true. Pick up in story 1.7.

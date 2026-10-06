@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import type { DemoRole } from "./api/contracts.gen";
 import { CustomerHome } from "./screens/CustomerHome";
 import { UnderwriterHome } from "./screens/UnderwriterHome";
+import { UploadDocument } from "./screens/UploadDocument";
 import { strings } from "./strings";
 
 export interface Screen {
@@ -23,6 +24,11 @@ export const SCREENS: Record<DemoRole, readonly Screen[]> = {
       path: HOME_PATHS.customer,
       label: strings.navigation.home,
       element: <CustomerHome />,
+    },
+    {
+      path: `${HOME_PATHS.customer}/upload`,
+      label: strings.navigation.upload,
+      element: <UploadDocument />,
     },
   ],
   underwriter: [

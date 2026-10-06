@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Starts the whole application on this machine:
-#   1. PostgreSQL and the Durable Task Scheduler emulator, in containers;
-#   2. the built SPA;
-#   3. each service in dapr.yaml with its Dapr sidecar (so far: web).
+#   1. PostgreSQL, the blob emulator and the Durable Task Scheduler emulator,
+#      in containers;
+#   2. the database migrations and the blob containers (tools/migrate-local.sh);
+#   3. the built SPA;
+#   4. each service in dapr.yaml with its Dapr sidecar (so far: web, intake).
 # Stop with Ctrl+C, then `docker compose down` for the containers.
 set -euo pipefail
 
@@ -24,6 +26,10 @@ fi
 docker compose up --detach --wait
 
 uv sync --locked
+
+# The services never migrate at start-up; locally this step stands in for the
+# pipeline's migration step.
+./tools/migrate-local.sh
 
 spa=services/web/spa
 if [ ! -d "$spa/node_modules" ] || [ "$spa/package-lock.json" -nt "$spa/node_modules" ]; then

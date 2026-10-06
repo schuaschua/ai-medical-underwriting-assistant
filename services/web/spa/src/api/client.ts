@@ -1,15 +1,13 @@
 // The one API client (AD-19, coding-style.md rule 15). Every call to the
 // server goes through `request`, which adds the demo role header.
 import { getRole } from "../role/roleStore";
-import type { DemoRole, ErrorBody, ErrorCode } from "./contracts.gen";
+import { strings } from "../strings";
+import type { ErrorBody, ErrorCode, Me, UploadedCase } from "./contracts.gen";
 
 export const ROLE_HEADER = "X-Demo-Role";
 const API_ROOT = "/api";
-
-/** Response of `GET /api/me`: the role as the server read it. */
-export interface Me {
-  role: DemoRole;
-}
+/** The media type of an upload: the body is the PDF itself. */
+const PDF = "application/pdf";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -41,6 +39,19 @@ export class NetworkError extends Error {
 
 /** How long a call may take before it is given up. */
 export const REQUEST_TIMEOUT_MS = 30_000;
+// Upload deadlines, shortest first, so each caller outlasts the one it calls:
+//   intake 90 s (INTAKE_UPLOAD_DEADLINE_SECONDS)  <  web 120 s
+//   (WEB_UPLOAD_TIMEOUT_SECONDS)  <  browser 150 s (this constant).
+// The browser waits longest, so it shows the server's answer, not its own timeout.
+export const UPLOAD_TIMEOUT_MS = 150_000;
+
+interface RequestOptions {
+  /** Sent as the JSON body. */
+  json?: unknown;
+  /** Sent as the body, as it is, declared as a PDF. */
+  pdf?: Blob;
+  timeoutMs?: number;
+}
 
 function isErrorBody(value: unknown): value is ErrorBody {
   if (typeof value !== "object" || value === null || !("error" in value)) {
@@ -59,7 +70,7 @@ function isErrorBody(value: unknown): value is ErrorBody {
 async function request<T>(
   method: "GET" | "POST",
   path: string,
-  body?: unknown,
+  options: RequestOptions = {},
 ): Promise<T> {
   const headers = new Headers({ Accept: "application/json" });
   // Read at call time, so a call made after a role switch carries the new role.
@@ -69,16 +80,23 @@ async function request<T>(
   }
   // A call that never answers is ended, so no screen waits forever.
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(
+    () => timeout.abort(),
+    options.timeoutMs ?? REQUEST_TIMEOUT_MS,
+  );
   const init: RequestInit = {
     method,
     headers,
     credentials: "omit",
     signal: timeout.signal,
   };
-  if (body !== undefined) {
+  if (options.pdf !== undefined) {
+    // The server decides whether the file really is a PDF, by its content.
+    headers.set("Content-Type", PDF);
+    init.body = options.pdf;
+  } else if (options.json !== undefined) {
     headers.set("Content-Type", "application/json");
-    init.body = JSON.stringify(body);
+    init.body = JSON.stringify(options.json);
   }
 
   let response: Response;
@@ -109,4 +127,34 @@ async function request<T>(
 
 export function getMe(): Promise<Me> {
   return request<Me>("GET", "/me");
+}
+
+/** Whether a value is a created case as the contract describes it. */
+export function isUploadedCase(value: unknown): value is UploadedCase {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.case_id === "string" &&
+    record.case_id !== "" &&
+    typeof record.document_id === "string" &&
+    record.document_id !== "" &&
+    typeof record.status === "string" &&
+    // Own keys only: "constructor" is no case status.
+    Object.hasOwn(strings.caseStatus, record.status)
+  );
+}
+
+/** Upload one PDF as a new case. Only the customer role may. */
+export async function uploadDocument(file: Blob): Promise<UploadedCase> {
+  const uploaded = await request<unknown>("POST", "/cases", {
+    pdf: file,
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+  });
+  if (!isUploadedCase(uploaded)) {
+    // A success without a usable case is a fault: nothing is listed for it.
+    throw new ApiError(201, null, "The answer was not a created case.", null);
+  }
+  return uploaded;
 }

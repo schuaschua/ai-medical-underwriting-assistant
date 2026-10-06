@@ -54,6 +54,21 @@ variable "web_health_path" {
   type        = string
 }
 
+variable "intake_port" {
+  description = "Port the intake container listens on."
+  type        = number
+}
+
+variable "intake_health_path" {
+  description = "Path of the intake service's health route, the target of its startup and liveness probes."
+  type        = string
+}
+
+variable "intake_ready_path" {
+  description = "Path of the intake service's readiness route, which fails until the database schema is at the migration head bundled in the image."
+  type        = string
+}
+
 variable "otel_sampling_ratio" {
   description = "Share of requests each service traces, from 0 to 1."
   type        = number
@@ -65,7 +80,7 @@ variable "otel_sampling_ratio" {
 }
 
 variable "dapr_http_max_request_size_mb" {
-  description = "Largest request body the web sidecar accepts, in MB. An upload is at most 10 MB (spine AD-3)."
+  description = "Largest request body the web and intake sidecars accept, in MB. An upload is at most 10 MB (spine AD-3)."
   type        = number
 
   validation {
