@@ -1,0 +1,17 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Agent customization surface for agent-davinci.
+# Team overrides:     {project-root}/_bmad/custom/agent-davinci.toml
+# Personal overrides: {project-root}/_bmad/custom/agent-davinci.user.toml
+
+[agent]
+
+# --- Metadata (install-time roster contract) ---
+# Consumed by module.yaml:agents[] and `[agents.<code>]` in central config.
+
+code = "agent-davinci"
+name = "Da Vinci"
+title = "Architecture Principles, Diagrams and Design Documents"
+icon = "🎨"
+description = "Agrees the architecture principles and guardrails with the user before bmad-architecture (docs/architecture/architecture.md, plus one file per cloud provider), then draws cited draw.io diagrams and writes cited HLD/LLD Word documents from the spine."
+agent_type = "memory"   # stateless | memory | autonomous

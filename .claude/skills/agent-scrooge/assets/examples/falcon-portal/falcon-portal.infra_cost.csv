@@ -1,0 +1,22 @@
+estimate,currency,line,environment,component,service,sku,run_months_per_year,daily,weekly,monthly,annual,cite,price_source
+falcon-portal,USD,item,Dev,AKS nodes,Virtual Machines,Standard_D4s_v5,12,3.4,23.8,103.4,1240.8,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-1,"Azure Retail Prices API, Virtual Machines Dsv5 Series / D4s v5, uaenorth, USD per 1 Hour, meterId 75a8da05-74dd-5b32-bb86-4f5cc74cdb60, fetched 2026-09-28"
+falcon-portal,USD,item,Dev,Customer database,SQL Database,"General Purpose Gen5, 2 vCore",12,12.14,85.01,369.38,4432.56,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-2,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Dev,Document storage,Storage,Blob Hot LRS,12,0.03,0.22,0.95,11.4,assumption: 50 GB of test documents,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Dev,Secrets,Key Vault,Standard,12,0.03,0.21,0.9,10.8,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-5,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Dev,Logs and metrics,Log Analytics,Pay-as-you-go,12,0.45,3.18,13.8,165.6,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-5,Synthetic sample price (not looked up)
+falcon-portal,USD,environment total,Dev,,,,12,16.06,112.41,488.43,5861.16,,
+falcon-portal,USD,item,Test,AKS nodes,Virtual Machines,Standard_D4s_v5,12,11.28,78.96,343.1,4117.2,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-1,"Azure Retail Prices API, Virtual Machines Dsv5 Series / D4s v5, uaenorth, USD per 1 Hour, meterId 75a8da05-74dd-5b32-bb86-4f5cc74cdb60, fetched 2026-09-28"
+falcon-portal,USD,item,Test,Customer database,SQL Database,"General Purpose Gen5, 2 vCore",12,12.14,85.01,369.38,4432.56,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-2,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Test,Document storage,Storage,Blob Hot LRS,12,0.03,0.22,0.95,11.4,assumption: 50 GB of test documents,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Test,Secrets,Key Vault,Standard,12,0.03,0.21,0.9,10.8,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-5,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Test,Logs and metrics,Log Analytics,Pay-as-you-go,12,0.45,3.18,13.8,165.6,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-5,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Test,Edge,Azure Front Door Service,Standard base fee,12,1.15,8.05,35.0,420.0,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-4,Synthetic sample price (not looked up)
+falcon-portal,USD,environment total,Test,,,,12,25.09,175.62,763.13,9157.56,,
+falcon-portal,USD,item,Prod,AKS nodes,Virtual Machines,Standard_D4s_v5,12,16.92,118.44,514.65,6175.8,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-1,"Azure Retail Prices API, Virtual Machines Dsv5 Series / D4s v5, uaenorth, USD per 1 Hour, meterId 75a8da05-74dd-5b32-bb86-4f5cc74cdb60, fetched 2026-09-28"
+falcon-portal,USD,item,Prod,Customer database,SQL Database,"General Purpose Gen5, 4 vCore",12,24.29,170.02,738.76,8865.12,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-2,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Prod,Document storage,Storage,Blob Hot LRS,12,0.31,2.19,9.5,114.0,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-3,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Prod,Secrets,Key Vault,Standard,12,0.03,0.21,0.9,10.8,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-5,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Prod,Logs and metrics,Log Analytics,Pay-as-you-go,12,2.72,19.06,82.8,993.6,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-5,Synthetic sample price (not looked up)
+falcon-portal,USD,item,Prod,Edge,Azure Front Door Service,Standard base fee,12,1.15,8.05,35.0,420.0,_bmad-output/planning-artifacts/architecture/falcon/ARCHITECTURE-SPINE.md AD-4,Synthetic sample price (not looked up)
+falcon-portal,USD,environment total,Prod,,,,12,45.42,317.96,1381.61,16579.32,,
+falcon-portal,USD,total,,,,,,86.57,605.99,2633.17,31598.04,,

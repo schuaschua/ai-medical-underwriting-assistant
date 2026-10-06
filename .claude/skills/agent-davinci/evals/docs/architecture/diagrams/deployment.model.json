@@ -1,0 +1,27 @@
+{
+  "type": "deployment",
+  "title": "burdeebur.com hosting",
+  "provider": "azure",
+  "page": {"size": "A4", "orientation": "portrait"},
+  "spine": "_bmad-output/planning-artifacts/architecture/burdeebur-amended/ARCHITECTURE-SPINE.md",
+  "groups": [
+    {"id": "region", "label": "Each Azure region (multi-region; regions not named)", "kind": "region", "cite": "AD-3"},
+    {"id": "aks", "label": "AKS cluster", "kind": "boundary", "parent": "region", "icon": "compute/Kubernetes_Services", "cite": "AD-1"}
+  ],
+  "nodes": [
+    {"id": "customer", "label": "Customer", "kind": "person", "cite": "AD-6"},
+    {"id": "admin", "label": "Administrator", "kind": "person", "cite": "AD-6"},
+    {"id": "dns", "label": "Azure DNS", "description": "burdeebur.com", "kind": "service", "icon": "networking/DNS_Zones", "cite": "AD-5"},
+    {"id": "fd", "label": "Azure Front Door", "kind": "service", "icon": "networking/Front_Doors", "cite": "AD-4"},
+    {"id": "web", "label": "Front-end", "tech": "React", "kind": "service", "icon": "kubernetes:pod", "group": "aks", "cite": ["AD-1", "AD-2"], "layer": 2},
+    {"id": "api", "label": "Back-end service", "tech": ".NET", "kind": "service", "icon": "kubernetes:pod", "group": "aks", "cite": ["AD-1", "AD-2"], "layer": 3},
+    {"id": "cosmos", "label": "Cosmos DB", "kind": "service", "icon": "databases/Azure_Cosmos_DB", "group": "aks", "cite": ["AD-1", "AD-2"], "layer": 4}
+  ],
+  "edges": [
+    {"from": "customer", "to": "dns", "label": "looks up burdeebur.com", "cite": ["AD-5", "AD-6"]},
+    {"from": "customer", "to": "fd", "label": "https://burdeebur.com", "cite": ["AD-6", "AD-4"]},
+    {"from": "admin", "to": "fd", "label": "/admin", "cite": ["AD-6", "AD-4"]},
+    {"from": "fd", "to": "web", "label": "distributes traffic", "cite": ["AD-4", "AD-3"]}
+  ],
+  "gaps": ["AD-1 puts Cosmos DB inside AKS; is it the managed service outside the cluster?", "Which regions, and how many?"]
+}

@@ -1,0 +1,5 @@
+# Org Kit override (org-setup). Loads the org and project standards as persistent facts.
+[workflow]
+persistent_facts = [
+  "file:{standards_glob}",
+]

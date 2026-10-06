@@ -1,0 +1,43 @@
+estimate,currency,period,year,category,item,amount
+falcon-portal,USD,Build,0,delivery team,Delivery team,363400.0
+falcon-portal,USD,Build,0,one-off,Other one-off costs,20700
+falcon-portal,USD,Build,0,environment,Dev environment (during delivery),1953.72
+falcon-portal,USD,Build,0,environment,Test environment (during delivery),1526.26
+falcon-portal,USD,Build,0,environment,Prod environment (during delivery),1381.61
+falcon-portal,USD,Build,0,contingency,Contingency,38896.16
+falcon-portal,USD,Build,0,claude (memo),Claude API usage at API list prices (not in the totals),299.06
+falcon-portal,USD,Year 1,1,revenue,Application processing fees,300000
+falcon-portal,USD,Year 1,1,environment,Dev environment (run),5861.16
+falcon-portal,USD,Year 1,1,environment,Test environment (run),9157.56
+falcon-portal,USD,Year 1,1,environment,Prod environment (run),16579.32
+falcon-portal,USD,Year 1,1,support,Run support (OPEX),62580.0
+falcon-portal,USD,Year 1,1,run costs,Recurring run costs,2200.0
+falcon-portal,USD,Year 1,1,contingency,Contingency,9637.8
+falcon-portal,USD,Year 2,2,revenue,Application processing fees,375000
+falcon-portal,USD,Year 2,2,environment,Dev environment (run),6036.99
+falcon-portal,USD,Year 2,2,environment,Test environment (run),9432.29
+falcon-portal,USD,Year 2,2,environment,Prod environment (run),17076.7
+falcon-portal,USD,Year 2,2,support,Run support (OPEX),64457.4
+falcon-portal,USD,Year 2,2,run costs,Recurring run costs,2266.0
+falcon-portal,USD,Year 2,2,contingency,Contingency,9926.94
+falcon-portal,USD,Year 3,3,revenue,Application processing fees,468750
+falcon-portal,USD,Year 3,3,environment,Dev environment (run),6218.1
+falcon-portal,USD,Year 3,3,environment,Test environment (run),9715.26
+falcon-portal,USD,Year 3,3,environment,Prod environment (run),17589.0
+falcon-portal,USD,Year 3,3,support,Run support (OPEX),66391.12
+falcon-portal,USD,Year 3,3,run costs,Recurring run costs,2333.98
+falcon-portal,USD,Year 3,3,contingency,Contingency,10224.75
+falcon-portal,USD,Year 4,4,revenue,Application processing fees,585938
+falcon-portal,USD,Year 4,4,environment,Dev environment (run),6404.65
+falcon-portal,USD,Year 4,4,environment,Test environment (run),10006.71
+falcon-portal,USD,Year 4,4,environment,Prod environment (run),18116.67
+falcon-portal,USD,Year 4,4,support,Run support (OPEX),68382.86
+falcon-portal,USD,Year 4,4,run costs,Recurring run costs,2404.0
+falcon-portal,USD,Year 4,4,contingency,Contingency,10531.49
+falcon-portal,USD,Year 5,5,revenue,Application processing fees,732422
+falcon-portal,USD,Year 5,5,environment,Dev environment (run),6596.79
+falcon-portal,USD,Year 5,5,environment,Test environment (run),10306.91
+falcon-portal,USD,Year 5,5,environment,Prod environment (run),18660.17
+falcon-portal,USD,Year 5,5,support,Run support (OPEX),70434.34
+falcon-portal,USD,Year 5,5,run costs,Recurring run costs,2476.12
+falcon-portal,USD,Year 5,5,contingency,Contingency,10847.43

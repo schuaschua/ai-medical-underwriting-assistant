@@ -1,0 +1,36 @@
+# Regional regulation registry for Jules.
+#
+# The project's region is the `region` value of [modules.org] in _bmad/config.toml,
+# chosen at kit setup (see skills/org-setup/assets/module.yaml). Jules resolves it with
+# `uv run scripts/region-sources.py {project-root}`.
+#
+# To add a region: add a [regions.<code>] table here and the same code to the `region`
+# single-select in module.yaml (the tests check the two match).
+#
+#   domains  - the only hosts Jules may read on the web for this region's regulation
+#   sources  - the documents Jules must consider; `applies_to` says when a source is relevant
+#              to a solution. Jules records each source's date as it finds it and re-checks
+#              it on use, so no date is kept here.
+
+[regions.none]
+name = "No regional regulation selected"
+regulator = ""
+domains = []
+sources = []
+
+[regions.uae]
+name = "United Arab Emirates"
+regulator = "Central Bank of the UAE (CBUAE)"
+domains = ["rulebook.centralbank.ae"]
+
+[[regions.uae.sources]]
+id = "CBUAE-ET"
+title = "Guidelines for Financial Institutions Adopting Enabling Technologies"
+url = "https://rulebook.centralbank.ae/en/rulebook/guidelines-financial-institutions-adopting-enabling-technologies"
+applies_to = "Every solution: the organisation is a financial institution adopting technology such as cloud, APIs and data analytics."
+
+[[regions.uae.sources]]
+id = "CBUAE-AI"
+title = "Guidance Note on Consumer Protection and Responsible Adoption and Use of Artificial Intelligence"
+url = "https://rulebook.centralbank.ae/en/rulebook/guidance-note-consumer-protection-and-responsible-adoption-and-use-artificial-intelligence"
+applies_to = "Solutions that use artificial intelligence, including machine learning and generative AI, especially where it affects customers."

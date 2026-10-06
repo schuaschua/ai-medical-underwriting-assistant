@@ -1,0 +1,6 @@
+# Scrooge's token ledger (Org Kit)
+docs/costing/token_usage/
+
+# Personal BMad and Claude Code settings
+_bmad/custom/config.user.toml
+.claude/settings.local.json

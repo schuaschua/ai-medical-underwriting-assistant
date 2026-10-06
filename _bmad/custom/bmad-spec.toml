@@ -1,0 +1,7 @@
+# Org Kit override (org-setup). Before the spec is written, checks for the architecture guardrails Da Vinci agrees
+# with the user (docs/architecture/architecture.md, with one file per cloud provider beside it) and offers them first when there
+# are none.
+[workflow]
+activation_steps_prepend = [
+  "Check for the architecture file at docs/architecture/architecture.md (relative to the project root). If it exists, carry on and say nothing about it. If it does not exist, stop before writing or changing the spec and tell the user that no architecture guardrails have been agreed for this project yet. Offer Da Vinci's guardrails round first (the agent-davinci skill): he settles the architecture questions with them, asking only what the project's documents leave open, and writes docs/architecture/architecture.md with one file per cloud provider beside it, which the architecture and everything built on it then follow. Suggest a fresh session (/clear, then 'Da Vinci, set the architecture principles'), then running this workflow again. Continue without them only if the user explicitly says so, and then note in the spec's open questions that no architecture principles were agreed. In headless mode never stop: continue and record the missing principles the same way.",
+]

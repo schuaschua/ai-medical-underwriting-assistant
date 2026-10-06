@@ -1,0 +1,47 @@
+[
+  {
+    "id": "challenge-before-drawing",
+    "input": "hey da vinci, can you draw the deployment diagram for burdeebur? the spine is in the usual place",
+    "rubric": [
+      "The final message challenges AD-1's placement of Cosmos DB inside AKS and asks whether the managed Cosmos DB service, outside the cluster, was meant.",
+      "The final message asks how the data is handled across the multiple regions (for example whether Cosmos DB replicates between regions or each region has its own).",
+      "The final message does not ask for a paper size or orientation: A2 landscape is the default.",
+      "No .drawio file exists anywhere in the working directory at the end of the run: the skill challenged before drawing.",
+      "_bmad-output/planning-artifacts/architecture/burdeebur/ARCHITECTURE-SPINE.md is byte-identical to the fixture, and no Write or Edit call targeted it (nothing was added to the spine without the user's approval)."
+    ],
+    "state_prefix": null,
+    "files": ["_bmad-output/planning-artifacts/architecture/burdeebur/ARCHITECTURE-SPINE.md"]
+  },
+  {
+    "id": "draw-two-regions",
+    "input": "go ahead and draw it",
+    "rubric": [
+      "docs/architecture/diagrams/deployment.drawio and docs/architecture/diagrams/deployment.model.json both exist, and the transcript shows scripts/build-drawio.py returning status success for that model.",
+      "The model has exactly two groups of kind region, both with the same parent, and that parent group's kind is cloud.",
+      "In each region the AKS cluster is a group whose icon is compute/Kubernetes_Services or containers/Kubernetes_Services, and the front-end and back-end nodes inside it have icon kubernetes:pod or kubernetes:deploy.",
+      "No Cosmos DB node sits inside an AKS cluster group; each Cosmos DB node's group is a subnet different from the subnet that contains its region's AKS cluster.",
+      "No edge joins the front-end to the back-end, or the back-end to Cosmos DB, because the spine states neither interaction.",
+      "The model's gaps include how Azure Data Factory reaches the on-premises network (for example a self-hosted integration runtime, VPN or ExpressRoute).",
+      "The model's page is A2 landscape, either stated or absent (the default).",
+      "_bmad-output/planning-artifacts/architecture/burdeebur-amended/ARCHITECTURE-SPINE.md is byte-identical to the fixture."
+    ],
+    "state_prefix": "[Da Vinci has already read the burdeebur-amended spine and challenged it. Asked about Data Factory's connection to on-premises and about personal data leaving Azure, the user said:] User said: \"leave those as gaps for now. deployment diagram.\"",
+    "files": ["_bmad-output/planning-artifacts/architecture/burdeebur-amended/ARCHITECTURE-SPINE.md"]
+  },
+  {
+    "id": "drift-names-changed-ads",
+    "input": "i updated the burdeebur spine this morning, are our diagrams still ok?",
+    "rubric": [
+      "The transcript shows scripts/diagram-drift.py being run, and the final message says deployment.drawio is stale.",
+      "The final message names AD-1 and AD-6 as changed ADs that the diagram cites, and says a cited change may make a drawn element wrong.",
+      "The final message names AD-7, AD-8 and AD-9 as added ADs the diagram does not cite yet, and says the diagram may be missing what they describe.",
+      "The final message offers to redraw from deployment.model.json rather than redrawing unasked: docs/architecture/diagrams/deployment.drawio and deployment.model.json are byte-identical to the fixtures."
+    ],
+    "state_prefix": null,
+    "files": [
+      "_bmad-output/planning-artifacts/architecture/burdeebur-amended/ARCHITECTURE-SPINE.md",
+      "docs/architecture/diagrams/deployment.drawio",
+      "docs/architecture/diagrams/deployment.model.json"
+    ]
+  }
+]

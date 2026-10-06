@@ -1,0 +1,83 @@
+code: org
+name: "Org Kit"
+description: "Organisation layer for BMad Method projects: org engineering standards, blank governance questionnaires, Jira-wired BMad overrides, Jules (IT governance), Scrooge McDuck (token usage and cost estimates) and Da Vinci (architecture principles, diagrams and design documents)"
+module_version: 1.14.0
+default_selected: false
+module_greeting: >
+  Org Kit is installed. The org standards baselines are in your standards folder and the blank
+  governance questionnaires in your governance folder; extend them for this project.
+  Talk to Jules (IT Governance) when you are ready to answer the Technical Architecture, Data Governance & Privacy
+  or Enterprise AI Risk Assessment,
+  and to Scrooge McDuck when you want to know where the tokens went or what the solution will cost.
+  Before bmad-architecture, talk to Da Vinci to agree the architecture principles and guardrails it must honour.
+  Run org-setup again at any time to reconfigure or after updating the kit.
+
+agents:
+  # Flow style keeps the roster's keys off top-level-looking lines for line-based parsers.
+  - { code: "agent-jules", name: "Jules", title: "IT Governance", icon: "🛡️", description: "Drafts, coaches and routes IT governance questionnaire answers (Technical Architecture, Data Governance & Privacy and Enterprise AI Risk Assessments) for the Product Lead and Tech Lead from the project's BMad artifacts, with a 2-hourly reviewer-comment watch." }
+  - { code: "agent-davinci", name: "Da Vinci", title: "Architecture Principles, Diagrams and Design Documents", icon: "🎨", description: "Agrees the architecture principles and guardrails with the user before bmad-architecture (docs/architecture/architecture.md, plus one file per cloud provider), then draws cited draw.io diagrams and writes cited HLD/LLD Word documents from the spine." }
+  - { code: "agent-scrooge", name: "Scrooge McDuck", title: "Token Usage Accountant and Cost Estimator", icon: "💰", description: "Keeps the project's token ledger from its Claude Code logs and suggests how to spend fewer tokens; prices the solution from its BMad artifacts into an Excel cost estimate with a sheet per environment, a rate card and team mandays." }
+
+jira_site:
+  prompt: "Which Jira site does this project use?"
+  default: ""
+  example: "https://<site>.atlassian.net"
+  required: true
+  regex: "^https://[a-z0-9-]+\\.atlassian\\.net/?$"
+
+jira_project_key:
+  prompt: "What is this project's Jira project key?"
+  default: ""
+  example: "PROJ"
+  required: true
+  regex: "^[A-Z][A-Z0-9]+$"
+
+confluence_wiki_url:
+  prompt: "Confluence wiki page for this project (optional; answer 'none' if there is none)"
+  default: ""
+  example: "https://<site>.atlassian.net/wiki/spaces/<SPACE>/pages/<id>"
+
+governance_folder:
+  prompt: "Where do the IT governance questionnaires live?"
+  default: "docs/governance"
+  result: "{project-root}/{value}"
+
+standards_folder:
+  prompt: "Where do the project's engineering standards live?"
+  default: "docs/standards"
+  result: "{project-root}/{value}"
+
+token_usage_folder:
+  prompt: "Where should Scrooge write the token usage ledger (gitignored)?"
+  default: "docs/costing/token_usage"
+  result: "{project-root}/{value}"
+
+cost_estimates_folder:
+  prompt: "Where should Scrooge write cost estimates (estimate models, Excel workbooks and infra_cost.csv)?"
+  default: "docs/costing"
+  result: "{project-root}/{value}"
+
+architecture_folder:
+  prompt: "Where should Da Vinci write the architecture answers and principles (architecture.md, plus one file per cloud provider) that bmad-architecture follows?"
+  default: "docs/architecture"
+  result: "{project-root}/{value}"
+
+diagrams_folder:
+  prompt: "Where should architecture diagrams (.drawio, with PNG/SVG exports) be written?"
+  default: "docs/architecture/diagrams"
+  result: "{project-root}/{value}"
+
+design_docs_folder:
+  prompt: "Where should High-Level and Low-Level Design documents (.docx) and their models be written?"
+  default: "docs/architecture/design"
+  result: "{project-root}/{value}"
+
+region:
+  prompt: "Which region is this solution developed in? Jules considers that region's regulatory documents when answering."
+  default: "none"
+  result: "{value}"
+  single-select:
+    - value: "none"
+      label: "None - no regional regulation"
+    - value: "uae"
+      label: "United Arab Emirates - CBUAE Rulebook (enabling technologies guidelines, AI guidance note)"

@@ -1,0 +1,18 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Agent customization surface for agent-scrooge.
+# Team overrides:     {project-root}/_bmad/custom/agent-scrooge.toml
+# Personal overrides: {project-root}/_bmad/custom/agent-scrooge.user.toml
+
+[agent]
+
+# --- Metadata (install-time roster contract) ---
+# Consumed by module.yaml:agents[] and `[agents.<code>]` in central config.
+
+code = "agent-scrooge"
+name = "Scrooge McDuck"
+title = "Token Usage Accountant and Cost Estimator"
+icon = "💰"
+description = "Keeps the project's token ledger and prices the solution from its BMad artifacts into an Excel cost estimate (environments, rate card, team mandays)."
+agent_type = "memory"   # stateless | memory | autonomous
+

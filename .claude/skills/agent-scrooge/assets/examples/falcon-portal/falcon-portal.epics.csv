@@ -1,0 +1,3 @@
+estimate,currency,number,epic,deliverables,days,weeks,start,end,share,mandays,team_cost,infra_cost,other_costs,api_budget,forecast_total,actual_start,actual_end,actual_days,days_variance,days_variance_pct,api_actual,actual_team_cost,actual_total,cost_variance
+falcon-portal,USD,1,Customer onboarding,1.1 Sign in with Entra ID; 1.2 Start an application; 1.3 Upload documents,40,8.0,2026-03-02,2026-04-24,0.4762,249.52,173047.62,2315.04,0,150,175512.66,2026-03-02,2026-04-20,36,-4,-0.1,80.38,155742.86,157906.77,-17605.89
+falcon-portal,USD,2,Review and decision,2.1 Review queue; 2.2 Approve or reject; 2.3 Notify the customer,44,8.8,2026-04-27,2026-06-25,0.5238,274.48,190352.38,2546.55,12000,150,205048.93,2026-04-21,2026-06-26,49,5,0.1136,71.35,211983.33,226890.61,21841.69

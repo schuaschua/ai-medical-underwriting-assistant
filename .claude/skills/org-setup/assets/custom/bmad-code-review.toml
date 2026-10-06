@@ -1,0 +1,8 @@
+# Org Kit override (org-setup). Loads the architecture principles and the org and project standards as
+# persistent facts, and reports work that breaks the agreed architecture answers (Da Vinci's stack-check.py) as findings.
+[workflow]
+persistent_facts = [
+  "file:{architecture_glob}",
+  "file:{standards_glob}",
+]
+on_complete = "After the review, the architecture check: run `uv run .claude/skills/agent-davinci/scripts/stack-check.py {project-root}` (Da Vinci's script; resolve {project-root} to the project folder). It holds the project's code, pipelines and infrastructure against every answer in {architecture_file} and the provider files beside it: the cloud, regions, tags, application type, front end, back end, database, AI and analytics platforms, CI, CD/GitOps, source host, IaC, environments, scans and pipeline credentials. Report each off_stack item, and each missing scan while pipelines exist, as a high-severity finding (what was used, its files, and what was agreed instead); each warning as a low-severity finding; and, holding the diff against each judge item and every principle, any the change breaks, as a finding whose severity follows the principle's risk. Say nothing about it when it is compliant with nothing to report, or when there is no architecture.md yet."

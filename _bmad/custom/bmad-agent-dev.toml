@@ -1,0 +1,6 @@
+# Org Kit override (org-setup). Loads the architecture principles and the org and project standards as persistent facts.
+[agent]
+persistent_facts = [
+  "file:docs/architecture/*.md",
+  "file:docs/standards/*.md",
+]

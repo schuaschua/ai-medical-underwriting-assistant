@@ -1,0 +1,4 @@
+estimate,currency,phase,api_budget,api_actual,variance,variance_pct
+falcon-portal,USD,governance (Jules),40,13.29,-26.71,-0.6678
+falcon-portal,USD,architecture docs (Da Vinci),25,9.49,-15.51,-0.6202
+falcon-portal,USD,test design,30,0.0,-30.0,-1.0

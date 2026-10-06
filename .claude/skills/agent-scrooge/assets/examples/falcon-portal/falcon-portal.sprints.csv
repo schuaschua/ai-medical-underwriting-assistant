@@ -1,0 +1,10 @@
+estimate,currency,number,start,end,days,team_cost,infra_cost,api_budget,forecast_total,days_worked,stories_done,api_actual,actual_team_cost,actual_total,cost_variance,planned_stories,stories_done_list
+falcon-portal,USD,1,2026-03-02,2026-03-13,10,43261.9,578.76,,43840.67,10,0,18.37,43261.9,43859.03,18.37,1.1 Sign in with Entra ID,
+falcon-portal,USD,2,2026-03-16,2026-03-27,10,43261.9,578.76,,43840.67,10,1,24.73,43261.9,43865.39,24.73,1.2 Start an application,1-1-sign-in
+falcon-portal,USD,3,2026-03-30,2026-04-10,10,43261.9,578.76,,43840.67,10,1,24.4,43261.9,43865.06,24.4,1.2 Start an application; 1.3 Upload documents,1-2-start-application
+falcon-portal,USD,4,2026-04-13,2026-04-24,10,43261.9,578.76,,43840.67,10,1,21.43,43261.9,43862.09,21.43,1.3 Upload documents,1-3-upload-documents
+falcon-portal,USD,5,2026-04-27,2026-05-08,10,43261.9,578.76,,43840.67,10,0,18.9,43261.9,43859.56,18.9,2.1 Review queue,
+falcon-portal,USD,6,2026-05-11,2026-05-22,10,43261.9,578.76,,43840.67,10,1,15.89,43261.9,43856.56,15.89,2.1 Review queue; 2.2 Approve or reject,2-1-review-queue
+falcon-portal,USD,7,2026-05-25,2026-06-05,10,43261.9,578.76,,43840.67,10,1,14.26,43261.9,43854.92,14.26,2.2 Approve or reject,2-2-approve-or-reject
+falcon-portal,USD,8,2026-06-08,2026-06-19,10,43261.9,578.76,,43840.67,10,0,10.73,43261.9,43851.4,10.73,2.3 Notify the customer,
+falcon-portal,USD,9,2026-06-22,2026-07-03,4,17304.76,231.5,,17536.27,5,1,5.37,21630.95,21925.7,4389.43,2.3 Notify the customer,2-3-notify-customer

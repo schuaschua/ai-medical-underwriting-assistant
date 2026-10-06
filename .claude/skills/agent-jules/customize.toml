@@ -1,0 +1,18 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Agent customization surface for agent-jules.
+# Team overrides:     {project-root}/_bmad/custom/agent-jules.toml
+# Personal overrides: {project-root}/_bmad/custom/agent-jules.user.toml
+
+[agent]
+
+# --- Metadata (install-time roster contract) ---
+# Consumed by module.yaml:agents[] and `[agents.<code>]` in central config.
+
+code = "agent-jules"
+name = "Jules"
+title = "IT Governance"
+icon = "🛡️"
+description = "Drafts, coaches and routes IT governance questionnaire answers (Technical Architecture, Data Governance & Privacy and Enterprise AI Risk Assessments) for the Product Lead and Tech Lead from the project's BMad artifacts, with a 2-hourly reviewer-comment watch."
+agent_type = "autonomous"   # stateless | memory | autonomous
+
