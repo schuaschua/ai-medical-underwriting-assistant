@@ -1,0 +1,106 @@
+{
+  "case_id": "case-003",
+  "file_name": "case-003.pdf",
+  "summary": "Edge pages: a blank page and a lab report rotated 90 degrees; no impairments.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0
+    },
+    {
+      "page_number": 2,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "blank",
+      "rotation": 0
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 90
+    },
+    {
+      "page_number": 4,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Morgan Mockford",
+      "pages": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "category": "address",
+      "value": "88 Sample Crescent, Demoford, ZZ 00029",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(202) 555-0189",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "morgan.mockford@example.com",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-78-9012",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0004736",
+      "pages": [
+        1,
+        4
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Harper Fixturely",
+      "pages": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "category": "address",
+      "value": "21 Template Way, Demoford, ZZ 00030",
+      "pages": [
+        4
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(202) 555-0154",
+      "pages": [
+        1,
+        4
+      ]
+    }
+  ]
+}

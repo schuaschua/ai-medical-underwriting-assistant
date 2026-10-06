@@ -1,0 +1,99 @@
+{
+  "case_id": "case-001",
+  "file_name": "case-001.pdf",
+  "summary": "Medical pages only: type 2 diabetes on metformin, HbA1c above range.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Avery Testwood",
+      "pages": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "category": "address",
+      "value": "42 Placeholder Lane, Exampleton, ZZ 00042",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(202) 555-0143",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "avery.testwood@example.com",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-12-3456",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0004417",
+      "pages": [
+        1,
+        2
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Riley Exampleby",
+      "pages": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "category": "address",
+      "value": "7 Specimen Road, Exampleton, ZZ 00043",
+      "pages": [
+        2
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(202) 555-0118",
+      "pages": [
+        1,
+        2
+      ]
+    }
+  ]
+}

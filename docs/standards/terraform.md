@@ -136,4 +136,5 @@ Projects record their own deviations from this baseline here, each with who appr
 
 | Rule | Exception | Approved by (role) and date | Close by |
 | --- | --- | --- | --- |
+| Apply order (destroy), 29 | The demo environment is alive only while it is being tested: the coding agent destroys the stacks locally after each test session and re-applies them for the next, instead of through the pipeline's destroy workflow. The resource group, state container and deployment identity are kept. | Project owner (Darrel), 2026-10-06 | The demo is over, or a destroy workflow exists |
 | 26, 33 | For the first build of the demo environment, the coding agent may apply plans and start deploys without a human reviewing each plan. | Project owner (Darrel), 2026-10-06 | The demo environment is up |

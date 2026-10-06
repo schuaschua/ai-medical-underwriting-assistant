@@ -1,0 +1,18 @@
+[project]
+name = "synthdata"
+version = "0.1.0"
+description = "Generator for the synthetic case PDFs and their answer key (CAP-11)"
+requires-python = "==3.13.*"
+# A dev tool, not service code: no service depends on it or imports it.
+dependencies = [
+    "contracts",
+    "pydantic==2.13.5",
+    "pymupdf==1.28.2",
+]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+[build-system]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"

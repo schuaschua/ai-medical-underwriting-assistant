@@ -31,7 +31,7 @@ Install uv 0.11.8, then from the repository root:
 ```sh
 uv sync
 uv run ruff format --check . && uv run ruff check .
-uv run mypy packages/contracts/src packages/contracts/tests
+uv run mypy packages
 uv run pytest --cov
 ```
 

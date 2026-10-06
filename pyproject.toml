@@ -13,6 +13,8 @@ dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "ruff==0.16.10",
+    # The synthetic data generator is a dev tool: `uv run python -m synthdata`.
+    "synthdata",
 ]
 
 [tool.uv]
@@ -23,6 +25,7 @@ members = ["packages/*", "services/*"]
 
 [tool.uv.sources]
 contracts = { workspace = true }
+synthdata = { workspace = true }
 
 [tool.ruff]
 target-version = "py313"
@@ -51,7 +54,7 @@ addopts = "--import-mode=importlib --strict-markers"
 
 [tool.coverage.run]
 # What `uv run pytest --cov` measures; each service adds its package here.
-source_pkgs = ["contracts"]
+source_pkgs = ["contracts", "synthdata"]
 
 [tool.coverage.report]
 # coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.

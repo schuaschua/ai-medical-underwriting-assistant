@@ -42,7 +42,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run mypy packages/contracts/src packages/contracts/tests
+        run: uv run mypy packages
 
       - name: Test with coverage
         # Test paths, measured packages and the 80% threshold come from pyproject.toml.

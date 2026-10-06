@@ -1,0 +1,127 @@
+{
+  "case_id": "case-002",
+  "file_name": "case-002.pdf",
+  "summary": "Medical pages plus an invoice, a payslip and a utility bill: hypertension, smoker.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0
+    },
+    {
+      "page_number": 4,
+      "page_type": "invoice",
+      "is_medical": false,
+      "layout": "invoice",
+      "rotation": 0
+    },
+    {
+      "page_number": 5,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "payslip",
+      "rotation": 0
+    },
+    {
+      "page_number": 6,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "utility_bill",
+      "rotation": 0
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Jordan Samplewick",
+      "pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "category": "address",
+      "value": "15 Fixture Street, Testbury, ZZ 00017",
+      "pages": [
+        1,
+        4,
+        6
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(202) 555-0167",
+      "pages": [
+        1
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "jordan.samplewick@example.com",
+      "pages": [
+        1,
+        6
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-45-6789",
+      "pages": [
+        1,
+        5
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0004582",
+      "pages": [
+        1,
+        2
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Quinn Demoson",
+      "pages": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "category": "address",
+      "value": "3 Dummy Avenue, Testbury, ZZ 00018",
+      "pages": [
+        2
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(202) 555-0126",
+      "pages": [
+        1,
+        2
+      ]
+    }
+  ]
+}

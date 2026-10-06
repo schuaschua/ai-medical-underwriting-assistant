@@ -15,3 +15,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-shared-contracts-package.md`
   summary: Add dependency vulnerability scans to CI.
   evidence: `security.md` rule 28 requires them on every pull request; the story's CI runs four checks and no scanner. Pick up in story 1.3.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
+  summary: Draw the rotated edge page with truly rotated content, not only the PDF rotation flag.
+  evidence: `render.py` draws upright and calls `set_rotation(90)`, so text extraction is unchanged. Pick up in story 4.1.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
+  summary: Decide whether synthetic pages keep a visible "SYNTHETIC TEST DOCUMENT" footer in their text layer.
+  evidence: The footer is on every non-blank page and could cue a classifier or model in a way no real document would. Owner's call (Darrel).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
+  summary: Extend the answer key with occurrence counts per page, strings that may legitimately be redacted, and expected clinical facts.
+  evidence: The key lists pages per identifier and a prose summary only. Pick up in stories 3.1 and 3.4.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
+  summary: Check whether Azure AI Language recognises the fictional identifiers (identity numbers with area 000, state ZZ, POL-SYN policy numbers) and adjust the synthetic formats if not.
+  evidence: Unverified; needs a live redaction call. Would be medium if true. Pick up in story 1.7.
