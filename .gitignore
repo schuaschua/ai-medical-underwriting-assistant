@@ -7,3 +7,16 @@ _bmad/custom/config.user.toml
 
 # Scratch and temporary files
 .work/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

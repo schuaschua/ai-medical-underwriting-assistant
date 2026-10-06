@@ -1,0 +1,11 @@
+[project]
+name = "contracts"
+version = "0.1.0"
+description = "Shared payload models, enums, error codes, patterns and functions (spine AD-20)"
+requires-python = "==3.13.*"
+# AD-20: the only shared code. It depends on pydantic and nothing else.
+dependencies = ["pydantic==2.13.5"]
+
+[build-system]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"

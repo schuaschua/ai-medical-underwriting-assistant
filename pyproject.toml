@@ -1,0 +1,58 @@
+# Workspace root: one place for tool configuration (ruff, mypy, pytest).
+# Members are the shared contracts package and, later, the seven services.
+[project]
+name = "aiunderwriter"
+version = "0.0.0"
+description = "AI Medical Underwriting Assistant POC: workspace root"
+requires-python = "==3.13.*"
+dependencies = ["contracts"]
+
+[dependency-groups]
+dev = [
+    "mypy==2.4.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.16.10",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "services/*"]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+[tool.ruff]
+target-version = "py313"
+# Lets import sorting tell first-party packages from third-party ones.
+src = ["packages/*/src"]
+# BMad and Claude Code tooling is vendored, not project code.
+extend-exclude = ["_bmad", "_bmad-output", ".claude"]
+
+[tool.ruff.lint]
+# coding-style.md section 1: default rules plus import order, bugbear, pyupgrade, security.
+extend-select = ["I", "B", "UP", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest tests state their expectations with plain `assert`, which S101 forbids.
+"**/tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "services"]
+# Every service will have its own tests/ folder; importlib mode lets test
+# modules in different folders share a file name.
+addopts = "--import-mode=importlib --strict-markers"
+
+[tool.coverage.run]
+# What `uv run pytest --cov` measures; each service adds its package here.
+source_pkgs = ["contracts"]
+
+[tool.coverage.report]
+# coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.
+fail_under = 80
