@@ -1,0 +1,25 @@
+[project]
+name = "web"
+version = "0.1.0"
+description = "The web service: serves the SPA and every /api route from one origin (spine AD-19)"
+requires-python = "==3.13.*"
+dependencies = [
+    "contracts",
+    # Entra sign-in for telemetry: Application Insights has local authentication off.
+    "azure-identity==1.26.0",
+    "azure-monitor-opentelemetry==1.8.10",
+    "fastapi==0.142.2",
+    # AD-3: the client for calls through the Dapr sidecar, which start with story 1.5.
+    # FastAPI's test client needs it already.
+    "httpx==0.28.1",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "uvicorn==0.54.0",
+]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+[build-system]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"

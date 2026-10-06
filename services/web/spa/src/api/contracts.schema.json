@@ -1,0 +1,2082 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "enum": [
+        "human",
+        "ai"
+      ],
+      "title": "ActorKind",
+      "type": "string"
+    },
+    "AgentStep": {
+      "additionalProperties": false,
+      "description": "One tool call of the verdict agent, as logged in `verdict.agent_step`.",
+      "properties": {
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "fact_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fact Id"
+        },
+        "latency_ms": {
+          "minimum": 0,
+          "title": "Latency Ms",
+          "type": "integer"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "rule_ids": {
+          "items": {
+            "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+            "type": "string"
+          },
+          "title": "Rule Ids",
+          "type": "array"
+        },
+        "step_no": {
+          "minimum": 1,
+          "title": "Step No",
+          "type": "integer"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "verdict_run_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Verdict Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict_run_id",
+        "case_id",
+        "step_no",
+        "tool",
+        "arguments",
+        "fact_id",
+        "rule_ids",
+        "latency_ms",
+        "occurred_at"
+      ],
+      "title": "AgentStep",
+      "type": "object"
+    },
+    "AgentStepList": {
+      "additionalProperties": false,
+      "description": "Response of both agent log reads, in step order.",
+      "properties": {
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/AgentStep"
+          },
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "title": "AgentStepList",
+      "type": "object"
+    },
+    "AgentStepQuery": {
+      "additionalProperties": false,
+      "description": "Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; both filters are optional.",
+      "properties": {
+        "rule_id": {
+          "anyOf": [
+            {
+              "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AgentStepQuery",
+      "type": "object"
+    },
+    "AuditAction": {
+      "enum": [
+        "document.redacted",
+        "page.classified",
+        "page.kept",
+        "page.discarded",
+        "page.accepted",
+        "page.denied",
+        "facts.extracted",
+        "verdict.suggested",
+        "stage.failed"
+      ],
+      "title": "AuditAction",
+      "type": "string"
+    },
+    "AuditRecord": {
+      "additionalProperties": false,
+      "description": "One row of the audit trail; `workflow` is the only writer.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/AuditAction"
+        },
+        "actor": {
+          "pattern": "\\S",
+          "title": "Actor",
+          "type": "string"
+        },
+        "actor_kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "patternProperties": {
+                "\\S": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Detail"
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Eval Run Id"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "page_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Page Id"
+        },
+        "ref": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Ref",
+          "type": "string"
+        },
+        "trace_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Trace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_kind",
+        "actor",
+        "action",
+        "occurred_at",
+        "case_id",
+        "page_id",
+        "ref",
+        "detail",
+        "trace_id",
+        "eval_run_id"
+      ],
+      "title": "AuditRecord",
+      "type": "object"
+    },
+    "AuditTrail": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases/{case_id}/audit`: events in time order.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/AuditRecord"
+          },
+          "title": "Events",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "events"
+      ],
+      "title": "AuditTrail",
+      "type": "object"
+    },
+    "CaseCreated": {
+      "additionalProperties": false,
+      "description": "Response of `POST /cases`; the request body is the PDF itself.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "document_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Document Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "document_id"
+      ],
+      "title": "CaseCreated",
+      "type": "object"
+    },
+    "CaseProgress": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases/{case_id}/progress`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "case_status": {
+          "$ref": "#/$defs/CaseStatus"
+        },
+        "pages": {
+          "items": {
+            "$ref": "#/$defs/PageProgress"
+          },
+          "title": "Pages",
+          "type": "array"
+        },
+        "redaction_status": {
+          "$ref": "#/$defs/StageStatus"
+        }
+      },
+      "required": [
+        "case_id",
+        "case_status",
+        "redaction_status",
+        "pages"
+      ],
+      "title": "CaseProgress",
+      "type": "object"
+    },
+    "CaseStarted": {
+      "additionalProperties": false,
+      "description": "Response of `POST /cases/{case_id}/start`: the case as it was actually started.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "case_status": {
+          "$ref": "#/$defs/CaseStatus"
+        },
+        "classifier_contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Eval Run Id"
+        },
+        "retriever_configs": {
+          "items": {
+            "$ref": "#/$defs/RetrieverConfig"
+          },
+          "minItems": 1,
+          "title": "Retriever Configs",
+          "type": "array"
+        },
+        "stop_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopAfter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "case_id",
+        "case_status",
+        "classifier_contender",
+        "retriever_configs",
+        "stop_after",
+        "eval_run_id"
+      ],
+      "title": "CaseStarted",
+      "type": "object"
+    },
+    "CaseStatus": {
+      "enum": [
+        "running",
+        "awaiting_human",
+        "completed",
+        "failed"
+      ],
+      "title": "CaseStatus",
+      "type": "string"
+    },
+    "ChunkSet": {
+      "enum": [
+        "fixed",
+        "smart"
+      ],
+      "title": "ChunkSet",
+      "type": "string"
+    },
+    "Classification": {
+      "additionalProperties": false,
+      "description": "One classifier's reading of one page; it never carries a route (AD-7).",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "classification_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Classification Id",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "is_medical": {
+          "title": "Is Medical",
+          "type": "boolean"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_type": {
+          "$ref": "#/$defs/PageType"
+        },
+        "reason": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "classification_id",
+        "case_id",
+        "page_id",
+        "contender",
+        "page_type",
+        "is_medical",
+        "confidence",
+        "reason"
+      ],
+      "title": "Classification",
+      "type": "object"
+    },
+    "ClassificationList": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases/{case_id}/classifications`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "classifications": {
+          "items": {
+            "$ref": "#/$defs/Classification"
+          },
+          "title": "Classifications",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "classifications"
+      ],
+      "title": "ClassificationList",
+      "type": "object"
+    },
+    "ClassificationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "audit": {
+          "$ref": "#/$defs/AuditRecord"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "classification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Classification"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "classification_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Classification Id",
+          "type": "string"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        }
+      },
+      "required": [
+        "case_id",
+        "status",
+        "error_code",
+        "audit",
+        "classification_id",
+        "page_id",
+        "contender",
+        "classification"
+      ],
+      "title": "ClassificationResult",
+      "type": "object"
+    },
+    "ClassifierContender": {
+      "enum": [
+        "llm",
+        "doc-intelligence"
+      ],
+      "title": "ClassifierContender",
+      "type": "string"
+    },
+    "ClassifierOutput": {
+      "additionalProperties": false,
+      "description": "What one LLM classifier run must return; anything else is a failed parse.",
+      "properties": {
+        "page_type": {
+          "$ref": "#/$defs/PageType"
+        },
+        "reason": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_type",
+        "reason"
+      ],
+      "title": "ClassifierOutput",
+      "type": "object"
+    },
+    "ClassifyCommand": {
+      "additionalProperties": false,
+      "description": "Request of `POST /classifications`; key `case_id` + `page_id` + `contender`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Run Id"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "page_id",
+        "contender"
+      ],
+      "title": "ClassifyCommand",
+      "type": "object"
+    },
+    "Decision": {
+      "description": "The human-reserved actions (AD-10).",
+      "enum": [
+        "keep",
+        "discard",
+        "accept",
+        "deny"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "DecisionRecorded": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/DemoRole"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        },
+        "decision_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_status": {
+          "$ref": "#/$defs/PageStatus"
+        }
+      },
+      "required": [
+        "decision_id",
+        "case_id",
+        "page_id",
+        "decision",
+        "actor",
+        "page_status",
+        "occurred_at"
+      ],
+      "title": "DecisionRecorded",
+      "type": "object"
+    },
+    "DecisionRequest": {
+      "additionalProperties": false,
+      "description": "Request of `POST /cases/{case_id}/pages/{page_id}/decisions`.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/DemoRole"
+        },
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        }
+      },
+      "required": [
+        "decision",
+        "actor"
+      ],
+      "title": "DecisionRequest",
+      "type": "object"
+    },
+    "DemoRole": {
+      "description": "The values of the `X-Demo-Role` header (AD-9).",
+      "enum": [
+        "customer",
+        "underwriter"
+      ],
+      "title": "DemoRole",
+      "type": "string"
+    },
+    "ErrorBody": {
+      "additionalProperties": false,
+      "description": "The one error shape: `{\"error\": {\"code\", \"message\", \"trace_id\"}}`.",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/ErrorDetail"
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "title": "ErrorBody",
+      "type": "object"
+    },
+    "ErrorCode": {
+      "description": "Every `error.code` a service may return.",
+      "enum": [
+        "validation_failed",
+        "invalid_role",
+        "role_not_allowed",
+        "actor_not_human",
+        "not_found",
+        "file_too_large",
+        "unsupported_file_type",
+        "in_progress",
+        "not_redacted",
+        "not_awaiting_decision",
+        "pages_not_terminal",
+        "rule_not_seen",
+        "stage_timeout",
+        "stage_failed",
+        "redaction_failed",
+        "invalid_model_output",
+        "model_unavailable",
+        "upstream_unavailable",
+        "internal_error"
+      ],
+      "title": "ErrorCode",
+      "type": "string"
+    },
+    "ErrorDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "message": {
+          "pattern": "\\S",
+          "title": "Message",
+          "type": "string"
+        },
+        "trace_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Trace Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "trace_id"
+      ],
+      "title": "ErrorDetail",
+      "type": "object"
+    },
+    "ExtractFactsCommand": {
+      "additionalProperties": false,
+      "description": "Request of `POST /fact-sets`; key `case_id` + `page_id`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Run Id"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "page_id"
+      ],
+      "title": "ExtractFactsCommand",
+      "type": "object"
+    },
+    "ExtractedFact": {
+      "additionalProperties": false,
+      "properties": {
+        "quote": {
+          "pattern": "\\S",
+          "title": "Quote",
+          "type": "string"
+        },
+        "statement": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "quote"
+      ],
+      "title": "ExtractedFact",
+      "type": "object"
+    },
+    "ExtractionOutput": {
+      "additionalProperties": false,
+      "description": "What the extraction model must return for one page; anything else is a failed parse.",
+      "properties": {
+        "facts": {
+          "items": {
+            "$ref": "#/$defs/ExtractedFact"
+          },
+          "title": "Facts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "facts"
+      ],
+      "title": "ExtractionOutput",
+      "type": "object"
+    },
+    "Fact": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "fact_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "quote": {
+          "pattern": "\\S",
+          "title": "Quote",
+          "type": "string"
+        },
+        "quote_end": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Quote End"
+        },
+        "quote_start": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Quote Start"
+        },
+        "quote_verified": {
+          "title": "Quote Verified",
+          "type": "boolean"
+        },
+        "statement": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Statement",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fact_id",
+        "case_id",
+        "page_id",
+        "page_number",
+        "statement",
+        "quote",
+        "quote_verified",
+        "quote_start",
+        "quote_end"
+      ],
+      "title": "Fact",
+      "type": "object"
+    },
+    "FactList": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases/{case_id}/facts`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "facts": {
+          "items": {
+            "$ref": "#/$defs/Fact"
+          },
+          "title": "Facts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "facts"
+      ],
+      "title": "FactList",
+      "type": "object"
+    },
+    "FactSetResult": {
+      "additionalProperties": false,
+      "properties": {
+        "audit": {
+          "$ref": "#/$defs/AuditRecord"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fact_ids": {
+          "items": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "fact_set_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Fact Set Id",
+          "type": "string"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        },
+        "unverified_count": {
+          "minimum": 0,
+          "title": "Unverified Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "case_id",
+        "status",
+        "error_code",
+        "audit",
+        "fact_set_id",
+        "page_id",
+        "fact_ids",
+        "unverified_count"
+      ],
+      "title": "FactSetResult",
+      "type": "object"
+    },
+    "HttpMethod": {
+      "enum": [
+        "GET",
+        "POST"
+      ],
+      "title": "HttpMethod",
+      "type": "string"
+    },
+    "JsonValue": {},
+    "Page": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "document_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page_id",
+        "case_id",
+        "document_id",
+        "page_number"
+      ],
+      "title": "Page",
+      "type": "object"
+    },
+    "PageBoxes": {
+      "additionalProperties": false,
+      "description": "Response of `GET /pages/{page_id}/boxes`.",
+      "properties": {
+        "boxes": {
+          "items": {
+            "$ref": "#/$defs/WordBox"
+          },
+          "title": "Boxes",
+          "type": "array"
+        },
+        "page_height": {
+          "exclusiveMinimum": 0.0,
+          "title": "Page Height",
+          "type": "number"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "page_width": {
+          "exclusiveMinimum": 0.0,
+          "title": "Page Width",
+          "type": "number"
+        }
+      },
+      "required": [
+        "page_id",
+        "page_number",
+        "page_width",
+        "page_height",
+        "boxes"
+      ],
+      "title": "PageBoxes",
+      "type": "object"
+    },
+    "PageBoxesQuery": {
+      "additionalProperties": false,
+      "description": "Query of `GET /pages/{page_id}/boxes`: an optional offset range into the page text.",
+      "properties": {
+        "quote_end": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote End"
+        },
+        "quote_start": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote Start"
+        }
+      },
+      "title": "PageBoxesQuery",
+      "type": "object"
+    },
+    "PageList": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases/{case_id}/pages`; empty until redaction is done.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "pages": {
+          "items": {
+            "$ref": "#/$defs/Page"
+          },
+          "title": "Pages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "pages"
+      ],
+      "title": "PageList",
+      "type": "object"
+    },
+    "PageProgress": {
+      "additionalProperties": false,
+      "properties": {
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "page_status": {
+          "$ref": "#/$defs/PageStatus"
+        }
+      },
+      "required": [
+        "page_id",
+        "page_number",
+        "page_status"
+      ],
+      "title": "PageProgress",
+      "type": "object"
+    },
+    "PageQueue": {
+      "additionalProperties": false,
+      "description": "Response of `GET /pages?status=`: pages across cases, eval-run cases left out.",
+      "properties": {
+        "pages": {
+          "items": {
+            "$ref": "#/$defs/QueuedPage"
+          },
+          "title": "Pages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pages"
+      ],
+      "title": "PageQueue",
+      "type": "object"
+    },
+    "PageQueueQuery": {
+      "additionalProperties": false,
+      "description": "Query of `GET /pages?status=`.",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/PageStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "PageQueueQuery",
+      "type": "object"
+    },
+    "PageStatus": {
+      "enum": [
+        "uploaded",
+        "classified",
+        "awaiting_customer",
+        "awaiting_triage",
+        "extracting",
+        "extracted",
+        "discarded",
+        "denied",
+        "failed"
+      ],
+      "title": "PageStatus",
+      "type": "string"
+    },
+    "PageText": {
+      "additionalProperties": false,
+      "description": "Response of `GET /pages/{page_id}/text`: the one stored reading of the page.",
+      "properties": {
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_id",
+        "page_number",
+        "text"
+      ],
+      "title": "PageText",
+      "type": "object"
+    },
+    "PageType": {
+      "enum": [
+        "lab_report",
+        "attending_physician_statement",
+        "application_form",
+        "id_document",
+        "invoice",
+        "other"
+      ],
+      "title": "PageType",
+      "type": "string"
+    },
+    "QueuedPage": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "page_status": {
+          "$ref": "#/$defs/PageStatus"
+        }
+      },
+      "required": [
+        "case_id",
+        "page_id",
+        "page_number",
+        "page_status"
+      ],
+      "title": "QueuedPage",
+      "type": "object"
+    },
+    "ReadRuleArguments": {
+      "additionalProperties": false,
+      "description": "Arguments of the agent tool `read_rule`.",
+      "properties": {
+        "rule_id": {
+          "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+          "title": "Rule Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id"
+      ],
+      "title": "ReadRuleArguments",
+      "type": "object"
+    },
+    "Reason": {
+      "additionalProperties": false,
+      "description": "One cited reason: a rule, the facts it was applied to, and its effect.",
+      "properties": {
+        "debit_pct": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Debit Pct"
+        },
+        "effect": {
+          "$ref": "#/$defs/ReasonEffect"
+        },
+        "fact_ids": {
+          "items": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Fact Ids",
+          "type": "array"
+        },
+        "rule_id": {
+          "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+          "title": "Rule Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "fact_ids",
+        "effect",
+        "debit_pct"
+      ],
+      "title": "Reason",
+      "type": "object"
+    },
+    "ReasonEffect": {
+      "enum": [
+        "none",
+        "debit",
+        "decline"
+      ],
+      "title": "ReasonEffect",
+      "type": "string"
+    },
+    "RedactionCommand": {
+      "additionalProperties": false,
+      "description": "Request of `POST /cases/{case_id}/redaction`; the key is the `case_id` in the path.",
+      "properties": {
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Run Id"
+        }
+      },
+      "title": "RedactionCommand",
+      "type": "object"
+    },
+    "RedactionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "audit": {
+          "$ref": "#/$defs/AuditRecord"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "document_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Document Id",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_ids": {
+          "items": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "title": "Page Ids",
+          "type": "array"
+        },
+        "redaction_counts": {
+          "patternProperties": {
+            "\\S": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "title": "Redaction Counts",
+          "type": "object"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        }
+      },
+      "required": [
+        "case_id",
+        "status",
+        "error_code",
+        "audit",
+        "document_id",
+        "page_ids",
+        "redaction_counts"
+      ],
+      "title": "RedactionResult",
+      "type": "object"
+    },
+    "RetrieverConfig": {
+      "description": "The retrieval ladder rows (AD-11).",
+      "enum": [
+        "r1",
+        "r2",
+        "r3",
+        "r4",
+        "r5",
+        "r6"
+      ],
+      "title": "RetrieverConfig",
+      "type": "string"
+    },
+    "RuleReadQuery": {
+      "additionalProperties": false,
+      "description": "Query of `GET /rules/{rule_id}`; without the parameter the `smart` chunk is returned.",
+      "properties": {
+        "retriever_config": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetrieverConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "RuleReadQuery",
+      "type": "object"
+    },
+    "RuleText": {
+      "additionalProperties": false,
+      "description": "Response of `GET /rules/{rule_id}`.",
+      "properties": {
+        "chunk_id": {
+          "pattern": "\\S",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "chunk_set": {
+          "$ref": "#/$defs/ChunkSet"
+        },
+        "impairment": {
+          "pattern": "\\S",
+          "title": "Impairment",
+          "type": "string"
+        },
+        "manual_page": {
+          "minimum": 1,
+          "title": "Manual Page",
+          "type": "integer"
+        },
+        "rule_id": {
+          "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "chunk_id",
+        "chunk_set",
+        "text",
+        "manual_page",
+        "impairment"
+      ],
+      "title": "RuleText",
+      "type": "object"
+    },
+    "SearchItem": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "pattern": "\\S",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "impairment": {
+          "pattern": "\\S",
+          "title": "Impairment",
+          "type": "string"
+        },
+        "manual_page": {
+          "minimum": 1,
+          "title": "Manual Page",
+          "type": "integer"
+        },
+        "rank": {
+          "minimum": 1,
+          "title": "Rank",
+          "type": "integer"
+        },
+        "rule_ids": {
+          "items": {
+            "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+            "type": "string"
+          },
+          "title": "Rule Ids",
+          "type": "array"
+        },
+        "score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Score",
+          "type": "number"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "rule_ids",
+        "rank",
+        "score",
+        "text",
+        "manual_page",
+        "impairment"
+      ],
+      "title": "SearchItem",
+      "type": "object"
+    },
+    "SearchRequest": {
+      "additionalProperties": false,
+      "description": "Request of `POST /searches`; the result is not stored.",
+      "properties": {
+        "query": {
+          "pattern": "\\S",
+          "title": "Query",
+          "type": "string"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        },
+        "top_k": {
+          "default": 5,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Top K",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "query",
+        "retriever_config"
+      ],
+      "title": "SearchRequest",
+      "type": "object"
+    },
+    "SearchResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SearchItem"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "latency_ms": {
+          "minimum": 0,
+          "title": "Latency Ms",
+          "type": "integer"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        }
+      },
+      "required": [
+        "retriever_config",
+        "latency_ms",
+        "items"
+      ],
+      "title": "SearchResponse",
+      "type": "object"
+    },
+    "SearchRulesArguments": {
+      "additionalProperties": false,
+      "description": "Arguments of the agent tool `search_rules`.",
+      "properties": {
+        "fact_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Fact Id",
+          "type": "string"
+        },
+        "query": {
+          "pattern": "\\S",
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "fact_id"
+      ],
+      "title": "SearchRulesArguments",
+      "type": "object"
+    },
+    "Service": {
+      "description": "The seven services, by Dapr app id (AD-1).",
+      "enum": [
+        "web",
+        "intake",
+        "classification",
+        "extraction",
+        "retrieval",
+        "verdict",
+        "workflow"
+      ],
+      "title": "Service",
+      "type": "string"
+    },
+    "StageStatus": {
+      "description": "Status of one stage result (AD-6).",
+      "enum": [
+        "running",
+        "done",
+        "failed"
+      ],
+      "title": "StageStatus",
+      "type": "string"
+    },
+    "StartCaseRequest": {
+      "additionalProperties": false,
+      "description": "Request of `POST /cases/{case_id}/start`; every field is optional (settings fill the gaps).",
+      "properties": {
+        "classifier_contender": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassifierContender"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Run Id"
+        },
+        "retriever_configs": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RetrieverConfig"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retriever Configs"
+        },
+        "stop_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopAfter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "StartCaseRequest",
+      "type": "object"
+    },
+    "StopAfter": {
+      "description": "Where a case may be told to stop early (AD-17: the classifier bake-off).",
+      "enum": [
+        "gate"
+      ],
+      "title": "StopAfter",
+      "type": "string"
+    },
+    "SystemReason": {
+      "description": "Verdict reasons that need no citation (AD-15).",
+      "enum": [
+        "no_matching_rule",
+        "conflicting_rules",
+        "unverified_quote",
+        "low_confidence",
+        "step_limit"
+      ],
+      "title": "SystemReason",
+      "type": "string"
+    },
+    "ToolName": {
+      "description": "The verdict agent's three tools (AD-15).",
+      "enum": [
+        "list_facts",
+        "search_rules",
+        "read_rule"
+      ],
+      "title": "ToolName",
+      "type": "string"
+    },
+    "Verdict": {
+      "enum": [
+        "standard",
+        "loaded",
+        "decline",
+        "refer"
+      ],
+      "title": "Verdict",
+      "type": "string"
+    },
+    "VerdictOutput": {
+      "additionalProperties": false,
+      "description": "What the verdict agent must return; `verdict`'s domain code finishes it (AD-15).",
+      "properties": {
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/Reason"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "system_reasons": {
+          "items": {
+            "$ref": "#/$defs/SystemReason"
+          },
+          "title": "System Reasons",
+          "type": "array"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "confidence",
+        "reasons",
+        "system_reasons"
+      ],
+      "title": "VerdictOutput",
+      "type": "object"
+    },
+    "VerdictRun": {
+      "additionalProperties": false,
+      "description": "One verdict run as read by `web`: always a suggestion, never a decision.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Confidence"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "const": "AI suggestion, not a decision",
+          "default": "AI suggestion, not a decision",
+          "title": "Label",
+          "type": "string"
+        },
+        "loading_pct": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Loading Pct"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/Reason"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        },
+        "system_reasons": {
+          "items": {
+            "$ref": "#/$defs/SystemReason"
+          },
+          "title": "System Reasons",
+          "type": "array"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verdict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verdict_run_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Verdict Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict_run_id",
+        "case_id",
+        "retriever_config",
+        "status",
+        "verdict",
+        "loading_pct",
+        "confidence",
+        "reasons",
+        "system_reasons",
+        "error_code"
+      ],
+      "title": "VerdictRun",
+      "type": "object"
+    },
+    "VerdictRunCommand": {
+      "additionalProperties": false,
+      "description": "Request of `POST /verdict-runs`; key `case_id` + `retriever_config`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Run Id"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        }
+      },
+      "required": [
+        "case_id",
+        "retriever_config"
+      ],
+      "title": "VerdictRunCommand",
+      "type": "object"
+    },
+    "VerdictRunList": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases/{case_id}/verdict-runs`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "verdict_runs": {
+          "items": {
+            "$ref": "#/$defs/VerdictRun"
+          },
+          "title": "Verdict Runs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "case_id",
+        "verdict_runs"
+      ],
+      "title": "VerdictRunList",
+      "type": "object"
+    },
+    "VerdictRunRequest": {
+      "additionalProperties": false,
+      "description": "Request of `POST /cases/{case_id}/verdict-runs` (the Compare toggle, AD-11).",
+      "properties": {
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        }
+      },
+      "required": [
+        "retriever_config"
+      ],
+      "title": "VerdictRunRequest",
+      "type": "object"
+    },
+    "VerdictRunRequested": {
+      "additionalProperties": false,
+      "description": "The requested run's state; the run itself is read from `verdict`.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        }
+      },
+      "required": [
+        "case_id",
+        "retriever_config",
+        "status"
+      ],
+      "title": "VerdictRunRequested",
+      "type": "object"
+    },
+    "VerdictRunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "audit": {
+          "$ref": "#/$defs/AuditRecord"
+        },
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        },
+        "status": {
+          "$ref": "#/$defs/StageStatus"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verdict"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verdict_run_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Verdict Run Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "status",
+        "error_code",
+        "audit",
+        "verdict_run_id",
+        "retriever_config",
+        "verdict"
+      ],
+      "title": "VerdictRunResult",
+      "type": "object"
+    },
+    "WordBox": {
+      "additionalProperties": false,
+      "description": "One word of the page text and where it sits on the page.",
+      "properties": {
+        "char_end": {
+          "minimum": 0,
+          "title": "Char End",
+          "type": "integer"
+        },
+        "char_start": {
+          "minimum": 0,
+          "title": "Char Start",
+          "type": "integer"
+        },
+        "x0": {
+          "minimum": 0.0,
+          "title": "X0",
+          "type": "number"
+        },
+        "x1": {
+          "minimum": 0.0,
+          "title": "X1",
+          "type": "number"
+        },
+        "y0": {
+          "minimum": 0.0,
+          "title": "Y0",
+          "type": "number"
+        },
+        "y1": {
+          "minimum": 0.0,
+          "title": "Y1",
+          "type": "number"
+        }
+      },
+      "required": [
+        "char_start",
+        "char_end",
+        "x0",
+        "y0",
+        "x1",
+        "y1"
+      ],
+      "title": "WordBox",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Contracts"
+}

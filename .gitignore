@@ -27,3 +27,10 @@ coverage.xml
 *.tfstate.*
 tfplan
 *.tfplan
+
+# Node (the SPA)
+node_modules/
+services/web/spa/coverage/
+
+# Dapr CLI run logs
+.dapr/

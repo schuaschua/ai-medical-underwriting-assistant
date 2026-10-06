@@ -11,10 +11,10 @@
   evidence: `CaseProgress`, `PageProgress` and `AgentStep` have no error or outcome field. Pick up in stories 1.9, 2.5 and 2.8.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-shared-contracts-package.md`
   summary: Export the contract to the SPA (JSON Schema or generated TypeScript types) with a drift check.
-  evidence: The SPA must use the same field names and enums; nothing generates or checks them. Pick up in story 1.3.
+  evidence: The SPA must use the same field names and enums; nothing generates or checks them. Done in story 1.3.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-1-shared-contracts-package.md`
   summary: Add dependency vulnerability scans to CI.
-  evidence: `security.md` rule 28 requires them on every pull request; the story's CI runs four checks and no scanner. Pick up in story 1.3.
+  evidence: `security.md` rule 28 requires them on every pull request; the story's CI runs four checks and no scanner. Done in story 1.3.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
   summary: Draw the rotated edge page with truly rotated content, not only the PDF rotation flag.
   evidence: `render.py` draws upright and calls `set_rotation(90)`, so text extraction is unchanged. Pick up in story 4.1.
@@ -36,3 +36,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-azure-foundation-for-the-demo-environment.md`
   summary: Add plan-time assertions (terraform test or check blocks) for key, password and local auth off, pinned model versions and prevent_destroy.
   evidence: Flipping any of these still passes fmt, validate and plan. `terraform.md` defers policy tooling until the pipeline works.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
+  summary: Move the `Me` and `Health` payloads into the contracts package and add error codes for method not allowed, payload too large, unsupported media type and too many requests.
+  evidence: Both payloads are hand-written in `web` and in the SPA; framework 405, 413, 415 and 429 are answered as 422. Needs a contracts change. Pick up in story 1.5.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
+  summary: Have the deploy show its plan for review before applying, once the first-build exception is closed.
+  evidence: `deploy.yml` plans and applies in one job; `terraform.md` rule 26 wants a reviewed plan. Covered until the demo environment is up by the recorded exception.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
+  summary: Run `dapr init` once on the developer machine and prove `./tools/dev.sh` end to end.
+  evidence: The Dapr runtime is not initialised here and `dapr init` installs outside the project folder, which the agent may not do. Needs the owner (Darrel).

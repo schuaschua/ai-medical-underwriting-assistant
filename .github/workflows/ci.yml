@@ -42,8 +42,130 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run mypy packages
+        run: uv run mypy packages services
 
       - name: Test with coverage
         # Test paths, measured packages and the 80% threshold come from pyproject.toml.
+        # One of the tests fails when the contract schema the SPA's types are
+        # generated from no longer matches packages/contracts.
         run: uv run pytest --cov
+
+  spa:
+    name: SPA checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/web/spa
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: services/web/spa/.node-version
+          cache: npm
+          cache-dependency-path: services/web/spa/package-lock.json
+
+      - name: Install dependencies
+        # npm ci fails when package-lock.json is out of date instead of rewriting it.
+        run: npm ci
+
+      - name: Lint and format check
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Generated contract types are current
+        run: npm run contracts:check
+
+      - name: Test with coverage
+        # The 60% threshold comes from vite.config.ts.
+        run: npm test -- --run
+
+      - name: Build
+        run: npm run build
+
+  image:
+    name: Container image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE: aiuw-web:ci
+      CONTAINER: aiuw-web-ci
+      URL: http://127.0.0.1:18080
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: docker build --file services/web/Dockerfile --tag "$IMAGE" .
+
+      - name: Run
+        run: docker run --detach --publish 127.0.0.1:18080:8000 --name "$CONTAINER" "$IMAGE"
+
+      - name: Check health, the SPA page and the user
+        run: |
+          fetch() {
+            curl --fail --silent --show-error --max-time 5 \
+              --retry 10 --retry-delay 1 --retry-all-errors "$@"
+          }
+          fetch --output /dev/null "${URL}/api/health"
+          content_type="$(fetch --output /dev/null --write-out '%{content_type}' "${URL}/")"
+          if [[ "$content_type" != text/html* ]]; then
+            echo "::error::/ answered with content type '${content_type}', not HTML."
+            exit 1
+          fi
+          if [[ "$(docker exec "$CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The container runs as root."
+            exit 1
+          fi
+
+      - name: Show the container's log
+        if: ${{ failure() }}
+        run: docker logs "$CONTAINER"
+
+      - name: Remove the container
+        if: ${{ always() }}
+        run: docker rm --force "$CONTAINER"
+
+  dependency-scan:
+    # security.md rule 28: any known vulnerability in a locked Python package,
+    # or a high or critical one in a shipped npm package, fails the run.
+    name: Dependency scans
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.8"
+          enable-cache: true
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: services/web/spa/.node-version
+
+      - name: Scan Python dependencies
+        # Every package in uv.lock, for every workspace member, by hash.
+        run: |
+          uv export --locked --all-packages --no-emit-workspace \
+            --format requirements-txt --output-file "$RUNNER_TEMP/requirements.txt" > /dev/null
+          uvx pip-audit==2.10.1 --require-hashes --disable-pip \
+            --requirement "$RUNNER_TEMP/requirements.txt"
+
+      - name: Scan SPA dependencies
+        # Reads package-lock.json; nothing is installed.
+        run: npm --prefix services/web/spa audit --omit=dev --audit-level=high

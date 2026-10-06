@@ -5,7 +5,7 @@ name = "aiunderwriter"
 version = "0.0.0"
 description = "AI Medical Underwriting Assistant POC: workspace root"
 requires-python = "==3.13.*"
-dependencies = ["contracts"]
+dependencies = ["contracts", "web"]
 
 [dependency-groups]
 dev = [
@@ -25,12 +25,13 @@ members = ["packages/*", "services/*"]
 
 [tool.uv.sources]
 contracts = { workspace = true }
+web = { workspace = true }
 synthdata = { workspace = true }
 
 [tool.ruff]
 target-version = "py313"
 # Lets import sorting tell first-party packages from third-party ones.
-src = ["packages/*/src"]
+src = ["packages/*/src", "services/*/src"]
 # BMad and Claude Code tooling is vendored, not project code.
 extend-exclude = ["_bmad", "_bmad-output", ".claude"]
 
@@ -54,7 +55,7 @@ addopts = "--import-mode=importlib --strict-markers"
 
 [tool.coverage.run]
 # What `uv run pytest --cov` measures; each service adds its package here.
-source_pkgs = ["contracts", "synthdata"]
+source_pkgs = ["contracts", "synthdata", "web"]
 
 [tool.coverage.report]
 # coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.

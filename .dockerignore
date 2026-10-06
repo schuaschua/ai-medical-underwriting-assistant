@@ -1,0 +1,22 @@
+# The build context is the repository root; images need only source and lock files.
+.git
+.github
+.claude
+.work
+.venv
+.dapr
+.coverage
+.mypy_cache
+.pytest_cache
+.ruff_cache
+_bmad
+_bmad-output
+data
+docs
+infra
+**/__pycache__
+**/node_modules
+**/dist
+**/coverage
+**/tests
+**/.terraform

@@ -1,0 +1,21 @@
+# Dapr multi-app run file for local development: `./tools/dev.sh` starts it.
+# Each service is added here by the story that builds it.
+version: 1
+common:
+  # Service invocation only (spine AD-3): this folder is empty on purpose, so
+  # the sidecars load no state store or pub/sub component.
+  resourcesPath: ./dapr/resources
+apps:
+  - appID: web
+    appDirPath: ./services/web
+    appProtocol: http
+    appPort: 8000
+    daprHTTPPort: 3500
+    # AD-3: uploads are up to 10 MB; Dapr's default limit is 4 MB.
+    maxBodySize: 16Mi
+    enableAppHealthCheck: true
+    appHealthCheckPath: /api/health
+    command: ["uv", "run", "python", "-m", "web"]
+    env:
+      WEB_HOST: "127.0.0.1"
+      WEB_PORT: "8000"
