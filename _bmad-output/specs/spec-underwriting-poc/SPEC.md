@@ -61,6 +61,9 @@ Opportunity and proof. Medical underwriters lose hours reading medical records t
 - Bake-off fairness: contenders share inputs, chunking, embedding model and LLM; only the component under test differs.
 - Hosted on Azure under the org standards in `docs/standards/`. Azure AI Search and Document Intelligence are outside the Azure standard and need recorded architecture decisions.
 - Retrieval and classification each sit behind one interface, so either contender can serve the pipeline.
+- LLM and embeddings: Azure OpenAI models on Microsoft Foundry.
+- Sign-in: Entra sign-in with two demo accounts (customer, underwriter); no self-registration.
+- Demo-ready by the weekend of 10 October 2026, for a technical architect expert in RAG: retrieval design and evaluation must hold up to expert scrutiny, and scope cuts favour the end-to-end demo path over breadth.
 
 ## Non-goals
 
@@ -77,10 +80,4 @@ Opportunity and proof. Medical underwriters lose hours reading medical records t
 
 - Two roles: customer (uploader) and underwriter.
 - Classification runs per page, not per file, so mixed documents are handled.
-
-## Open Questions
-
-- Which LLM and embedding model on Microsoft Foundry: Azure OpenAI or Claude via Foundry?
-- Does the customer sign in? The Azure standard requires Entra sign-in on every route.
-- No architecture principles are agreed yet (`docs/architecture/architecture.md` is missing). Run Da Vinci's guardrails round next.
-- Who is the demo audience, and is there a date?
+- No architecture principles round: Darrel chose to skip it; architecture follows this spec and the org standards.
