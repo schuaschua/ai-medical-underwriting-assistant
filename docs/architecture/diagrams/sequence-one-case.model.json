@@ -1,0 +1,259 @@
+{
+  "type": "sequence",
+  "title": "One case, end to end: upload to cited verdict",
+  "spine": "_bmad-output/planning-artifacts/architecture/architecture-ai-medical-underwriting-assistant-2026-10-06/ARCHITECTURE-SPINE.md",
+  "sources": [
+    "_bmad-output/specs/spec-underwriting-poc/SPEC.md",
+    "_bmad-output/specs/spec-underwriting-poc/flows.md"
+  ],
+  "participants": [
+    {
+      "id": "customer",
+      "label": "Customer",
+      "kind": "person",
+      "cite": "AD-9"
+    },
+    {
+      "id": "uw",
+      "label": "Underwriter",
+      "kind": "person",
+      "cite": "AD-9"
+    },
+    {
+      "id": "web",
+      "label": "web",
+      "kind": "container",
+      "cite": "AD-19"
+    },
+    {
+      "id": "intake",
+      "label": "intake",
+      "kind": "container",
+      "cite": "AD-21"
+    },
+    {
+      "id": "workflow",
+      "label": "workflow",
+      "kind": "container",
+      "cite": "AD-5"
+    },
+    {
+      "id": "lang",
+      "label": "Azure AI Language",
+      "kind": "service",
+      "cite": "AD-21"
+    },
+    {
+      "id": "classification",
+      "label": "classification",
+      "kind": "container",
+      "cite": "AD-13"
+    },
+    {
+      "id": "extraction",
+      "label": "extraction",
+      "kind": "container",
+      "cite": "AD-14"
+    },
+    {
+      "id": "verdict",
+      "label": "verdict",
+      "kind": "container",
+      "cite": "AD-15"
+    },
+    {
+      "id": "retrieval",
+      "label": "retrieval",
+      "kind": "container",
+      "cite": "AD-11"
+    }
+  ],
+  "messages": [
+    {
+      "from": "customer",
+      "to": "web",
+      "label": "upload PDF",
+      "cite": [
+        "flows.md \u00a7Pipeline",
+        "AD-2"
+      ],
+      "data": [
+        "PII"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "intake",
+      "label": "create case, store original PDF",
+      "cite": [
+        "AD-2",
+        "AD-21"
+      ],
+      "data": [
+        "PII"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "workflow",
+      "label": "start case",
+      "cite": [
+        "AD-2",
+        "AD-5"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "intake",
+      "label": "redact document, then split pages",
+      "cite": [
+        "AD-21",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "lang",
+      "label": "redact original (entity mask)",
+      "cite": "AD-21",
+      "data": [
+        "PII"
+      ]
+    },
+    {
+      "from": "lang",
+      "to": "intake",
+      "label": "redacted PDF and entity list in Blob",
+      "cite": "AD-21",
+      "return": true
+    },
+    {
+      "from": "intake",
+      "to": "workflow",
+      "label": "page ids, redaction counts",
+      "return": true,
+      "cite": [
+        "AD-21",
+        "AD-8"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "classification",
+      "label": "classify page",
+      "cite": [
+        "AD-2",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "classification",
+      "to": "intake",
+      "label": "read redacted page image and text",
+      "cite": "AD-14"
+    },
+    {
+      "from": "classification",
+      "to": "workflow",
+      "label": "type, confidence, reason",
+      "cite": [
+        "AD-7",
+        "AD-13"
+      ],
+      "return": true
+    },
+    {
+      "from": "web",
+      "to": "workflow",
+      "label": "poll progress and triage queue",
+      "cite": "AD-19"
+    },
+    {
+      "from": "uw",
+      "to": "web",
+      "label": "accept page",
+      "cite": [
+        "flows.md \u00a7Pipeline",
+        "AD-10"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "workflow",
+      "label": "decision: accept (demo role as actor)",
+      "cite": [
+        "AD-10",
+        "AD-9"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "extraction",
+      "label": "extract facts from page",
+      "cite": [
+        "AD-2",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "extraction",
+      "to": "intake",
+      "label": "read redacted page text",
+      "cite": "AD-14"
+    },
+    {
+      "from": "extraction",
+      "to": "workflow",
+      "label": "fact ids",
+      "cite": "AD-6",
+      "return": true
+    },
+    {
+      "from": "workflow",
+      "to": "verdict",
+      "label": "run verdict for one retriever_config",
+      "cite": [
+        "AD-11",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "verdict",
+      "to": "extraction",
+      "label": "list facts",
+      "cite": "AD-15"
+    },
+    {
+      "from": "verdict",
+      "to": "retrieval",
+      "label": "search rules, read rule",
+      "cite": [
+        "AD-15",
+        "AD-11"
+      ]
+    },
+    {
+      "from": "verdict",
+      "to": "workflow",
+      "label": "verdict run id",
+      "cite": "AD-6",
+      "return": true
+    },
+    {
+      "from": "web",
+      "to": "verdict",
+      "label": "read verdict, reasons, agent steps",
+      "cite": [
+        "AD-15",
+        "AD-19"
+      ]
+    }
+  ],
+  "gaps": [
+    "Not drawn: a page classified non-medical at 90% or more, where the customer keeps or discards it (flows.md \u00a7Gate rules).",
+    "Not drawn: a medical page at 90% or more, which goes straight to extraction without triage.",
+    "Not drawn: the Compare view's second verdict run and the eval runner's runs (AD-11, AD-17).",
+    "Not drawn: failure paths. A stage that misses its 180-second deadline stores a failed result (AD-6); what the user sees is not stated.",
+    "Not drawn: a redaction that fails or passes its deadline. The case ends as failed and the customer uploads again (AD-21)."
+  ]
+}

@@ -4,7 +4,8 @@
 
 ```mermaid
 flowchart LR
-  U[Customer uploads PDF] --> C{Classify each page}
+  U[Customer uploads PDF] --> P[Redact personal identifiers]
+  P --> C{Classify each page}
   C -->|medical >= 90%| E[Extract facts with page + quote]
   C -->|non-medical >= 90%| A{Customer: discard or keep?}
   A -->|discard| X[Discarded]
@@ -16,6 +17,10 @@ flowchart LR
   R --> V[Verdict: standard / loaded / decline / refer]
   V --> W[Result view: PDF + cited findings]
 ```
+
+## Redaction (CAP-12)
+
+Redaction runs first. Person names, addresses, phone numbers, email addresses, and identity and policy numbers are replaced with their type, for example `[Person]`. Dates (including date of birth), ages and medical terms are kept. The original file is stored but never shown or read again; everything after this step uses the redacted copy.
 
 ## Gate rules (CAP-2, CAP-3)
 

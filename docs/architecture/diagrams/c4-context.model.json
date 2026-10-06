@@ -1,0 +1,149 @@
+{
+  "type": "c4-context",
+  "title": "AI Medical Underwriting Assistant POC: system context",
+  "spine": "_bmad-output/planning-artifacts/architecture/architecture-ai-medical-underwriting-assistant-2026-10-06/ARCHITECTURE-SPINE.md",
+  "sources": [
+    "_bmad-output/specs/spec-underwriting-poc/SPEC.md",
+    "_bmad-output/specs/spec-underwriting-poc/flows.md"
+  ],
+  "nodes": [
+    {
+      "id": "sys",
+      "label": "AI Medical Underwriting Assistant",
+      "kind": "system",
+      "description": "Redacts, classifies, extracts, retrieves rules and suggests a verdict",
+      "cite": [
+        "SPEC.md \u00a7Why",
+        "AD-1"
+      ]
+    },
+    {
+      "id": "customer",
+      "label": "Customer (demo role)",
+      "kind": "person",
+      "cite": [
+        "SPEC.md \u00a7Assumptions",
+        "AD-9"
+      ]
+    },
+    {
+      "id": "uw",
+      "label": "Underwriter (demo role)",
+      "kind": "person",
+      "cite": [
+        "SPEC.md \u00a7Assumptions",
+        "AD-9"
+      ]
+    },
+    {
+      "id": "runner",
+      "label": "Bake-off eval runner",
+      "kind": "system_ext",
+      "cite": "AD-17"
+    },
+    {
+      "id": "lang",
+      "label": "Azure AI Language",
+      "kind": "system_ext",
+      "description": "Document PII redaction",
+      "cite": "AD-21"
+    },
+    {
+      "id": "foundry",
+      "label": "Microsoft Foundry models",
+      "kind": "system_ext",
+      "description": "One chat and one embedding deployment",
+      "cite": "AD-16"
+    },
+    {
+      "id": "search",
+      "label": "Azure AI Search",
+      "kind": "system_ext",
+      "description": "Retrieval rows r5 and r6",
+      "cite": "AD-11"
+    },
+    {
+      "id": "di",
+      "label": "Azure AI Document Intelligence",
+      "kind": "system_ext",
+      "description": "Classifier contender; manual layout parsing",
+      "cite": [
+        "AD-13",
+        "AD-12"
+      ]
+    },
+    {
+      "id": "dts",
+      "label": "Azure Durable Task Scheduler",
+      "kind": "system_ext",
+      "description": "Runs the case lifecycle",
+      "cite": "AD-5"
+    }
+  ],
+  "edges": [
+    {
+      "from": "customer",
+      "to": "sys",
+      "label": "uploads a PDF; keeps or discards pages",
+      "cite": [
+        "flows.md \u00a7Pipeline",
+        "AD-10"
+      ]
+    },
+    {
+      "from": "uw",
+      "to": "sys",
+      "label": "accepts or denies pages; audits the suggested verdict",
+      "cite": [
+        "flows.md \u00a7Pipeline",
+        "AD-10"
+      ]
+    },
+    {
+      "from": "runner",
+      "to": "sys",
+      "label": "runs both bake-offs through the public API",
+      "cite": "AD-17"
+    },
+    {
+      "from": "sys",
+      "to": "lang",
+      "label": "redacts personal identifiers",
+      "cite": "AD-21"
+    },
+    {
+      "from": "sys",
+      "to": "foundry",
+      "label": "classifies, extracts, embeds, suggests verdicts",
+      "cite": "AD-16"
+    },
+    {
+      "from": "sys",
+      "to": "search",
+      "label": "indexes and searches the manual",
+      "cite": [
+        "AD-11",
+        "AD-12"
+      ]
+    },
+    {
+      "from": "sys",
+      "to": "di",
+      "label": "classifies pages; parses the manual",
+      "cite": [
+        "AD-13",
+        "AD-12"
+      ]
+    },
+    {
+      "from": "sys",
+      "to": "dts",
+      "label": "orchestrates each case",
+      "cite": "AD-5"
+    }
+  ],
+  "gaps": [
+    "No architecture principles were agreed (docs/architecture/architecture.md does not exist), so no element cites a principle.",
+    "Who operates the eval runner, and from where, is not stated beyond 'started by the pipeline after deploy'."
+  ]
+}

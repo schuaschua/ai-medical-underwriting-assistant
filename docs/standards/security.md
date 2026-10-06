@@ -72,6 +72,12 @@ Projects record here the known gaps they accept (and declare in their Technical 
 
 | Exception | Approved by (role) and date | Close before production by |
 |---|---|---|
+| Rules 4, 5 and 7: no signed-in Entra principal on API routes, no ownership checks and no row-level security; every case is visible to both demo roles (architecture spine AD-9). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
+| Rules 12 and 18: no per-turn agent credential and no per-user rate limit, because there are no users (AD-9). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
+| Rule 15: the verdict agent's `read_rule` tool takes a `rule_id` chosen by the model, checked server-side against the ids seen in that run (AD-15). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
+| Rule 19: no alert on AI writes; the audit trail and the queryable agent step log are the record (AD-8, AD-15). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
+| Rule 29: one pre-release package, `azure-search-documents` 12.1.0b2, is named in the architecture spine for retrieval row `r6` (AD-11). | Project owner (Darrel), 2026-10-06 | The stable SDK supports LLM query planning |
+| Accepted risk: anyone who finds the public URL can upload PDFs and spend model tokens while the environment runs; bounded only by the budget alerts, low model deployment capacity and the compute ceilings. | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
 
 ## 10. Reporting
 

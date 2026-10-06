@@ -41,8 +41,8 @@ Opportunity and proof. Medical underwriters lose hours reading medical records t
   - **intent:** The result is auditable: the PDF sits beside the findings and every citation is navigable.
   - **success:** Clicking a fact's citation jumps to and highlights its line in the PDF; clicking a reason opens its manual rule.
 - **CAP-8**
-  - **intent:** Retrieval is compared head to head: pgvector against Azure AI Search.
-  - **success:** A Compare toggle shows both retrievers' results for the same upload side by side, and a scoreboard reports the metrics in `bake-offs.md` over the case set.
+  - **intent:** Retrieval is compared head to head on a six-row ladder: pgvector, Azure AI Search hybrid and Azure AI Search agentic retrieval.
+  - **success:** A Compare toggle shows two rows' results for the same upload side by side, and a scoreboard reports the metrics in `bake-offs.md` for all six rows over the case set.
 - **CAP-9**
   - **intent:** Classification is compared head to head: an LLM classifier against an Azure AI Document Intelligence custom classifier.
   - **success:** A scoreboard reports the metrics in `bake-offs.md` over the labelled page set.
@@ -53,16 +53,20 @@ Opportunity and proof. Medical underwriters lose hours reading medical records t
   - **intent:** The synthetic manual, case PDFs and negative pages exist with known right answers.
   - **success:** The artifacts in `synthetic-data.md` exist and every case and page has its expected labels, rules and verdict.
 
+- **CAP-12**
+  - **intent:** Personal identifiers are redacted from an uploaded document before any AI stage reads it.
+  - **success:** After upload, every later stage and every screen uses only the redacted copy; on the case set, none of the planted identifiers appears in any stored page text.
+
 ## Constraints
 
 - Synthetic data only. No real personal or health data enters any environment.
 - The AI never issues a final decision. The result screen states "AI suggestion, not a decision".
 - Every displayed fact and reason traces to a document page or a manual `rule_id`; uncited claims are not shown as findings.
 - Bake-off fairness: contenders share inputs, chunking, embedding model and LLM; only the component under test differs.
-- Hosted on Azure under the org standards in `docs/standards/`. Azure AI Search and Document Intelligence are outside the Azure standard and need recorded architecture decisions.
+- Hosted on Azure under the org standards in `docs/standards/`. Azure AI Search, Document Intelligence, Azure AI Language and Durable Task Scheduler are outside the Azure standard and need recorded architecture decisions.
 - Retrieval and classification each sit behind one interface, so either contender can serve the pipeline.
 - LLM and embeddings: Azure OpenAI models on Microsoft Foundry.
-- Sign-in: Entra sign-in with two demo accounts (customer, underwriter); no self-registration.
+- No sign-in: the demo is open, with a role switcher for two demo roles (customer, underwriter). This departs from the org standards and is recorded as an accepted exception in `docs/standards/` and in the architecture spine (AD-9).
 - Demo-ready by the weekend of 10 October 2026, for a technical architect expert in RAG: retrieval design and evaluation must hold up to expert scrutiny, and scope cuts favour the end-to-end demo path over breadth.
 
 ## Non-goals

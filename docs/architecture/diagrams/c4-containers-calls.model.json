@@ -1,0 +1,294 @@
+{
+  "type": "c4-containers",
+  "title": "AI Medical Underwriting Assistant POC: containers and the calls between them",
+  "spine": "_bmad-output/planning-artifacts/architecture/architecture-ai-medical-underwriting-assistant-2026-10-06/ARCHITECTURE-SPINE.md",
+  "sources": [
+    "_bmad-output/specs/spec-underwriting-poc/SPEC.md",
+    "_bmad-output/specs/spec-underwriting-poc/flows.md"
+  ],
+  "groups": [
+    {
+      "id": "poc",
+      "label": "AI Medical Underwriting Assistant",
+      "kind": "boundary",
+      "cite": "AD-1"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "customer",
+      "label": "Customer (demo role)",
+      "kind": "person",
+      "cite": "AD-9"
+    },
+    {
+      "id": "uw",
+      "label": "Underwriter (demo role)",
+      "kind": "person",
+      "cite": "AD-9"
+    },
+    {
+      "id": "runner",
+      "label": "Bake-off eval runner",
+      "kind": "system_ext",
+      "cite": "AD-17"
+    },
+    {
+      "id": "spa",
+      "label": "Single-page app",
+      "kind": "container",
+      "group": "poc",
+      "tech": "React, TypeScript",
+      "cite": "AD-19"
+    },
+    {
+      "id": "web",
+      "label": "web",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Only API entry; serves the SPA",
+      "cite": [
+        "AD-1",
+        "AD-19"
+      ]
+    },
+    {
+      "id": "intake",
+      "label": "intake",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Upload, PII redaction, page split, page text and boxes",
+      "cite": [
+        "AD-1",
+        "AD-21"
+      ]
+    },
+    {
+      "id": "classification",
+      "label": "classification",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Page classification, two contenders",
+      "cite": [
+        "AD-1",
+        "AD-13"
+      ]
+    },
+    {
+      "id": "extraction",
+      "label": "extraction",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Facts with quote check",
+      "cite": [
+        "AD-1",
+        "AD-14"
+      ]
+    },
+    {
+      "id": "retrieval",
+      "label": "retrieval",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "One search operation, six configurations",
+      "cite": [
+        "AD-1",
+        "AD-11"
+      ]
+    },
+    {
+      "id": "verdict",
+      "label": "verdict",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, Microsoft Agent Framework",
+      "description": "Agent that suggests a verdict",
+      "cite": [
+        "AD-1",
+        "AD-15"
+      ]
+    },
+    {
+      "id": "workflow",
+      "label": "workflow",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, Durable Task SDK",
+      "description": "Case lifecycle, gate, human decisions, audit trail",
+      "cite": [
+        "AD-1",
+        "AD-5"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "customer",
+      "to": "spa",
+      "label": "uploads, keeps or discards",
+      "cite": [
+        "AD-9",
+        "AD-10"
+      ]
+    },
+    {
+      "from": "uw",
+      "to": "spa",
+      "label": "triages, audits",
+      "cite": [
+        "AD-9",
+        "AD-10"
+      ]
+    },
+    {
+      "from": "spa",
+      "to": "web",
+      "label": "/api calls, polling",
+      "tech": "HTTPS/JSON, one origin",
+      "cite": "AD-19"
+    },
+    {
+      "from": "runner",
+      "to": "web",
+      "label": "drives bake-offs",
+      "tech": "HTTPS/JSON",
+      "cite": "AD-17"
+    },
+    {
+      "from": "web",
+      "to": "intake",
+      "label": "upload, reads, files",
+      "cite": [
+        "AD-2",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "workflow",
+      "label": "commands, progress, audit",
+      "cite": [
+        "AD-10",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "classification",
+      "label": "reads",
+      "cite": [
+        "AD-19",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "extraction",
+      "label": "reads",
+      "cite": [
+        "AD-19",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "verdict",
+      "label": "verdicts, agent log",
+      "cite": [
+        "AD-15",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "retrieval",
+      "label": "rules, eval search",
+      "cite": [
+        "AD-11",
+        "AD-17"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "intake",
+      "label": "redact, list pages",
+      "cite": [
+        "AD-21",
+        "AD-2"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "classification",
+      "label": "classify",
+      "cite": [
+        "AD-2",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "extraction",
+      "label": "extract",
+      "cite": [
+        "AD-2",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "verdict",
+      "label": "run verdict",
+      "cite": [
+        "AD-2",
+        "AD-6"
+      ]
+    },
+    {
+      "from": "classification",
+      "to": "intake",
+      "label": "page content",
+      "cite": [
+        "AD-14",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "extraction",
+      "to": "intake",
+      "label": "page text",
+      "cite": [
+        "AD-14",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "verdict",
+      "to": "extraction",
+      "label": "facts",
+      "cite": [
+        "AD-15",
+        "AD-3"
+      ]
+    },
+    {
+      "from": "verdict",
+      "to": "retrieval",
+      "label": "search, read rule",
+      "cite": [
+        "AD-15",
+        "AD-11"
+      ]
+    }
+  ],
+  "gaps": [
+    "Every call between services goes through Dapr service invocation over HTTP (AD-3); the protocol is left off the arrows to keep them legible.",
+    "Data stores and external Azure services are on the companion diagram c4-containers-stores.",
+    "Which service calls are made for the Compare view's second verdict run is stated (AD-11), but the screen that triggers it is not designed: no UX documents exist."
+  ]
+}

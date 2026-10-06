@@ -1,0 +1,361 @@
+{
+  "type": "deployment",
+  "title": "AI Medical Underwriting Assistant POC: Azure deployment (demo)",
+  "spine": "_bmad-output/planning-artifacts/architecture/architecture-ai-medical-underwriting-assistant-2026-10-06/ARCHITECTURE-SPINE.md",
+  "sources": [
+    "_bmad-output/specs/spec-underwriting-poc/SPEC.md",
+    "_bmad-output/specs/spec-underwriting-poc/flows.md"
+  ],
+  "provider": "azure",
+  "groups": [
+    {
+      "id": "azure",
+      "label": "Azure",
+      "kind": "cloud",
+      "cite": "AD-18"
+    },
+    {
+      "id": "wus3",
+      "label": "West US 3 (demo environment)",
+      "kind": "region",
+      "parent": "azure",
+      "cite": "AD-18"
+    },
+    {
+      "id": "cae",
+      "label": "Container Apps environment",
+      "kind": "boundary",
+      "parent": "wus3",
+      "icon": "other/Container_App_Environments",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "users",
+      "label": "Customer and underwriter (browser)",
+      "kind": "person",
+      "cite": "AD-9"
+    },
+    {
+      "id": "web",
+      "label": "web",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "external ingress",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "intake",
+      "label": "intake",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "internal ingress only",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "classification",
+      "label": "classification",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "internal ingress only",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "extraction",
+      "label": "extraction",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "internal ingress only",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "retrieval",
+      "label": "retrieval",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "internal ingress only",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "verdict",
+      "label": "verdict",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "internal ingress only",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "workflow",
+      "label": "workflow",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "description": "internal ingress only",
+      "cite": [
+        "AD-1",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "jobs",
+      "label": "Jobs: manual ingestion, classifier training",
+      "kind": "service",
+      "group": "cae",
+      "icon": "other/Worker_Container_App",
+      "cite": "AD-2"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL Flexible Server",
+      "kind": "service",
+      "group": "wus3",
+      "icon": "databases/Azure_Database_PostgreSQL_Server",
+      "description": "One schema per service",
+      "cite": [
+        "AD-4",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "blob",
+      "label": "Storage account",
+      "kind": "service",
+      "group": "wus3",
+      "icon": "storage/Storage_Accounts",
+      "description": "originals, cases, manual, classifier-training",
+      "cite": [
+        "AD-4",
+        "AD-21"
+      ]
+    },
+    {
+      "id": "lang",
+      "label": "Azure AI Language",
+      "kind": "service",
+      "group": "wus3",
+      "icon": "ai_machine_learning/Language_Services",
+      "description": "Document PII redaction",
+      "cite": [
+        "AD-21",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "foundry",
+      "label": "Foundry account",
+      "kind": "service",
+      "group": "wus3",
+      "icon": "ai_machine_learning/AI_Studio",
+      "description": "Chat and embedding deployments",
+      "cite": [
+        "AD-16",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "search",
+      "label": "Azure AI Search",
+      "kind": "service",
+      "group": "wus3",
+      "icon": "app_services/Search_Services",
+      "cite": [
+        "AD-11",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "di",
+      "label": "Document Intelligence",
+      "kind": "service",
+      "group": "wus3",
+      "cite": [
+        "AD-13",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "dts",
+      "label": "Durable Task Scheduler",
+      "kind": "service",
+      "group": "wus3",
+      "cite": [
+        "AD-5",
+        "AD-18"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "users",
+      "to": "web",
+      "label": "HTTPS, no sign-in",
+      "cite": [
+        "AD-9",
+        "AD-18"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "dts",
+      "label": "managed identity",
+      "cite": [
+        "AD-5",
+        "AD-18"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "lang",
+      "label": "redaction",
+      "cite": "AD-21"
+    },
+    {
+      "from": "lang",
+      "to": "blob",
+      "label": "reads originals, writes cases",
+      "cite": "AD-21"
+    },
+    {
+      "from": "intake",
+      "to": "blob",
+      "label": "originals, cases",
+      "cite": [
+        "AD-4",
+        "AD-21"
+      ]
+    },
+    {
+      "from": "retrieval",
+      "to": "blob",
+      "label": "manual",
+      "cite": "AD-4"
+    },
+    {
+      "from": "classification",
+      "to": "blob",
+      "label": "classifier-training",
+      "cite": "AD-4"
+    },
+    {
+      "from": "intake",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "classification",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "extraction",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "retrieval",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "verdict",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "workflow",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "retrieval",
+      "to": "search",
+      "label": "index, search",
+      "cite": "AD-11"
+    },
+    {
+      "from": "search",
+      "to": "foundry",
+      "label": "query planning for r6",
+      "cite": "AD-11"
+    },
+    {
+      "from": "classification",
+      "to": "di",
+      "label": "custom classifier",
+      "cite": "AD-13"
+    },
+    {
+      "from": "retrieval",
+      "to": "di",
+      "label": "layout parsing",
+      "cite": "AD-12"
+    },
+    {
+      "from": "classification",
+      "to": "foundry",
+      "label": "chat",
+      "cite": "AD-16"
+    },
+    {
+      "from": "extraction",
+      "to": "foundry",
+      "label": "chat",
+      "cite": "AD-16"
+    },
+    {
+      "from": "verdict",
+      "to": "foundry",
+      "label": "chat",
+      "cite": "AD-16"
+    },
+    {
+      "from": "retrieval",
+      "to": "foundry",
+      "label": "embeddings, chat",
+      "cite": [
+        "AD-12",
+        "AD-16"
+      ]
+    }
+  ],
+  "gaps": [
+    "Where do the Foundry model deployments process data? Foundry is drawn in West US 3 at Darrel's direction; the deployment type is an open question in the spine, and a Global Standard deployment processes outside the region.",
+    "The resource group, container registry, Log Analytics workspace and Application Insights are listed in the spine's deployment section but in no AD, so they are not drawn.",
+    "Private endpoints and VNet integration are deferred (AD-18): every data and AI service is on a public endpoint with managed identity only, and no network boundary is drawn.",
+    "Subscription is not named in any source."
+  ]
+}

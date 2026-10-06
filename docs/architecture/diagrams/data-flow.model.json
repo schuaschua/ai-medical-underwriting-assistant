@@ -1,0 +1,374 @@
+{
+  "type": "data-flow",
+  "title": "AI Medical Underwriting Assistant POC: data flow, trust boundaries and PII",
+  "spine": "_bmad-output/planning-artifacts/architecture/architecture-ai-medical-underwriting-assistant-2026-10-06/ARCHITECTURE-SPINE.md",
+  "sources": [
+    "_bmad-output/specs/spec-underwriting-poc/SPEC.md",
+    "_bmad-output/specs/spec-underwriting-poc/flows.md"
+  ],
+  "groups": [
+    {
+      "id": "internet",
+      "label": "Public internet (no sign-in)",
+      "kind": "trust_boundary",
+      "cite": [
+        "AD-9",
+        "AD-18"
+      ]
+    },
+    {
+      "id": "cae",
+      "label": "Container Apps environment (internal ingress, except web)",
+      "kind": "trust_boundary",
+      "cite": "AD-18"
+    },
+    {
+      "id": "paas",
+      "label": "Azure data and AI services (public endpoints, managed identity only)",
+      "kind": "trust_boundary",
+      "cite": "AD-18"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "customer",
+      "label": "Customer",
+      "kind": "person",
+      "group": "internet",
+      "cite": "AD-9"
+    },
+    {
+      "id": "uw",
+      "label": "Underwriter",
+      "kind": "person",
+      "group": "internet",
+      "cite": "AD-9"
+    },
+    {
+      "id": "web",
+      "label": "web",
+      "kind": "process",
+      "group": "cae",
+      "cite": "AD-19"
+    },
+    {
+      "id": "intake",
+      "label": "intake: redact, split, read pages",
+      "kind": "process",
+      "group": "cae",
+      "cite": [
+        "AD-21",
+        "AD-14"
+      ]
+    },
+    {
+      "id": "workflow",
+      "label": "workflow",
+      "kind": "process",
+      "group": "cae",
+      "cite": "AD-5"
+    },
+    {
+      "id": "classification",
+      "label": "classification",
+      "kind": "process",
+      "group": "cae",
+      "cite": "AD-13"
+    },
+    {
+      "id": "extraction",
+      "label": "extraction",
+      "kind": "process",
+      "group": "cae",
+      "cite": "AD-14"
+    },
+    {
+      "id": "verdict",
+      "label": "verdict agent",
+      "kind": "process",
+      "group": "cae",
+      "cite": "AD-15"
+    },
+    {
+      "id": "retrieval",
+      "label": "retrieval",
+      "kind": "process",
+      "group": "cae",
+      "cite": "AD-11"
+    },
+    {
+      "id": "originals",
+      "label": "Blob: originals",
+      "kind": "store",
+      "group": "paas",
+      "data": [
+        "PII"
+      ],
+      "cite": "AD-21"
+    },
+    {
+      "id": "cases",
+      "label": "Blob: cases (redacted PDFs, thumbnails)",
+      "kind": "store",
+      "group": "paas",
+      "cite": [
+        "AD-21",
+        "AD-4"
+      ]
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL: one schema per service",
+      "kind": "store",
+      "group": "paas",
+      "cite": "AD-4"
+    },
+    {
+      "id": "audit",
+      "label": "workflow.audit_event (append-only)",
+      "kind": "store",
+      "group": "paas",
+      "cite": "AD-8"
+    },
+    {
+      "id": "idx",
+      "label": "Manual chunks: pgvector and Azure AI Search",
+      "kind": "store",
+      "group": "paas",
+      "cite": "AD-12"
+    },
+    {
+      "id": "lang",
+      "label": "Azure AI Language: PII redaction",
+      "kind": "external",
+      "group": "paas",
+      "cite": "AD-21"
+    },
+    {
+      "id": "foundry",
+      "label": "Foundry models",
+      "kind": "external",
+      "group": "paas",
+      "cite": "AD-16"
+    },
+    {
+      "id": "di",
+      "label": "Document Intelligence",
+      "kind": "external",
+      "group": "paas",
+      "cite": "AD-13"
+    }
+  ],
+  "edges": [
+    {
+      "from": "customer",
+      "to": "web",
+      "label": "original PDF",
+      "data": [
+        "PII"
+      ],
+      "cite": [
+        "AD-21",
+        "AD-2"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "intake",
+      "label": "original PDF",
+      "data": [
+        "PII"
+      ],
+      "cite": [
+        "AD-21",
+        "AD-2"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "originals",
+      "label": "original PDF",
+      "data": [
+        "PII"
+      ],
+      "cite": "AD-21"
+    },
+    {
+      "from": "originals",
+      "to": "lang",
+      "label": "original PDF",
+      "data": [
+        "PII"
+      ],
+      "cite": "AD-21"
+    },
+    {
+      "from": "lang",
+      "to": "cases",
+      "label": "redacted PDF, entity list",
+      "cite": "AD-21"
+    },
+    {
+      "from": "intake",
+      "to": "pg",
+      "label": "redacted page text, word boxes",
+      "cite": [
+        "AD-14",
+        "AD-4"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "classification",
+      "label": "redacted page image and text",
+      "cite": "AD-14"
+    },
+    {
+      "from": "classification",
+      "to": "foundry",
+      "label": "redacted page",
+      "cite": [
+        "AD-13",
+        "AD-16"
+      ]
+    },
+    {
+      "from": "classification",
+      "to": "di",
+      "label": "redacted page",
+      "cite": "AD-13"
+    },
+    {
+      "from": "classification",
+      "to": "pg",
+      "label": "type, confidence, reason",
+      "cite": [
+        "AD-13",
+        "AD-4"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "extraction",
+      "label": "redacted page text",
+      "cite": "AD-14"
+    },
+    {
+      "from": "extraction",
+      "to": "foundry",
+      "label": "redacted page text",
+      "cite": "AD-16"
+    },
+    {
+      "from": "extraction",
+      "to": "pg",
+      "label": "facts with quote and offsets",
+      "cite": [
+        "AD-14",
+        "AD-4"
+      ]
+    },
+    {
+      "from": "extraction",
+      "to": "verdict",
+      "label": "facts",
+      "cite": "AD-15"
+    },
+    {
+      "from": "verdict",
+      "to": "retrieval",
+      "label": "queries",
+      "cite": [
+        "AD-15",
+        "AD-11"
+      ]
+    },
+    {
+      "from": "retrieval",
+      "to": "verdict",
+      "label": "ranked rules",
+      "cite": "AD-11"
+    },
+    {
+      "from": "verdict",
+      "to": "foundry",
+      "label": "facts and rules",
+      "cite": [
+        "AD-15",
+        "AD-16"
+      ]
+    },
+    {
+      "from": "verdict",
+      "to": "pg",
+      "label": "verdict run, reasons, agent steps",
+      "cite": [
+        "AD-15",
+        "AD-4"
+      ]
+    },
+    {
+      "from": "workflow",
+      "to": "audit",
+      "label": "audit events (counts and ids, no values)",
+      "cite": [
+        "AD-8",
+        "AD-21"
+      ]
+    },
+    {
+      "from": "uw",
+      "to": "web",
+      "label": "decisions in; redacted PDF and cited findings out",
+      "cite": [
+        "AD-10",
+        "AD-21",
+        "AD-19"
+      ]
+    },
+    {
+      "from": "web",
+      "to": "workflow",
+      "label": "decision with demo role",
+      "cite": [
+        "AD-10",
+        "AD-9"
+      ]
+    },
+    {
+      "from": "retrieval",
+      "to": "idx",
+      "label": "searches rule chunks",
+      "cite": [
+        "AD-11",
+        "AD-12"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "cases",
+      "label": "reads redacted PDF, writes thumbnails",
+      "cite": [
+        "AD-21",
+        "AD-14"
+      ]
+    },
+    {
+      "from": "intake",
+      "to": "web",
+      "label": "redacted PDF, thumbnails, word boxes",
+      "cite": [
+        "AD-21",
+        "AD-14"
+      ]
+    }
+  ],
+  "gaps": [
+    "Only PII is treated as sensitive (Darrel, 2026-10-06; AD-21). Medical facts are not marked, although all of them travel to the model.",
+    "Can a redacted page still carry personal identifiers? The redaction service does not process text inside embedded images (spine open question), and no source states what happens when redaction misses an item.",
+    "How long are original PDFs kept, and who may delete them? No source states retention or deletion.",
+    "What do logs and traces retain? The spine says logs never carry page text, quotes or fact values, but says nothing about the redaction service's JSON entity list, which names what was found.",
+    "Where do the Foundry model deployments process data? Not settled in the spine (open question)."
+  ],
+  "direction": "TB"
+}

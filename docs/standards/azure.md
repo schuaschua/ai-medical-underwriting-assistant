@@ -124,6 +124,7 @@ Projects record their own deviations from this baseline here, each with who appr
 
 | Rule | Exception | Approved by (role) and date | Close by |
 | --- | --- | --- | --- |
+| 12 | No sign-in at the edge or in the application: the demo is open, with a two-role switcher (architecture spine AD-9). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
 
 ## Where to look deeper
 

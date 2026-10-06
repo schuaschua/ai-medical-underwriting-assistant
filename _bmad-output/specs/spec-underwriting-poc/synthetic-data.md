@@ -12,6 +12,7 @@
 - About 20 synthetic medical case PDFs, a few pages each: attending physician statements, lab reports, application forms.
 - Each case records its expected facts (with pages), expected `rule_id`s and expected verdict.
 - Cases cover all four verdicts.
+- Each case carries planted synthetic identifiers (a name, an address, a phone number, an email address, an identity number and a policy number) and records them, so redaction can be checked.
 
 ## Classification page set
 
