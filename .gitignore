@@ -20,3 +20,10 @@ dist/
 .coverage.*
 htmlcov/
 coverage.xml
+
+# Terraform (state lives in the Azure Storage backend, never in git)
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan

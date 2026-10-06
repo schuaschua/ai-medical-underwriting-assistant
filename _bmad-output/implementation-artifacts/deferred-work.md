@@ -27,3 +27,12 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
   summary: Check whether Azure AI Language recognises the fictional identifiers (identity numbers with area 000, state ZZ, POL-SYN policy numbers) and adjust the synthetic formats if not.
   evidence: Unverified; needs a live redaction call. Would be medium if true. Pick up in story 1.7.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-azure-foundation-for-the-demo-environment.md`
+  summary: Run the bootstrap twice, then the first real init, plan and apply, and record the evidence; open the first infrastructure pull request to prove the PR workflow.
+  evidence: The permission system refused the bootstrap because it grants roles; nothing has run against the real backend. Needs the owner (Darrel).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-azure-foundation-for-the-demo-environment.md`
+  summary: Give the pull-request plan its own read-only identity, or record acceptance that it runs as the deployment identity.
+  evidence: `infra-pr.yml` signs in with the identity that holds Contributor and conditional RBAC Administrator; `azure.md` rule 31 prescribes one identity. Owner decision.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-2-azure-foundation-for-the-demo-environment.md`
+  summary: Add plan-time assertions (terraform test or check blocks) for key, password and local auth off, pinned model versions and prevent_destroy.
+  evidence: Flipping any of these still passes fmt, validate and plan. `terraform.md` defers policy tooling until the pipeline works.
