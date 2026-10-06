@@ -1,14 +1,36 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { uploadDocument } from "../api/client";
+import {
+  stateOf,
+  useCaseProgress,
+  type CaseState,
+} from "../cases/caseProgress";
 import { addSessionCase, useSessionCases } from "../cases/sessionCases";
+import { forgetUploadKey, uploadKeyFor } from "../cases/uploadKey";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { strings } from "../strings";
 
 type State =
   | { status: "idle" }
   | { status: "uploading" }
-  | { status: "uploaded" }
+  | { status: "uploaded"; caseId: string }
   | { status: "failed"; error: unknown };
+
+/** What the list says about one case. A status always comes from the server. */
+function caseText(state: CaseState): string {
+  switch (state.kind) {
+    case "checking":
+      return strings.upload.caseChecking;
+    case "starting":
+      return strings.upload.caseStarting;
+    case "started":
+      return strings.caseStatus[state.status];
+    case "not_started":
+      return strings.upload.caseNotStarted;
+    case "unreadable":
+      return strings.upload.caseUnreadable;
+  }
+}
 
 /** The customer's upload screen: one PDF in, and the cases uploaded so far. */
 export function UploadDocument() {
@@ -17,7 +39,12 @@ export function UploadDocument() {
   const fileInput = useRef<HTMLInputElement>(null);
   const fileInputId = useId();
   const cases = useSessionCases();
+  const { states, start, check } = useCaseProgress(
+    cases.map((item) => item.case_id),
+  );
   const uploading = state.status === "uploading";
+  const uploadedCase =
+    state.status === "uploaded" ? stateOf(states, state.caseId) : null;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -27,15 +54,21 @@ export function UploadDocument() {
     }
     setState({ status: "uploading" });
     // Size and type are checked by the server (security.md rule 20); the
-    // file is sent as it is.
-    uploadDocument(file).then(
+    // file is sent as it is. One key per file: sending that file again after
+    // a failure, or after a reload, sends the same key, so the server
+    // answers with the first case, not a second.
+    uploadDocument(file, uploadKeyFor(file)).then(
       (uploaded) => {
         addSessionCase(uploaded);
+        // The second half of an upload (AD-2). If it fails, the case stays
+        // listed as received, with a way to try again.
+        start(uploaded.case_id);
         if (fileInput.current !== null) {
           fileInput.current.value = "";
         }
+        forgetUploadKey();
         setHasFile(false);
-        setState({ status: "uploaded" });
+        setState({ status: "uploaded", caseId: uploaded.case_id });
       },
       (error: unknown) => setState({ status: "failed", error }),
     );
@@ -74,9 +107,16 @@ export function UploadDocument() {
           {strings.upload.uploading}
         </p>
       )}
-      {state.status === "uploaded" && (
-        <p role="status">{strings.upload.uploaded}</p>
-      )}
+      {uploadedCase !== null &&
+        (uploadedCase.kind === "not_started" ? (
+          <p role="alert">{strings.upload.notStarted}</p>
+        ) : (
+          <p role="status">
+            {uploadedCase.kind === "started"
+              ? strings.upload.uploaded
+              : strings.upload.received}
+          </p>
+        ))}
       {state.status === "failed" && <ErrorMessage error={state.error} />}
 
       <h3>{strings.upload.casesHeading}</h3>
@@ -91,14 +131,51 @@ export function UploadDocument() {
             </tr>
           </thead>
           <tbody>
-            {cases.map((item) => (
-              <tr key={item.case_id}>
-                <td>
-                  <code>{item.case_id}</code>
-                </td>
-                <td>{strings.caseStatus[item.status]}</td>
-              </tr>
-            ))}
+            {cases.map((item) => {
+              const caseState = stateOf(states, item.case_id);
+              return (
+                <tr key={item.case_id}>
+                  <td>
+                    <code>{item.case_id}</code>
+                  </td>
+                  <td>
+                    {caseText(caseState)}
+                    {caseState.kind === "not_started" && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          aria-label={strings.upload.startAgainFor(
+                            item.case_id,
+                          )}
+                          onClick={() => start(item.case_id)}
+                        >
+                          {strings.upload.startAgain}
+                        </button>
+                        {caseState.error !== null && (
+                          <ErrorMessage error={caseState.error} />
+                        )}
+                      </>
+                    )}
+                    {caseState.kind === "unreadable" && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          aria-label={strings.upload.checkAgainFor(
+                            item.case_id,
+                          )}
+                          onClick={() => check(item.case_id)}
+                        >
+                          {strings.upload.checkAgain}
+                        </button>
+                        <ErrorMessage error={caseState.error} />
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

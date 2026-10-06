@@ -5,7 +5,7 @@ name = "aiunderwriter"
 version = "0.0.0"
 description = "AI Medical Underwriting Assistant POC: workspace root"
 requires-python = "==3.13.*"
-dependencies = ["contracts", "intake", "web"]
+dependencies = ["contracts", "intake", "web", "workflow"]
 
 [dependency-groups]
 dev = [
@@ -27,6 +27,7 @@ members = ["packages/*", "services/*"]
 contracts = { workspace = true }
 intake = { workspace = true }
 web = { workspace = true }
+workflow = { workspace = true }
 synthdata = { workspace = true }
 
 [tool.ruff]
@@ -58,7 +59,15 @@ mypy_path = [
     # Test doubles shared by a service's tests (also on pytest's pythonpath).
     "services/intake/tests/support",
     "services/web/src",
+    "services/workflow/src",
+    "services/workflow/tests/support",
 ]
+
+[[tool.mypy.overrides]]
+# grpcio ships no type hints. `workflow` touches it only where the Durable
+# Task library hands its types through (adapters/scheduler.py).
+module = ["grpc", "grpc.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["packages", "services"]
@@ -68,15 +77,15 @@ addopts = "--import-mode=importlib --strict-markers"
 # With importlib mode a test cannot import a module beside it. Test doubles a
 # service's tests share live in its tests/support folder, named here; module
 # names in it start with the service's name so that they stay unique.
-pythonpath = ["services/intake/tests/support"]
+pythonpath = ["services/intake/tests/support", "services/workflow/tests/support"]
 markers = [
     # Needs the containers of compose.yaml: `docker compose up --detach --wait`.
-    "integration: uses a real PostgreSQL and the local blob emulator",
+    "integration: uses the local PostgreSQL, blob emulator or scheduler emulator",
 ]
 
 [tool.coverage.run]
 # What `uv run pytest --cov` measures; each service adds its package here.
-source_pkgs = ["contracts", "intake", "synthdata", "web"]
+source_pkgs = ["contracts", "intake", "synthdata", "web", "workflow"]
 
 [tool.coverage.report]
 # coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.

@@ -47,7 +47,7 @@
   evidence: The Dapr runtime is not initialised here and `dapr init` installs outside the project folder, which the agent may not do. Needs the owner (Darrel).
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
   summary: Make an upload safe to retry (an idempotency key from the browser, or deduplication) so a timeout does not create a second case.
-  evidence: `POST /cases` creates a new case on every call and the stored hash is unused. Pick up in story 1.6.
+  evidence: `POST /cases` creates a new case on every call and the stored hash is unused. Done in story 1.6.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
   summary: Find and remove originals that no document row references, and decide how long originals are kept.
   evidence: A crash between the blob write and the insert leaves an unreferenced original; nothing sweeps the container and no retention rule exists. Owner decision on retention.
@@ -57,3 +57,15 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
   summary: Confirm whether the redaction service's 10 MB limit is decimal or binary and align the upload limit.
   evidence: The upload rule allows 10 x 1024 x 1024 bytes. Unverified; low if true. Pick up in story 1.7.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-case-lifecycle-and-audit-trail.md`
+  summary: Let the audit record carry the error code of a failed stage, so the audit trail API and screen can show it.
+  evidence: The code is stored in `workflow.audit_event.error_code`, but `AuditRecord` (spine AD-8) has no field for it, so `GET /cases/{case_id}/audit` leaves it out. Needs a contracts change. Pick up in story 1.12, with the failure reason on progress payloads (story 1.9).
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-case-lifecycle-and-audit-trail.md`
+  summary: Check that a case exists in `intake` before `workflow` starts it.
+  evidence: `POST /cases/{case_id}/start` accepts any UUIDv7 and stores a case for it; no `intake` operation says whether a case exists. A made-up id would fail at redaction. Pick up in story 1.7.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-case-lifecycle-and-audit-trail.md`
+  summary: Prove `workflow` in the deployed environment: the database bootstrap (section 5), sign-in to the Durable Task Scheduler with the service identity, the id reuse policy on the real scheduler, and a start through real Dapr sidecars.
+  evidence: The environment is torn down; everything was proven against the emulator and a stand-in sidecar. The deploy still has no migration step, and when it gets one it must set `WORKFLOW_DATABASE_SERVICE_ROLE`. Pick up in the first deploy session.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-case-lifecycle-and-audit-trail.md`
+  summary: Confirm the recording rules and the status transition table that later stories inherit.
+  evidence: Chosen here without a stage to test them against: a failed page stage fails the whole case; a failed case takes no further result; a page number is the position in `page_ids`; a page reaches `extracted` only from `extracting`, which the gate or a decision must set first (`workflow/domain/transitions.py`). A case whose orchestration cannot go on is marked failed by the orchestration; if that last activity also fails on every retry, the case stays `running` until a repeat start finds the dead orchestration. Pick up in stories 1.7 to 1.9.

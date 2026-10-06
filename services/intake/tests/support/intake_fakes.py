@@ -9,6 +9,7 @@ import asyncio
 from dataclasses import dataclass, field
 
 from intake.domain.entities import Case, Document
+from intake.domain.ports import DuplicateUpload
 
 
 class StoreDown(Exception):
@@ -61,6 +62,14 @@ class MemoryCaseRepository:
     commit_then_hang: bool = False
     # The database cannot be asked whether a row exists.
     fail_exists: bool = False
+    # The database cannot be asked for an earlier upload with the same key.
+    fail_find: bool = False
+    # One entry per lookup, first to last; "ok" or nothing means it answers.
+    find_script: list[str] = field(default_factory=list)
+    finds: int = 0
+    # An upload with the same key is recorded by another call, just before
+    # this one's insert: the race the unique rule settles.
+    racing: tuple[Case, Document] | None = None
     entered: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def add(self, case: Case, document: Document) -> None:
@@ -69,12 +78,36 @@ class MemoryCaseRepository:
             raise StoreDown
         if self.hang:
             await _never()
+        if self.racing is not None:
+            self.cases.append(self.racing[0])
+            self.documents.append(self.racing[1])
+            self.racing = None
+        if document.idempotency_key is not None and any(
+            item.idempotency_key == document.idempotency_key for item in self.documents
+        ):
+            # As the database's unique rule does: neither row is inserted.
+            raise DuplicateUpload
         self.cases.append(case)
         self.documents.append(document)
         if self.commit_then_fail:
             raise StoreDown
         if self.commit_then_hang:
             await _never()
+
+    async def find_by_idempotency_key(self, idempotency_key: str) -> Document | None:
+        self.finds += 1
+        # What this lookup does, if the test scripted it: "fail", "empty" or "hang".
+        scripted = self.find_script.pop(0) if self.find_script else None
+        if self.fail_find or scripted == "fail":
+            raise StoreDown
+        if scripted == "empty":
+            return None
+        if scripted == "hang":
+            await _never()
+        for item in self.documents:
+            if item.idempotency_key == idempotency_key:
+                return item
+        return None
 
     async def document_exists(self, document_id: str) -> bool:
         if self.fail_exists:

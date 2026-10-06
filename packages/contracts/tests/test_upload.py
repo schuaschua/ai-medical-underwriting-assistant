@@ -2,11 +2,11 @@
 
 import pytest
 
-from contracts.enums import CaseStatus
 from contracts.errors import HTTP_STATUS, DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.web import Health, Me, UploadedCase
 from contracts.upload import (
+    IDEMPOTENCY_KEY_HEADER,
     MAX_UPLOAD_BYTES,
     PDF_HEADER,
     TOO_LARGE_MESSAGE,
@@ -15,6 +15,7 @@ from contracts.upload import (
     check_upload,
     check_upload_size,
     parse_declared_length,
+    parse_idempotency_key,
 )
 
 PDF = PDF_HEADER + b"1.7\n%%EOF\n"
@@ -72,13 +73,10 @@ def test_story_1_5_web_payloads_live_in_the_contracts_package() -> None:
 
     assert Health().model_dump() == {"status": "ok"}
     assert Me.model_validate({"role": "underwriter"}).role.value == "underwriter"
-    uploaded = UploadedCase(
-        case_id=case_id, document_id=document_id, status=CaseStatus.RUNNING
-    )
+    uploaded = UploadedCase(case_id=case_id, document_id=document_id)
     assert uploaded.model_dump(mode="json") == {
         "case_id": case_id,
         "document_id": document_id,
-        "status": "running",
     }
 
 
@@ -122,3 +120,49 @@ def test_story_1_5_a_body_that_differs_from_its_declared_length_is_422() -> None
         with pytest.raises(DomainError) as raised:
             check_received_length(7, received)
         assert raised.value.code is ErrorCode.VALIDATION_FAILED
+
+
+# --- Story 1.6: the key that makes an upload safe to retry ---------------------
+
+
+def test_story_1_6_the_idempotency_key_header_has_one_name() -> None:
+    assert IDEMPOTENCY_KEY_HEADER == "Idempotency-Key"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "3f2b8a52-6c1d-4c43-9d0e-0a8f5a1b2c3d",  # what a browser's randomUUID gives
+        "019a0000-0000-7000-8000-000000000001",
+        "a" * 16,
+        "A_b-9" * 12 + "abcd",
+    ],
+)
+def test_story_1_6_a_well_formed_idempotency_key_is_kept_as_sent(key: str) -> None:
+    assert parse_idempotency_key(key) == key
+
+
+def test_story_1_6_an_upload_without_an_idempotency_key_is_allowed() -> None:
+    assert parse_idempotency_key(None) is None
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "",
+        " ",
+        "short",
+        "a" * 65,
+        "has space in the key 123",
+        "semi;colon-key-12345",
+        "é" * 20,
+    ],
+)
+def test_story_1_6_a_malformed_idempotency_key_is_422_and_not_echoed(key: str) -> None:
+    with pytest.raises(DomainError) as raised:
+        parse_idempotency_key(key)
+
+    assert raised.value.code is ErrorCode.VALIDATION_FAILED
+    assert raised.value.http_status == 422
+    if key.strip():
+        assert key not in raised.value.message

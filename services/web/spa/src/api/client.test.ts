@@ -1,14 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRole } from "../role/roleStore";
-import { errorBody, fakeServer, json } from "../test/server";
+import {
+  caseProgress,
+  errorBody,
+  fakeServer,
+  json,
+  startedCase,
+  UPLOADED,
+} from "../test/server";
 import {
   ApiError,
   getMe,
+  getProgress,
+  IDEMPOTENCY_KEY_HEADER,
   NetworkError,
+  newIdempotencyKey,
   REQUEST_TIMEOUT_MS,
+  startCase,
   UPLOAD_TIMEOUT_MS,
   uploadDocument,
 } from "./client";
+
+const KEY = "3f2b8a52-6c1d-4c43-9d0e-0a8f5a1b2c3d";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -131,9 +144,7 @@ describe("1.5 API client", () => {
     setRole("customer");
     const file = new Blob(["%PDF-1.7"]);
 
-    await expect(uploadDocument(file)).resolves.toMatchObject({
-      status: "running",
-    });
+    await expect(uploadDocument(file, KEY)).resolves.toEqual(UPLOADED);
 
     expect(server.calls).toEqual([
       {
@@ -142,6 +153,7 @@ describe("1.5 API client", () => {
         role: "customer",
         contentType: "application/pdf",
         body: file,
+        idempotencyKey: KEY,
       },
     ]);
   });
@@ -150,7 +162,7 @@ describe("1.5 API client", () => {
     fakeServer();
     setRole("underwriter");
 
-    const error = await uploadDocument(new Blob(["%PDF-1.7"])).catch(
+    const error = await uploadDocument(new Blob(["%PDF-1.7"]), KEY).catch(
       (caught: unknown) => caught,
     );
 
@@ -159,8 +171,9 @@ describe("1.5 API client", () => {
   });
 
   it.each([
-    ["no case id", { document_id: "d", status: "running" }],
-    ["an unknown status", { case_id: "c", document_id: "d", status: "new" }],
+    ["no case id", { document_id: "d" }],
+    ["no document id", { case_id: "c" }],
+    ["an empty case id", { case_id: "", document_id: "d" }],
     ["a list", []],
   ])(
     "reports a 201 with %s as an ApiError without a code",
@@ -168,7 +181,7 @@ describe("1.5 API client", () => {
       fakeServer(() => json(201, body));
       setRole("customer");
 
-      const error = await uploadDocument(new Blob(["%PDF-1.7"])).catch(
+      const error = await uploadDocument(new Blob(["%PDF-1.7"]), KEY).catch(
         (caught: unknown) => caught,
       );
 
@@ -197,7 +210,7 @@ describe("1.5 API client", () => {
       vi.stubGlobal("fetch", fetchMock);
       setRole("customer");
 
-      const outcome = uploadDocument(new Blob(["%PDF-1.7"])).catch(
+      const outcome = uploadDocument(new Blob(["%PDF-1.7"]), KEY).catch(
         (caught: unknown) => caught,
       );
       await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
@@ -208,5 +221,170 @@ describe("1.5 API client", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("1.6 API client", () => {
+  it("names the idempotency header as the server reads it", () => {
+    expect(IDEMPOTENCY_KEY_HEADER).toBe("Idempotency-Key");
+  });
+
+  it("makes a new, well-formed idempotency key each time", () => {
+    const keys = new Set(Array.from({ length: 20 }, () => newIdempotencyKey()));
+
+    expect(keys.size).toBe(20);
+    for (const key of keys) {
+      // What the server accepts: 16 to 64 letters, digits, "-" or "_".
+      expect(key).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    }
+  });
+
+  it("starts a case with a POST as the customer and no options", async () => {
+    const server = fakeServer();
+    setRole("customer");
+
+    await expect(startCase(UPLOADED.case_id)).resolves.toEqual(
+      startedCase(UPLOADED.case_id),
+    );
+
+    expect(server.calls).toEqual([
+      {
+        path: `/api/cases/${UPLOADED.case_id}/start`,
+        method: "POST",
+        role: "customer",
+        contentType: "application/json",
+        body: "{}",
+      },
+    ]);
+  });
+
+  it("reads the progress of a started case, and 404 for any other", async () => {
+    const server = fakeServer();
+    setRole("customer");
+
+    const unknown = await getProgress(UPLOADED.case_id).catch(
+      (caught: unknown) => caught,
+    );
+    expect(unknown).toMatchObject({ status: 404, code: "not_found" });
+
+    await startCase(UPLOADED.case_id);
+    await expect(getProgress(UPLOADED.case_id)).resolves.toEqual(
+      caseProgress(UPLOADED.case_id),
+    );
+    expect(server.calls.at(-1)).toMatchObject({
+      path: `/api/cases/${UPLOADED.case_id}/progress`,
+      method: "GET",
+      role: "customer",
+    });
+  });
+
+  it("keeps a case id from changing the path it is sent on", async () => {
+    const server = fakeServer();
+    setRole("customer");
+
+    await getProgress("../me").catch(() => undefined);
+
+    expect(server.calls[0]?.path).toBe("/api/cases/..%2Fme/progress");
+  });
+
+  it("makes a key without crypto.randomUUID, from random bytes", () => {
+    let filled = 0;
+    vi.stubGlobal("crypto", {
+      getRandomValues: (bytes: Uint8Array) => {
+        filled += 1;
+        bytes.forEach((_, index) => {
+          bytes[index] = (index * 37 + filled * 11) % 256;
+        });
+        return bytes;
+      },
+    });
+
+    const first = newIdempotencyKey();
+    const second = newIdempotencyKey();
+
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    expect(second).toMatch(/^[0-9a-f]{32}$/);
+    expect(second).not.toBe(first);
+    expect(filled).toBe(2);
+  });
+
+  it.each([
+    ["no pages", { case_id: UPLOADED.case_id, case_status: "running" }],
+    [
+      "pages that are not a list",
+      { ...caseProgress(UPLOADED.case_id), pages: "none" },
+    ],
+    [
+      "another case's progress",
+      caseProgress("019a0000-0000-7000-8000-00000000000f"),
+    ],
+    ["no case id", { case_status: "running", pages: [] }],
+  ])(
+    "reports a progress with %s as an ApiError without a code",
+    async (_n, body) => {
+      fakeServer(() => json(200, body));
+      setRole("customer");
+
+      const error = await getProgress(UPLOADED.case_id).catch(
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ code: null, traceId: null });
+    },
+  );
+
+  it.each([
+    [
+      "another case's answer",
+      startedCase("019a0000-0000-7000-8000-00000000000f"),
+    ],
+    ["no case id", { case_status: "running" }],
+  ])(
+    "reports a start answered with %s as an ApiError without a code",
+    async (_n, body) => {
+      fakeServer(() => json(200, body));
+      setRole("customer");
+
+      const error = await startCase(UPLOADED.case_id).catch(
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ code: null, traceId: null });
+    },
+  );
+
+  it.each([
+    ["no status", { case_id: UPLOADED.case_id }],
+    ["an unknown status", startedCase(UPLOADED.case_id, "archived")],
+    ["a status that is a prototype member", startedCase("c", "toString")],
+    ["a list", []],
+  ])(
+    "reports a start or a progress with %s as an ApiError without a code",
+    async (_name, body) => {
+      fakeServer(() => json(200, body));
+      setRole("customer");
+
+      for (const call of [startCase, getProgress]) {
+        const error = await call(UPLOADED.case_id).catch(
+          (caught: unknown) => caught,
+        );
+
+        expect(error).toBeInstanceOf(ApiError);
+        expect(error).toMatchObject({ code: null, traceId: null });
+      }
+    },
+  );
+
+  it("turns a refused start into an ApiError with the server's code", async () => {
+    fakeServer();
+    setRole("underwriter");
+
+    const error = await startCase(UPLOADED.case_id).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toMatchObject({ status: 403, code: "role_not_allowed" });
   });
 });

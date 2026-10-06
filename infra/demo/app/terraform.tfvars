@@ -14,6 +14,9 @@ web_health_path               = "/api/health"
 intake_port                   = 8001
 intake_health_path            = "/health"
 intake_ready_path             = "/ready"
+workflow_port                 = 8002
+workflow_health_path          = "/health"
+workflow_ready_path           = "/ready"
 otel_sampling_ratio           = 1
 dapr_http_max_request_size_mb = 16
 

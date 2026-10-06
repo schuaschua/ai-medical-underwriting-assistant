@@ -28,6 +28,21 @@ output "intake_database_role" {
   value       = local.intake_identity.name
 }
 
+output "workflow_container_app_name" {
+  description = "Name of the workflow Container App."
+  value       = module.workflow.name
+}
+
+output "workflow_container_app_id" {
+  description = "Resource id of the workflow Container App."
+  value       = module.workflow.resource_id
+}
+
+output "workflow_database_role" {
+  description = "Name of the PostgreSQL role the workflow service signs in as; the database bootstrap creates it (infra/bootstrap/README.md)."
+  value       = local.workflow_identity.name
+}
+
 output "image_tag" {
   description = "Image tag the services run."
   value       = var.image_tag

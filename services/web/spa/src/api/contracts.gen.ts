@@ -569,12 +569,15 @@ export interface StartCaseRequest {
   stop_after?: StopAfter | null;
 }
 /**
- * Response of `POST /api/cases`: the case `intake` created, with its status.
+ * Response of `POST /api/cases`: the case `intake` created.
+ *
+ * It carries no status: the case is started by a call of its own
+ * (`POST /api/cases/{case_id}/start`), and `workflow` reports its status
+ * from then on (`GET /api/cases/{case_id}/progress`).
  */
 export interface UploadedCase {
   case_id: string;
   document_id: string;
-  status: CaseStatus;
 }
 /**
  * What the verdict agent must return; `verdict`'s domain code finishes it (AD-15).

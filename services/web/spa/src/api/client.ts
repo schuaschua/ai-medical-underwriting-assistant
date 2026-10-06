@@ -2,9 +2,19 @@
 // server goes through `request`, which adds the demo role header.
 import { getRole } from "../role/roleStore";
 import { strings } from "../strings";
-import type { ErrorBody, ErrorCode, Me, UploadedCase } from "./contracts.gen";
+import type {
+  CaseProgress,
+  CaseStarted,
+  CaseStatus,
+  ErrorBody,
+  ErrorCode,
+  Me,
+  UploadedCase,
+} from "./contracts.gen";
 
 export const ROLE_HEADER = "X-Demo-Role";
+/** Sent with an upload, and again with its retry, so the retry makes no second case. */
+export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 const API_ROOT = "/api";
 /** The media type of an upload: the body is the PDF itself. */
 const PDF = "application/pdf";
@@ -50,6 +60,8 @@ interface RequestOptions {
   json?: unknown;
   /** Sent as the body, as it is, declared as a PDF. */
   pdf?: Blob;
+  /** Sent with the upload: see `IDEMPOTENCY_KEY_HEADER`. */
+  idempotencyKey?: string;
   timeoutMs?: number;
 }
 
@@ -77,6 +89,9 @@ async function request<T>(
   const role = getRole();
   if (role !== null) {
     headers.set(ROLE_HEADER, role);
+  }
+  if (options.idempotencyKey !== undefined) {
+    headers.set(IDEMPOTENCY_KEY_HEADER, options.idempotencyKey);
   }
   // A call that never answers is ended, so no screen waits forever.
   const timeout = new AbortController();
@@ -139,17 +154,51 @@ export function isUploadedCase(value: unknown): value is UploadedCase {
     typeof record.case_id === "string" &&
     record.case_id !== "" &&
     typeof record.document_id === "string" &&
-    record.document_id !== "" &&
-    typeof record.status === "string" &&
-    // Own keys only: "constructor" is no case status.
-    Object.hasOwn(strings.caseStatus, record.status)
+    record.document_id !== ""
   );
 }
 
-/** Upload one PDF as a new case. Only the customer role may. */
-export async function uploadDocument(file: Blob): Promise<UploadedCase> {
+function isCaseStatus(value: unknown): value is CaseStatus {
+  // Own keys only: "constructor" is no case status.
+  return typeof value === "string" && Object.hasOwn(strings.caseStatus, value);
+}
+
+/** Whether an answer is about the case that was asked for, with a known status. */
+function isAboutCase(
+  value: unknown,
+  caseId: string,
+): value is Record<string, unknown> & { case_status: CaseStatus } {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return record.case_id === caseId && isCaseStatus(record.case_status);
+}
+
+/** A new key for one upload attempt; its retries send the same one. */
+export function newIdempotencyKey(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Older browsers, and pages not served over HTTPS, have no randomUUID:
+  // 16 random bytes as 32 hex digits do the same job.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
+/**
+ * Upload one PDF as a new case. Only the customer role may. A repeat with
+ * the same key is answered with the case the first call created.
+ */
+export async function uploadDocument(
+  file: Blob,
+  idempotencyKey: string,
+): Promise<UploadedCase> {
   const uploaded = await request<unknown>("POST", "/cases", {
     pdf: file,
+    idempotencyKey,
     timeoutMs: UPLOAD_TIMEOUT_MS,
   });
   if (!isUploadedCase(uploaded)) {
@@ -157,4 +206,32 @@ export async function uploadDocument(file: Blob): Promise<UploadedCase> {
     throw new ApiError(201, null, "The answer was not a created case.", null);
   }
   return uploaded;
+}
+
+function casePath(caseId: string, resource: string): string {
+  return `/cases/${encodeURIComponent(caseId)}/${resource}`;
+}
+
+/**
+ * Start an uploaded case. Safe to repeat: a case that is already started is
+ * left as it is and the same answer comes back.
+ */
+export async function startCase(caseId: string): Promise<CaseStarted> {
+  // No options: the server starts the case with its defaults.
+  const started = await request<unknown>("POST", casePath(caseId, "start"), {
+    json: {},
+  });
+  if (!isAboutCase(started, caseId)) {
+    throw new ApiError(200, null, "The answer was not a started case.", null);
+  }
+  return started as unknown as CaseStarted;
+}
+
+/** Read a case's status and pages. 404 `not_found` if it was never started. */
+export async function getProgress(caseId: string): Promise<CaseProgress> {
+  const progress = await request<unknown>("GET", casePath(caseId, "progress"));
+  if (!isAboutCase(progress, caseId) || !Array.isArray(progress.pages)) {
+    throw new ApiError(200, null, "The answer was not a progress.", null);
+  }
+  return progress as unknown as CaseProgress;
 }

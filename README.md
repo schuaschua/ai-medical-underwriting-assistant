@@ -22,11 +22,13 @@ holds the ruff, mypy and pytest settings for every member.
   audit record, enums, the error catalogue, the `rule_id` patterns, the page type mapping, the eval
   query builder and text normalisation. It imports only the standard library and pydantic. A change to
   it is one pull request that updates every affected service.
-- `services/` holds the seven services. So far there are two. `services/web/` is the FastAPI service
+- `services/` holds the seven services. So far there are three. `services/web/` is the FastAPI service
   that serves the React app in `services/web/spa/` and every `/api` route from one origin.
   `services/intake/` owns cases, documents and the stored PDFs: database schema `intake` and the blob
-  containers `originals` and `cases`. `web` calls it through its Dapr sidecar and nothing else does yet.
-  No service imports another service's code.
+  containers `originals` and `cases`. `services/workflow/` owns the case lifecycle: one orchestration
+  per case on Azure Durable Task Scheduler, case and page status, and the append-only audit trail
+  (database schema `workflow`). `web` calls the other two through its Dapr sidecar: it asks `intake` to
+  create a case from an upload, then asks `workflow` to start it. No service imports another service's code.
 
 ### Install and check
 
@@ -36,7 +38,7 @@ Install uv 0.11.8 and Node.js 24.21.0, then from the repository root:
 uv sync
 uv run ruff format --check . && uv run ruff check .
 uv run mypy packages services
-docker compose up --detach --wait postgres azurite   # for the integration tests
+docker compose up --detach --wait                    # for the integration tests
 uv run pytest --cov
 
 npm --prefix services/web/spa ci
@@ -48,9 +50,10 @@ npm --prefix services/web/spa run build
 
 `uv sync` creates `.venv/` and installs the exact versions in `uv.lock`. `pytest --cov` takes its test
 paths, the measured packages and the 80% coverage threshold from the root `pyproject.toml`. The tests
-marked `integration` use a real PostgreSQL and the blob emulator from `compose.yaml` and fail with a
-message saying so if those containers are not running; each makes a database of its own, so your local
-data is left alone, and none calls Azure. `uv run pytest -m "not integration"` leaves them out. The SPA's
+marked `integration` use a real PostgreSQL, the blob emulator and the Durable Task Scheduler emulator
+from `compose.yaml` and fail with a message saying so if those containers are not running; each makes a
+database of its own (and `workflow`'s use a task hub of their own, `aiuw-test`), so your local data is
+left alone, and none calls Azure. `uv run pytest -m "not integration"` leaves them out. The SPA's
 60% threshold is in `services/web/spa/vite.config.ts`. The same checks, plus dependency scans
 (`pip-audit`, `npm audit`), run on every pull request and on every push to `main`
 (`.github/workflows/ci.yml`). Fix a failing check in the code; do not loosen the settings.
@@ -66,15 +69,18 @@ One command starts everything:
 ```
 
 It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
-containers (`compose.yaml`), applies the database migrations, builds the SPA, and runs the `web` and
-`intake` services, each with its Dapr sidecar (`dapr.yaml`; each later service is added to that file).
+containers (`compose.yaml`), applies the database migrations, builds the SPA, and runs the `web`,
+`intake` and `workflow` services, each with its Dapr sidecar (`dapr.yaml`; each later service is added
+to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
 its API share that one address: `/api/health` answers without a role, and every other `/api` route
 needs the `X-Demo-Role` header the role switcher sends. As the customer, "Upload a document" takes a
-PDF of up to 10 MB (try one from `data/cases/`) and lists the new case.
+PDF of up to 10 MB (try one from `data/cases/`), starts its case and lists it with its status, which
+the screen reads again every few seconds. If the case cannot be started, it is listed as received but
+not started, with a button to try again; the document is not sent a second time.
 
-The services never run migrations when they start, here or in Azure, and `intake` reports "not ready"
-(`/ready`) until its schema is at the newest migration it ships with. Locally, one script stands in
+The services never run migrations when they start, here or in Azure, and `intake` and `workflow` each
+report "not ready" (`/ready`) until their schema is at the newest migration they ship with. Locally, one script stands in
 for the pipeline's migration step. `./tools/dev.sh` runs it for you; run it yourself after pulling a
 change that adds a migration:
 
@@ -84,22 +90,34 @@ change that adds a migration:
 
 It starts the two containers if they are not running, applies `intake`'s migrations to the local
 database (`uv run alembic -c services/intake/alembic.ini upgrade head`, pointed at `localhost`) and
-creates the blob containers `originals` and `cases` in the emulator. It can be run again safely.
+creates the blob containers `originals` and `cases` in the emulator. For `workflow` it creates the
+database role `workflow` and applies that service's migrations
+(`uv run alembic -c services/workflow/alembic.ini upgrade head`, with
+`WORKFLOW_DATABASE_SERVICE_ROLE=workflow`), which grant the role its rights. It can be run again safely.
+
+`workflow` runs as that role, not as the database's own user, so the rule that the audit trail is
+append-only holds on your machine as it does in Azure: the role may read `workflow.audit_event` and
+add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 
 | What | Where |
 | --- | --- |
 | The app and its API (`web`) | <http://localhost:8000/> |
 | `web`'s Dapr sidecar | `http://localhost:3500` |
 | `intake` (`/health`, `/ready`, `POST /cases`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
-| PostgreSQL (database and user `aiuw`, no password, this machine only) | `localhost:5432` |
+| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
+| PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
-| Durable Task Scheduler emulator, and its dashboard | `localhost:8080`, <http://localhost:8082/> |
+| Durable Task Scheduler emulator (task hubs `default` and, for tests, `aiuw-test`), and its dashboard | `localhost:8080`, <http://localhost:8082/> |
 
 Stop with Ctrl+C, then `docker compose down` (add `-v` to delete the local database and blobs).
 
 Locally `intake` reaches the emulator with `INTAKE_BLOB_CONNECTION_STRING=UseDevelopmentStorage=true`
 (set in `dapr.yaml`), which names the emulator's built-in account and holds no secret. In Azure that
 variable is never set: the service signs in to Blob Storage and PostgreSQL with its managed identity.
+`workflow` reaches the scheduler emulator without a credential; in Azure it signs in to the Durable Task
+Scheduler and PostgreSQL with its managed identity. The emulator keeps its state in memory, so
+orchestrations are gone after `docker compose stop`, while case status and the audit trail stay in
+PostgreSQL; starting such a case again gives it a new orchestration.
 
 To work on the SPA with hot reload, keep the above running and start `npm --prefix services/web/spa run dev`;
 its dev server passes `/api` calls on to port 8000.
@@ -112,6 +130,7 @@ docker build -f services/web/Dockerfile -t aiuw-web:dev .
 docker run --rm -p 8000:8000 aiuw-web:dev
 
 docker build -f services/intake/Dockerfile -t aiuw-intake:dev .
+docker build -f services/workflow/Dockerfile -t aiuw-workflow:dev .
 ```
 
 ### Contract types
@@ -130,16 +149,19 @@ and `npm --prefix services/web/spa run contracts:check` compares the TypeScript 
 ### Deploy
 
 The demo environment is two Terraform stacks, applied in order: `infra/demo/foundation` (see
-`infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds two Container Apps: `web`, the
-only one reachable from the internet, and `intake`, with internal ingress only.
+`infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds three Container Apps: `web`, the
+only one reachable from the internet, and `intake` and `workflow`, with internal ingress only.
+`workflow` is held at one replica and holds Durable Task Data Contributor on the task hub.
 
 The `deploy` workflow (`.github/workflows/deploy.yml`) is started by hand on `main` and deploys only
-the commit `main` is at. It builds the `web` and `intake` images in the registry, plans `app`, refuses
-a plan that destroys or replaces a resource, applies it, waits until the new `web` revision is the one
-serving, fails unless `intake`'s latest revision runs the same commit's image, checks `/api/health` and
-the SPA's page, and ends by saying whether `intake` is ready. It does not run database migrations yet:
-`intake`'s database role and its migrations are a manual step (`infra/bootstrap/README.md`, section 4),
-and until it is done `intake` stays "not ready" and an upload is answered with 502. It needs:
+the commit `main` is at. It builds the `web`, `intake` and `workflow` images in the registry, plans
+`app`, refuses a plan that destroys or replaces a resource, applies it, waits until the new `web`
+revision is the one serving, fails unless the latest revisions of `intake` and `workflow` run the same
+commit's image, checks `/api/health` and the SPA's page, and ends by saying whether `intake` and
+`workflow` are ready. It does not run database migrations yet: the database roles and migrations of
+`intake` and `workflow` are a manual step (`infra/bootstrap/README.md`, sections 4 and 5). Until it is
+done for `intake`, that service stays "not ready" and an upload is answered with 502; until it is done
+for `workflow`, an uploaded case is shown as received but not started. It needs:
 
 | What | Set by |
 | --- | --- |

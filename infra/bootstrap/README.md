@@ -169,12 +169,19 @@ export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --que
 
 ```bash
 psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
-select * from pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+-- Created only if it is not there yet, so this step can be run again.
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_ROLE') THEN
+    PERFORM pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+  END IF;
+END
+\$\$;
 GRANT "$DEPLOY_ROLE" TO "$ME";
 SQL
 ```
 
-If the first statement says the role already exists, the identity was not re-created since the last run; go on with the second statement alone.
+The step is safe to run again: the role is created only when it is missing, and the grant changes nothing the second time. After a teardown the identity is new but the database is new as well, so the role is missing and is created.
 
 **Step 2. Schema and migrations.** The service never migrates at start-up, and its readiness probe fails until the schema is at the migration head bundled in its image. This creates schema `intake`, its tables and its version table. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
 
@@ -190,9 +197,30 @@ INTAKE_DATABASE_ENTRA_AUTH=true \
 psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
 -- Hand the schema and everything in it to the pipeline's role.
 ALTER SCHEMA intake OWNER TO "$DEPLOY_ROLE";
-ALTER TABLE intake."case" OWNER TO "$DEPLOY_ROLE";
-ALTER TABLE intake.document OWNER TO "$DEPLOY_ROLE";
-ALTER TABLE intake.alembic_version OWNER TO "$DEPLOY_ROLE";
+-- Every table and every sequence in the schema, whatever migrations have
+-- added since this was written. A sequence that belongs to a table column
+-- follows its table and is left out.
+DO \$\$
+DECLARE item record;
+BEGIN
+  FOR item IN
+    SELECT c.relname, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'intake' AND c.relkind IN ('r', 'p', 'S')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i') AND c.relkind = 'S'
+      )
+    ORDER BY c.relkind DESC
+  LOOP
+    EXECUTE format(
+      'ALTER %s intake.%I OWNER TO %I',
+      CASE WHEN item.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+      item.relname, '$DEPLOY_ROLE'
+    );
+  END LOOP;
+END
+\$\$;
 
 GRANT USAGE ON SCHEMA intake TO "$SERVICE_ROLE";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA intake TO "$SERVICE_ROLE";
@@ -217,6 +245,135 @@ az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER"
 ```
 
 Then the `intake` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run.
+
+**Upgrading an environment that is already set up.** Also not yet run. When `intake` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2 alone: the migrations bring the schema to the new head, and the default privileges of step 3 already cover tables and sequences that the pipeline's role creates. Run step 3 again only when a migration added objects while you, not the pipeline's role, ran it: the step hands every table and sequence in the schema over and repeats the grants, and is safe to run again. Finish with step 4. Until the migration step has run, `intake` reports "not ready", because its image carries a newer head than the database.
+
+## 5. Database role for `workflow`
+
+Added by story 1.6. **None of the commands in this section has been run yet**: they are written from the configuration and from section 4, so read each step's output before going on. Add each run to the log below.
+
+`workflow` owns schema `workflow`: case status, page status and the audit trail (spine AD-4, AD-8). As for `intake`, an operator does these steps once after the `foundation` stack is up, and again after every teardown. Until this section is done, `workflow` reports "not ready", a case cannot be started, and the upload screen shows an uploaded case as received but not started.
+
+One thing differs from section 4. `workflow`'s migrations grant the service role its rights themselves, table by table, so there is no step that grants on "all tables" and there are no default privileges. On `workflow.audit_event` the service role gets `SELECT` and `INSERT` and nothing else: the trail is append-only, and the database is what refuses an `UPDATE` or a `DELETE`. A trigger on the table refuses `UPDATE`, `DELETE` and `TRUNCATE` for every other role as well, the owner included, and a downgrade of the migrations is refused while the table holds events. Do not add a wider grant by hand: `workflow` checks the role it is connected as, and reports "not ready" (log line `not ready: code=audit_trail_writable`) if that role holds `UPDATE` or `DELETE` on the table or owns it.
+
+Run the steps in this order, in one shell, from the repository root: the role first, because the migrations grant to it and fail if it does not exist.
+
+**Step 0. Set up the shell, and open the firewall for your address.** As step 0 of section 4, with the role names of this service:
+
+```bash
+set -euo pipefail
+
+SERVER="$(terraform -chdir=infra/demo/foundation output -raw postgresql_server_name)"
+HOST="$(terraform -chdir=infra/demo/foundation output -raw postgresql_fqdn)"
+DATABASE="$(terraform -chdir=infra/demo/foundation output -raw postgresql_database_name)"
+ME="$(az ad signed-in-user show --query id -o tsv)"   # your database role is named after your object id
+SERVICE_ROLE="id-aiuw-demo-wus3-workflow"             # must equal: terraform -chdir=infra/demo/app output workflow_database_role
+DEPLOY_ROLE="id-aiuw-demo-wus3-deploy"                # the pipeline's role, which will run migrations later
+
+cleanup() {
+  # Always: the temporary firewall rule (azure.md rule 13) and the token.
+  az postgres flexible-server firewall-rule delete -g rg-aiuw-demo-wus3 -n "$SERVER" \
+    --rule-name operator-bootstrap --yes || true
+  unset PGPASSWORD
+}
+trap cleanup EXIT
+
+az postgres flexible-server firewall-rule create -g rg-aiuw-demo-wus3 -n "$SERVER" \
+  --rule-name operator-bootstrap --start-ip-address "$(curl -s https://api.ipify.org)"
+
+# An Entra token is the password. It lasts about an hour.
+export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+```
+
+**Step 1. Role.** The service's role is named after its identity. If section 4 was done in this bring-up, your own role is already a member of the pipeline's role and the second statement changes nothing.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
+-- Created only if it is not there yet, so this step can be run again.
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_ROLE') THEN
+    PERFORM pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+  END IF;
+END
+\$\$;
+GRANT "$DEPLOY_ROLE" TO "$ME";
+SQL
+```
+
+The step is safe to run again: the role is created only when it is missing, and the grant changes nothing the second time.
+
+**Step 2. Schema, migrations and the service role's rights.** This creates schema `workflow`, its tables and its version table, and grants the service role its rights on each. `WORKFLOW_DATABASE_SERVICE_ROLE` names the role to grant to; the run stops with a message if it is not set. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
+
+```bash
+WORKFLOW_DATABASE_HOST="$HOST" WORKFLOW_DATABASE_NAME="$DATABASE" WORKFLOW_DATABASE_USER="$ME" \
+WORKFLOW_DATABASE_SERVICE_ROLE="$SERVICE_ROLE" WORKFLOW_DATABASE_ENTRA_AUTH=true \
+  uv run alembic -c services/workflow/alembic.ini upgrade head
+```
+
+**Step 3. Ownership.** The schema and every table, sequence and function in it are handed to the pipeline's role, so that it owns them as the spine's conventions say and can run later migrations. The step is safe to run again. Ownership does not change what the service role was granted in step 2. The last statement shows those rights: check that the `audit_event` row lists `INSERT` and `SELECT` only.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
+ALTER SCHEMA workflow OWNER TO "$DEPLOY_ROLE";
+-- Every table and every sequence in the schema, whatever migrations have
+-- added since this was written. A sequence that belongs to a table column
+-- follows its table and is left out.
+DO \$\$
+DECLARE item record;
+BEGIN
+  FOR item IN
+    SELECT c.relname, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'workflow' AND c.relkind IN ('r', 'p', 'S')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i') AND c.relkind = 'S'
+      )
+    ORDER BY c.relkind DESC
+  LOOP
+    EXECUTE format(
+      'ALTER %s workflow.%I OWNER TO %I',
+      CASE WHEN item.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+      item.relname, '$DEPLOY_ROLE'
+    );
+  END LOOP;
+  -- Functions too (the trigger function that guards the audit trail).
+  FOR item IN
+    SELECT p.oid::regprocedure AS signature FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'workflow'
+  LOOP
+    EXECUTE format('ALTER FUNCTION %s OWNER TO %I', item.signature, '$DEPLOY_ROLE');
+  END LOOP;
+END
+\$\$;
+
+SELECT table_name, string_agg(privilege_type, ', ' ORDER BY privilege_type) AS service_role_rights
+FROM information_schema.role_table_grants
+WHERE table_schema = 'workflow' AND grantee = '$SERVICE_ROLE'
+GROUP BY table_name ORDER BY table_name;
+SQL
+```
+
+Expected, not yet observed:
+
+| table_name | service_role_rights |
+| --- | --- |
+| `alembic_version` | `SELECT` |
+| `audit_event` | `INSERT, SELECT` |
+| `case_status` | `INSERT, SELECT, UPDATE` |
+| `page_status` | `INSERT, SELECT, UPDATE` |
+
+**Step 4. Close up and check.** As step 4 of section 4.
+
+```bash
+cleanup; trap - EXIT
+az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
+```
+
+Then the `workflow` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run. `workflow`'s other access, to the Durable Task Scheduler's task hub, is an Azure role that the `app` stack assigns; nothing is done for it here.
+
+**Upgrading an environment that is already set up.** Also not yet run. When `workflow` ships a new migration and the database was bootstrapped before, do not repeat the whole section. Run step 0, then step 2 alone, with `WORKFLOW_DATABASE_SERVICE_ROLE` set as there: the migrations bring the schema to the new head and grant the service role its rights on anything they add. Run step 3 again when a migration added a table, sequence or function while you, not the pipeline's role, ran it; the step takes whatever the schema holds and is safe to run again. Finish with step 4. Until the migration step has run, `workflow` reports "not ready", and its worker does not start, because its image carries a newer head than the database.
 
 ## Out-of-band log
 

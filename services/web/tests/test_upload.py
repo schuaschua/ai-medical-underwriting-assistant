@@ -112,8 +112,9 @@ def test_story_1_5_customer_upload_creates_a_case_through_the_sidecar(
         sidecar.case_id,
         sidecar.document_id,
     )
-    # No workflow yet: a new case is reported as the lifecycle will report it.
-    assert uploaded.status.value == "running"
+    # The answer carries no status: the case is started by a call of its own
+    # (story 1.6), and `workflow` reports its status from then on.
+    assert set(response.json()) == {"case_id", "document_id"}
     assert response.headers["cache-control"] == "no-store"
 
     # One call, to `intake` by its Dapr app id, on loopback (AD-3).
@@ -687,6 +688,10 @@ def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
         ("HEAD", "/api/health"),
         ("GET", "/api/me"),
         ("POST", "/api/cases"),
+        # Story 1.6: the case's lifecycle, read from and started in `workflow`.
+        ("POST", "/api/cases/{case_id}/start"),
+        ("GET", "/api/cases/{case_id}/progress"),
+        ("GET", "/api/cases/{case_id}/audit"),
     }
 
 

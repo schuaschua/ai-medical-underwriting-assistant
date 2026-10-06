@@ -71,6 +71,44 @@ resource "time_sleep" "intake_role_propagation" {
   }
 }
 
+# The workflow identity holds these roles and no others (azure.md, "Runtime
+# roles"). Its PostgreSQL role is not an Azure role: the database bootstrap
+# creates it (infra/bootstrap/README.md).
+resource "azurerm_role_assignment" "workflow_acr_pull" {
+  scope                = local.foundation.container_registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = local.workflow_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "workflow_metrics_publisher" {
+  scope                = local.foundation.application_insights_id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = local.workflow_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the one task hub, not to the scheduler (azure.md rule 9): the
+# service starts its orchestrations there and its worker runs them (spine AD-5).
+resource "azurerm_role_assignment" "workflow_durable_task_contributor" {
+  scope                = local.foundation.durable_task_hub_id
+  role_definition_name = "Durable Task Data Contributor"
+  principal_id         = local.workflow_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# As for intake: workflow waits for all of its own role assignments, so its
+# first revision can pull its image, reach the task hub and send telemetry.
+resource "time_sleep" "workflow_role_propagation" {
+  create_duration = var.role_propagation_wait
+
+  triggers = {
+    acr_pull_id                 = azurerm_role_assignment.workflow_acr_pull.id
+    metrics_publisher_id        = azurerm_role_assignment.workflow_metrics_publisher.id
+    durable_task_contributor_id = azurerm_role_assignment.workflow_durable_task_contributor.id
+  }
+}
+
 # --- web ---------------------------------------------------------------------
 
 # The only service reachable from the internet (spine AD-18). There is no
@@ -302,5 +340,126 @@ module "intake" {
   # and Azure has to have spread them.
   depends_on = [
     time_sleep.intake_role_propagation,
+  ]
+}
+
+# --- workflow ----------------------------------------------------------------
+
+# Internal ingress only (spine AD-18): reachable from inside the environment,
+# and called only by web through Dapr service invocation (AD-3). It is the one
+# service that is never scaled to zero.
+module "workflow" {
+  source  = "Azure/avm-res-app-containerapp/azurerm"
+  version = "0.9.0"
+
+  name                                  = local.names.workflow
+  resource_group_name                   = local.foundation.resource_group_name
+  resource_group_id                     = local.foundation.resource_group_id
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+  revision_mode                         = "Single"
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.workflow_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.workflow_identity.id
+  }]
+
+  secrets = {
+    appi = {
+      name  = local.appi_secret_name
+      value = local.foundation.application_insights_connection_string
+    }
+  }
+
+  ingress = {
+    external_enabled           = false
+    allow_insecure_connections = false
+    target_port                = var.workflow_port
+    transport                  = "auto"
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+
+  # Service invocation only (AD-3). Its calls carry ids and small JSON
+  # bodies, so the sidecar keeps its default request limit.
+  dapr = {
+    enabled      = true
+    app_id       = "workflow"
+    app_port     = var.workflow_port
+    app_protocol = "http"
+  }
+
+  template = {
+    min_replicas = local.workflow_replicas
+    max_replicas = local.workflow_replicas
+
+    containers = [{
+      name   = "workflow"
+      image  = "${local.image_repositories.workflow}:${var.image_tag}"
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      # No password and no key: the database and the Durable Task Scheduler
+      # are reached with the service identity (azure.md rule 7).
+      env = [
+        { name = "WORKFLOW_HOST", value = "0.0.0.0" },
+        { name = "WORKFLOW_PORT", value = tostring(var.workflow_port) },
+        { name = "WORKFLOW_AZURE_CLIENT_ID", value = local.workflow_identity.client_id },
+        { name = "WORKFLOW_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
+        { name = "WORKFLOW_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
+        { name = "WORKFLOW_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
+        { name = "WORKFLOW_DATABASE_NAME", value = local.foundation.postgresql_database_name },
+        { name = "WORKFLOW_DATABASE_USER", value = local.workflow_identity.name },
+        { name = "WORKFLOW_DATABASE_ENTRA_AUTH", value = "true" },
+        { name = "WORKFLOW_SCHEDULER_ENDPOINT", value = local.foundation.durable_task_scheduler_endpoint },
+        { name = "WORKFLOW_SCHEDULER_TASK_HUB", value = local.foundation.durable_task_hub_name },
+        { name = "WORKFLOW_SCHEDULER_ENTRA_AUTH", value = "true" },
+      ]
+
+      # azure.md rule 22. Startup and liveness ask the process; readiness
+      # also asks the database, and fails unless its schema revision equals
+      # the migration head bundled in the image.
+      startup_probes = [{
+        transport               = "HTTP"
+        port                    = var.workflow_port
+        path                    = var.workflow_health_path
+        interval_seconds        = 5
+        timeout                 = 2
+        failure_count_threshold = 10
+      }]
+      readiness_probes = [{
+        transport               = "HTTP"
+        port                    = var.workflow_port
+        path                    = var.workflow_ready_path
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }]
+      liveness_probes = [{
+        transport               = "HTTP"
+        port                    = var.workflow_port
+        path                    = var.workflow_health_path
+        interval_seconds        = 30
+        timeout                 = 2
+        failure_count_threshold = 3
+      }]
+    }]
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
+  # The first revision needs every one of the identity's role assignments,
+  # and Azure has to have spread them.
+  depends_on = [
+    time_sleep.workflow_role_propagation,
   ]
 }

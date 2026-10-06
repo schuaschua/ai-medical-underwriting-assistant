@@ -1766,7 +1766,7 @@
     },
     "UploadedCase": {
       "additionalProperties": false,
-      "description": "Response of `POST /api/cases`: the case `intake` created, with its status.",
+      "description": "Response of `POST /api/cases`: the case `intake` created.\n\nIt carries no status: the case is started by a call of its own\n(`POST /api/cases/{case_id}/start`), and `workflow` reports its status\nfrom then on (`GET /api/cases/{case_id}/progress`).",
       "properties": {
         "case_id": {
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -1777,15 +1777,11 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "title": "Document Id",
           "type": "string"
-        },
-        "status": {
-          "$ref": "#/$defs/CaseStatus"
         }
       },
       "required": [
         "case_id",
-        "document_id",
-        "status"
+        "document_id"
       ],
       "title": "UploadedCase",
       "type": "object"

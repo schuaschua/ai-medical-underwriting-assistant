@@ -22,6 +22,7 @@ from contracts.models.intake import CaseCreated
 from contracts.upload import MAX_UPLOAD_BYTES
 from intake.adapters.http.app import create_app
 from intake.adapters.http.routes import Dependencies
+from intake.adapters.migrations import bundled_head
 from intake.settings import Settings
 
 PDF = {"Content-Type": "application/pdf"}
@@ -311,7 +312,7 @@ def test_story_1_5_not_ready_when_the_schema_revision_is_not_the_head(
 
     assert response.status_code == 502
     assert error_of(response.json())[0] == "upstream_unavailable"
-    assert f"schema_revision={revision} head_revision=0001" in caplog.text
+    assert f"schema_revision={revision} head_revision={bundled_head()}" in caplog.text
 
 
 def test_story_1_5_not_ready_when_the_database_cannot_be_reached(

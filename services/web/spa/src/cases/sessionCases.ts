@@ -1,6 +1,7 @@
 // The cases uploaded from this browser tab, newest first. They are kept in
 // session storage: there is no sign-in, so the server cannot say which cases
-// are "yours", and the list ends with the browser session.
+// are "yours", and the list ends with the browser session. Only ids are kept:
+// a case's status is read from the server (cases/caseProgress.ts).
 import { useSyncExternalStore } from "react";
 import { isUploadedCase } from "../api/client";
 import type { UploadedCase } from "../api/contracts.gen";
@@ -15,10 +16,16 @@ let fallback: readonly UploadedCase[] = NO_CASES;
 // same array each time React asks for it.
 let cached: { raw: string; cases: readonly UploadedCase[] } | null = null;
 
+function onlyIds(uploaded: UploadedCase): UploadedCase {
+  return { case_id: uploaded.case_id, document_id: uploaded.document_id };
+}
+
 function parse(raw: string): readonly UploadedCase[] {
   try {
     const value: unknown = JSON.parse(raw);
-    return Array.isArray(value) ? value.filter(isUploadedCase) : NO_CASES;
+    return Array.isArray(value)
+      ? value.filter(isUploadedCase).map(onlyIds)
+      : NO_CASES;
   } catch {
     return NO_CASES;
   }
@@ -57,7 +64,7 @@ function store(cases: readonly UploadedCase[]): void {
 /** Put a newly uploaded case at the top of the list. */
 export function addSessionCase(uploaded: UploadedCase): void {
   store([
-    uploaded,
+    onlyIds(uploaded),
     ...getSessionCases().filter((item) => item.case_id !== uploaded.case_id),
   ]);
 }

@@ -117,6 +117,18 @@ jobs:
             --file services/intake/Dockerfile \
             .
 
+      - name: Build and push the workflow image
+        # The `app` stack runs this image too. As for intake, its migrations
+        # are not run here yet: an operator runs them as described in
+        # infra/bootstrap/README.md, section 5, and workflow reports "not
+        # ready" until that is done.
+        run: |
+          az acr build \
+            --registry "$REGISTRY_NAME" \
+            --image "workflow:${GITHUB_SHA}" \
+            --file services/workflow/Dockerfile \
+            .
+
       - name: Init
         run: terraform -chdir="$APP_STACK" init -no-color -lockfile=readonly
 
@@ -191,6 +203,30 @@ jobs:
           echo "::error::intake's latest revision does not run ${expected}."
           exit 1
 
+      - name: workflow runs this commit's image
+        # Read-only, and as for intake: the latest revision must be this
+        # commit's image, and is not required to be ready
+        # (infra/bootstrap/README.md, section 5).
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw workflow_container_app_id)"
+          expected="${REGISTRY_LOGIN_SERVER}/workflow:${GITHUB_SHA}"
+          for attempt in $(seq 1 30); do
+            latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+            image=""
+            if [[ -n "$latest" ]]; then
+              image="$(az resource show --ids "${app_id}/revisions/${latest}" \
+                --query 'properties.template.containers[0].image' --output tsv)"
+            fi
+            if [[ "$image" == "$expected" ]]; then
+              echo "workflow's latest revision ${latest} runs ${image}."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: latest=${latest} image=${image}"
+            sleep 10
+          done
+          echo "::error::workflow's latest revision does not run ${expected}."
+          exit 1
+
       - name: Smoke check
         # Read-only: the health route, and the SPA's entry page (an image
         # without the built SPA would answer the first and not the second).
@@ -220,4 +256,18 @@ jobs:
             echo "::notice::intake is ready (revision ${latest})."
           else
             echo "::warning::intake is NOT ready (latest=${latest}, ready=${ready}). Uploads will be answered with 502 until its database role exists and its migrations have run: infra/bootstrap/README.md, section 4."
+          fi
+
+      - name: Say whether workflow is ready
+        # Read-only, and never fails the run: as for intake, a green deploy
+        # must not be read as "cases start".
+        if: ${{ success() }}
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw workflow_container_app_id)"
+          latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+          ready="$(az resource show --ids "$app_id" --query properties.latestReadyRevisionName --output tsv)"
+          if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+            echo "::notice::workflow is ready (revision ${latest})."
+          else
+            echo "::warning::workflow is NOT ready (latest=${latest}, ready=${ready}). An uploaded case will be shown as received but not started until its database role exists and its migrations have run: infra/bootstrap/README.md, section 5."
           fi

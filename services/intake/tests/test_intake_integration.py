@@ -71,6 +71,9 @@ class SameBlobName:
     async def document_exists(self, document_id: str) -> bool:
         return await self.inner.document_exists(document_id)
 
+    async def find_by_idempotency_key(self, idempotency_key: str) -> Document | None:
+        return await self.inner.find_by_idempotency_key(idempotency_key)
+
 
 def rows(settings: Settings, table: str) -> list[tuple[object, ...]]:
     """Every row of one of the two tables, read with a connection of the test's own."""

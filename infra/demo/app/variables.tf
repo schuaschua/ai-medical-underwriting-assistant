@@ -69,6 +69,21 @@ variable "intake_ready_path" {
   type        = string
 }
 
+variable "workflow_port" {
+  description = "Port the workflow container listens on."
+  type        = number
+}
+
+variable "workflow_health_path" {
+  description = "Path of the workflow service's health route, the target of its startup and liveness probes."
+  type        = string
+}
+
+variable "workflow_ready_path" {
+  description = "Path of the workflow service's readiness route, which fails until the database schema is at the migration head bundled in the image."
+  type        = string
+}
+
 variable "otel_sampling_ratio" {
   description = "Share of requests each service traces, from 0 to 1."
   type        = number

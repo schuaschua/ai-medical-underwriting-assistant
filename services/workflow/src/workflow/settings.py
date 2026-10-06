@@ -1,0 +1,144 @@
+"""The one settings object of the `workflow` service (coding-style rule 12)."""
+
+from functools import lru_cache
+from typing import Annotated, Self
+
+from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from contracts.enums import ClassifierContender, RetrieverConfig
+
+# The Dapr app id; also the service name telemetry is reported under, and the
+# name of the one database schema the service owns (spine AD-4).
+APP_ID = "workflow"
+SCHEMA = APP_ID
+# Liveness: the process answers. Kept out of traces, like the readiness route.
+HEALTH_PATH = "/health"
+# Readiness: the database is at the migration head bundled with the service.
+READY_PATH = "/ready"
+
+
+class Settings(BaseSettings):
+    """Read once from environment variables prefixed `WORKFLOW_`."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="WORKFLOW_", extra="ignore", frozen=True
+    )
+
+    # Loopback by default; the container image sets WORKFLOW_HOST to listen on all interfaces.
+    host: str = "127.0.0.1"
+    port: Annotated[int, Field(ge=1, le=65535)] = 8002
+
+    # PostgreSQL. The defaults are the container in compose.yaml, which has no password.
+    database_host: str = "127.0.0.1"
+    database_port: Annotated[int, Field(ge=1, le=65535)] = 5432
+    database_name: str = "aiuw"
+    # The role this process signs in as. The service runs as its own role (in
+    # Azure the one mapped to the service identity, AD-4); migrations run as
+    # the role that owns the schema.
+    database_user: str = "aiuw"
+    # Migrations only: the role the service runs as, which they grant its
+    # rights to. Those rights leave out UPDATE and DELETE on the audit table (AD-8).
+    database_service_role: str | None = None
+    # In Azure the password is an Entra token for the identity, and TLS is required.
+    database_entra_auth: bool = False
+    # No database call waits for ever: opening a connection, one statement, and
+    # a free connection from the pool each have a limit.
+    database_connect_timeout_seconds: Annotated[int, Field(ge=1)] = 10
+    database_statement_timeout_seconds: Annotated[int, Field(ge=1)] = 30
+    database_pool_timeout_seconds: Annotated[float, Field(gt=0)] = 10.0
+    # The most connections the service holds; there is no overflow beyond it.
+    database_pool_size: Annotated[int, Field(ge=1)] = 10
+
+    # AD-5: Azure Durable Task Scheduler. The defaults are the emulator in
+    # compose.yaml, which takes no credential and speaks plain HTTP on loopback.
+    scheduler_endpoint: str = "http://127.0.0.1:8080"
+    scheduler_task_hub: str = "default"
+    # In Azure: sign in to the scheduler with the service identity.
+    scheduler_entra_auth: bool = False
+    # How long one call to the scheduler (start, look up) may take.
+    scheduler_timeout_seconds: Annotated[float, Field(gt=0)] = 10.0
+
+    # AD-6: an activity that fails is tried again, each wait longer than the last.
+    activity_max_attempts: Annotated[int, Field(ge=1)] = 5
+    activity_first_retry_seconds: Annotated[float, Field(gt=0)] = 2.0
+    activity_backoff_coefficient: Annotated[float, Field(ge=1)] = 2.0
+    # How long an activity may wait for its own database work.
+    activity_timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
+    # How many activities the worker runs at once. Each one needs a database
+    # connection, so this is never larger than the pool, and smaller leaves
+    # connections for the HTTP routes.
+    worker_max_concurrent_activities: Annotated[int, Field(ge=1)] = 5
+    # The worker starts only once the schema is at the bundled migration
+    # head; until then the schema is looked at again this often.
+    worker_start_check_seconds: Annotated[float, Field(gt=0)] = 5.0
+    # How long shutdown waits for the worker, then for the scheduler client.
+    shutdown_timeout_seconds: Annotated[float, Field(gt=0)] = 40.0
+
+    # What a case is started with when the start request leaves a field out
+    # (spine, Operations: every field of the start request is optional).
+    default_classifier_contender: ClassifierContender = ClassifierContender.LLM
+    # Spine, Build order: the demo path runs with `r3`.
+    default_retriever_configs: Annotated[list[RetrieverConfig], Field(min_length=1)] = [
+        RetrieverConfig.R3
+    ]
+
+    # Telemetry is exported only when a connection string is set. It is an address,
+    # not a credential, but it is still kept out of logs and reprs.
+    applicationinsights_connection_string: SecretStr | None = None
+    # Share of requests traced (azure.md rule 16).
+    otel_sampling_ratio: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
+    # Client id of the service's user-assigned identity; unset on a developer machine.
+    azure_client_id: str | None = None
+
+    @field_validator(
+        "applicationinsights_connection_string",
+        "azure_client_id",
+        "database_service_role",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        # A variable that is present but empty or blank means "not configured".
+        text = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if isinstance(text, str) and not text.strip():
+            return None
+        return value
+
+    @field_validator("scheduler_endpoint")
+    @classmethod
+    def _endpoint_names_its_scheme(cls, value: str) -> str:
+        # The scheme decides whether the channel is encrypted, so it is never guessed.
+        if not value.startswith(("http://", "https://")):
+            raise ValueError(
+                "the scheduler endpoint must start with http:// or https://"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _defaults_are_a_valid_start(self) -> Self:
+        configs = self.default_retriever_configs
+        if len(set(configs)) != len(configs):
+            raise ValueError("default_retriever_configs must not repeat a value")
+        if self.worker_max_concurrent_activities > self.database_pool_size:
+            raise ValueError(
+                "WORKFLOW_WORKER_MAX_CONCURRENT_ACTIVITIES must not be larger "
+                "than WORKFLOW_DATABASE_POOL_SIZE"
+            )
+        if self.scheduler_entra_auth and not self.scheduler_secure:
+            # A token is never sent over an unencrypted channel.
+            raise ValueError(
+                "WORKFLOW_SCHEDULER_ENTRA_AUTH needs an https:// scheduler endpoint"
+            )
+        return self
+
+    @property
+    def scheduler_secure(self) -> bool:
+        """Whether the scheduler is reached over TLS."""
+        return self.scheduler_endpoint.startswith("https://")
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Build the settings once per process."""
+    return Settings()

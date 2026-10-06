@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     ] = 3500
     # How long a call to another service may take.
     service_timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
+    # Deadlines of a start, a progress read and an audit read, shortest first,
+    # so each caller outlasts the one it calls:
+    #   workflow's scheduler call 10 s (WORKFLOW_SCHEDULER_TIMEOUT_SECONDS)
+    #   <  web 20 s (this setting)  <  browser 30 s (REQUEST_TIMEOUT_MS in the
+    #   SPA's api/client.ts).
+    # This one bounds the whole call to `workflow`, from request to answer, so
+    # the browser shows the server's answer, not its own timeout.
+    lifecycle_timeout_seconds: Annotated[float, Field(gt=0)] = 20.0
     # Upload deadlines, shortest first, so each caller outlasts the one it calls:
     #   intake 90 s (INTAKE_UPLOAD_DEADLINE_SECONDS)  <  web 120 s (this setting)
     #   <  browser 150 s (UPLOAD_TIMEOUT_MS in the SPA's api/client.ts).

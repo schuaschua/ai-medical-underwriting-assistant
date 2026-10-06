@@ -8,14 +8,39 @@ export interface RecordedCall {
   role: string | null;
   contentType: string | null;
   body: BodyInit | null;
+  /** The Idempotency-Key header, when the call carried one. */
+  idempotencyKey?: string;
 }
 
 /** The ids the stand-in gives the next uploaded case. */
 export const UPLOADED = {
   case_id: "019a0000-0000-7000-8000-000000000001",
   document_id: "019a0000-0000-7000-8000-000000000002",
-  status: "running",
 } as const;
+
+/** The answer to a start, as `workflow` gives it with no options sent. */
+export function startedCase(caseId: string, caseStatus = "running") {
+  return {
+    case_id: caseId,
+    case_status: caseStatus,
+    classifier_contender: "llm",
+    retriever_configs: ["r3"],
+    stop_after: null,
+    eval_run_id: null,
+  };
+}
+
+/** The progress of a case with no pages yet. */
+export function caseProgress(caseId: string, caseStatus = "running") {
+  return {
+    case_id: caseId,
+    case_status: caseStatus,
+    redaction_status: "running",
+    pages: [],
+  };
+}
+
+const CASE_ROUTE = /^\/api\/cases\/([^/]+)\/(start|progress)$/;
 
 const NO_TRACE_ID = "0".repeat(32);
 
@@ -34,10 +59,18 @@ export function errorBody(
   return { error: { code, message, trace_id: traceId } };
 }
 
+/**
+ * `respond` may answer any call itself; when it returns nothing, the stand-in
+ * answers as the real service would. It knows which cases were started: the
+ * progress of any other case is 404, as it is on the server.
+ */
 export function fakeServer(
-  respond?: (call: RecordedCall) => Response | Promise<Response>,
+  respond?: (
+    call: RecordedCall,
+  ) => Response | Promise<Response> | undefined | void,
 ) {
   const calls: RecordedCall[] = [];
+  const started = new Set<string>();
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
@@ -48,9 +81,14 @@ export function fakeServer(
         contentType: headers.get("Content-Type"),
         body: init?.body ?? null,
       };
+      const idempotencyKey = headers.get("Idempotency-Key");
+      if (idempotencyKey !== null) {
+        call.idempotencyKey = idempotencyKey;
+      }
       calls.push(call);
-      if (respond !== undefined) {
-        return respond(call);
+      const answer = respond?.(call);
+      if (answer !== undefined) {
+        return answer;
       }
       if (call.path === "/api/me") {
         return call.role === "customer" || call.role === "underwriter"
@@ -71,9 +109,28 @@ export function fakeServer(
               ),
             );
       }
+      const [, caseId, resource] = CASE_ROUTE.exec(call.path) ?? [];
+      if (caseId !== undefined && resource === "start") {
+        if (call.method !== "POST" || call.role !== "customer") {
+          return json(
+            403,
+            errorBody(
+              "role_not_allowed",
+              "This action is not open to your role.",
+            ),
+          );
+        }
+        started.add(caseId);
+        return json(200, startedCase(caseId));
+      }
+      if (caseId !== undefined && resource === "progress") {
+        return started.has(caseId)
+          ? json(200, caseProgress(caseId))
+          : json(404, errorBody("not_found", "That case could not be found."));
+      }
       return json(404, errorBody("not_found", "Not found."));
     },
   );
   vi.stubGlobal("fetch", fetchMock);
-  return { calls };
+  return { calls, started };
 }

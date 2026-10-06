@@ -4,7 +4,8 @@
 #      in containers;
 #   2. the database migrations and the blob containers (tools/migrate-local.sh);
 #   3. the built SPA;
-#   4. each service in dapr.yaml with its Dapr sidecar (so far: web, intake).
+#   4. each service in dapr.yaml with its Dapr sidecar (so far: web, intake,
+#      workflow).
 # Stop with Ctrl+C, then `docker compose down` for the containers.
 set -euo pipefail
 

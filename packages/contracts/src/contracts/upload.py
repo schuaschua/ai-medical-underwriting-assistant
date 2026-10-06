@@ -4,6 +4,8 @@
 before storing it; both call these functions so the rules cannot drift.
 """
 
+import re
+
 from contracts.errors import DomainError, ErrorCode
 
 # AD-3: an upload is at most 10 MB, the redaction service's limit.
@@ -18,6 +20,15 @@ LENGTH_MISMATCH_MESSAGE = "The file did not arrive whole."
 # No real size needs more digits; a longer value is refused unread.
 _MAX_LENGTH_DIGITS = 18
 NOT_A_PDF_MESSAGE = "Only PDF files can be uploaded."
+
+# The header that makes an upload safe to retry: the browser picks one key per
+# upload attempt and sends the same key again when it retries, and `intake`
+# answers a repeat with the case the first call created.
+IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+BAD_IDEMPOTENCY_KEY_MESSAGE = "The request's Idempotency-Key is not valid."
+KEY_REUSED_MESSAGE = "This upload key was already used for a different file."
+# A UUID fits, with or without hyphens; nothing that needs escaping does.
+_IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9_-]{16,64}")
 
 
 def check_upload_size(size: int) -> None:
@@ -36,6 +47,19 @@ def parse_declared_length(value: str | None) -> int | None:
     if not (text.isascii() and text.isdigit() and len(text) <= _MAX_LENGTH_DIGITS):
         raise DomainError(ErrorCode.VALIDATION_FAILED, BAD_LENGTH_MESSAGE)
     return int(text)
+
+
+def parse_idempotency_key(value: str | None) -> str | None:
+    """Read an `Idempotency-Key` header value; a malformed one is `validation_failed`.
+
+    A missing header is allowed: such an upload is simply not safe to retry.
+    """
+    if value is None:
+        return None
+    if _IDEMPOTENCY_KEY_RE.fullmatch(value) is None:
+        # The value itself stays out of the message and the logs.
+        raise DomainError(ErrorCode.VALIDATION_FAILED, BAD_IDEMPOTENCY_KEY_MESSAGE)
+    return value
 
 
 def check_received_length(declared: int | None, received: int) -> None:

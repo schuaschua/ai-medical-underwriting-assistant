@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -20,16 +21,18 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     Uuid,
     event,
     insert,
     select,
 )
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from intake.adapters.credential import azure_credential
 from intake.domain.entities import Case, Document
+from intake.domain.ports import DuplicateUpload
 from intake.settings import APP_ID, SCHEMA, Settings
 
 if TYPE_CHECKING:
@@ -40,6 +43,8 @@ POSTGRESQL_TOKEN_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"  #
 VERSION_TABLE = "alembic_version"
 # A token this close to its end is replaced before it is used.
 TOKEN_REFRESH_MARGIN_SECONDS = 300
+# One upload per idempotency key; a document uploaded without a key has none.
+IDEMPOTENCY_KEY_UNIQUE = "uq_intake_document_idempotency_key"
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +76,8 @@ document_table = Table(
     Column("size_bytes", BigInteger, nullable=False),
     Column("sha256", String(64), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", Text, nullable=True),
+    UniqueConstraint("idempotency_key", name=IDEMPOTENCY_KEY_UNIQUE),
 )
 
 # Alembic's own table, in the service's schema (Conventions, Database).
@@ -101,8 +108,9 @@ class EntraToken:
     """The Entra token that is the database password in Azure (security rule 9).
 
     Fetching a token is a blocking network call. The service fetches it on a
-    worker thread with `refresh` before it opens a connection, so the event
-    loop is never held up; `value` then answers from memory.
+    worker thread with `refresh` before it opens a connection, and does so
+    well ahead of the token's end, so the connection hook (`value`) always
+    finds a valid one in memory and the event loop is never held up.
     """
 
     def __init__(
@@ -112,27 +120,40 @@ class EntraToken:
         self._clock = clock
         self._token: str | None = None
         self._expires_on = 0.0
+        # One fetch at a time: callers that arrive together share its result.
+        self._fetching = threading.Lock()
 
     def _is_fresh(self) -> bool:
+        """Whether the token is far enough from its end to need no refresh yet."""
         return (
             self._token is not None
             and self._expires_on - self._clock() > TOKEN_REFRESH_MARGIN_SECONDS
         )
 
-    def _fetch(self) -> str:
-        token = self._credential.get_token(POSTGRESQL_TOKEN_SCOPE)
-        self._token, self._expires_on = token.token, float(token.expires_on)
-        return token.token
+    def _is_valid(self) -> bool:
+        return self._token is not None and self._expires_on > self._clock()
+
+    def _refresh_if_stale(self) -> str:
+        with self._fetching:
+            if not self._is_fresh() or self._token is None:
+                token = self._credential.get_token(POSTGRESQL_TOKEN_SCOPE)
+                self._token, self._expires_on = token.token, float(token.expires_on)
+            return self._token
 
     async def refresh(self) -> None:
-        """Make sure a usable token is in memory, fetching one off the event loop."""
+        """Make sure a token with time to spare is in memory, fetching off the event loop."""
         if not self._is_fresh():
-            await asyncio.to_thread(self._fetch)
+            await asyncio.to_thread(self._refresh_if_stale)
 
     def value(self) -> str:
-        """The token. Fetches one on the spot only if none is held: migrations do."""
-        if self._token is None or not self._is_fresh():
-            return self._fetch()
+        """The token held, as long as it is valid.
+
+        `refresh` replaces a token while it still has minutes to live, so a
+        connection opened right after it finds one here. Only a caller that
+        never refreshed (migrations, which have no event loop) fetches on the spot.
+        """
+        if self._token is None or not self._is_valid():
+            return self._refresh_if_stale()
         return self._token
 
 
@@ -202,6 +223,15 @@ def _is_missing_relation(error: ProgrammingError) -> bool:
     )
 
 
+def _violates(error: IntegrityError, constraint: str) -> bool:
+    """Whether an insert failed on one named unique constraint."""
+    original = error.orig
+    return (
+        isinstance(original, pg_errors.UniqueViolation)
+        and original.diag.constraint_name == constraint
+    )
+
+
 class SqlCaseRepository:
     """Writes cases and documents. Every statement uses bound parameters (security rule 21)."""
 
@@ -211,22 +241,51 @@ class SqlCaseRepository:
     async def add(self, case: Case, document: Document) -> None:
         """Insert both rows in one transaction, so a failure leaves neither."""
         with tracer.start_as_current_span("intake.db.add_case"):
-            async with self._database.begin() as connection:
-                await connection.execute(
-                    insert(case_table).values(
-                        case_id=case.case_id, created_at=case.created_at
+            try:
+                async with self._database.begin() as connection:
+                    await connection.execute(
+                        insert(case_table).values(
+                            case_id=case.case_id, created_at=case.created_at
+                        )
+                    )
+                    await connection.execute(
+                        insert(document_table).values(
+                            document_id=document.document_id,
+                            case_id=document.case_id,
+                            original_blob_name=document.original_blob_name,
+                            size_bytes=document.size_bytes,
+                            sha256=document.sha256,
+                            created_at=document.created_at,
+                            idempotency_key=document.idempotency_key,
+                        )
+                    )
+            except IntegrityError as error:
+                if _violates(error, IDEMPOTENCY_KEY_UNIQUE):
+                    # The same upload, recorded by a call that got there first.
+                    raise DuplicateUpload from error
+                raise
+
+    async def find_by_idempotency_key(self, idempotency_key: str) -> Document | None:
+        """The document an earlier upload with this key recorded, if there is one."""
+        with tracer.start_as_current_span("intake.db.find_by_idempotency_key"):
+            async with self._database.connect() as connection:
+                result = await connection.execute(
+                    select(document_table).where(
+                        document_table.c.idempotency_key == idempotency_key
                     )
                 )
-                await connection.execute(
-                    insert(document_table).values(
-                        document_id=document.document_id,
-                        case_id=document.case_id,
-                        original_blob_name=document.original_blob_name,
-                        size_bytes=document.size_bytes,
-                        sha256=document.sha256,
-                        created_at=document.created_at,
-                    )
-                )
+                row = result.first()
+        if row is None:
+            return None
+        return Document(
+            document_id=row.document_id,
+            case_id=row.case_id,
+            original_blob_name=row.original_blob_name,
+            size_bytes=row.size_bytes,
+            sha256=row.sha256,
+            created_at=row.created_at,
+            idempotency_key=row.idempotency_key,
+        )
 
     async def document_exists(self, document_id: str) -> bool:
         """Whether the document's row is in the database."""

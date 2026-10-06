@@ -1,0 +1,64 @@
+"""What the lifecycle needs from the outside world; adapters provide it."""
+
+from datetime import datetime
+from enum import StrEnum
+from typing import Protocol
+
+from contracts.enums import CaseStatus
+from contracts.models.workflow import AuditTrail, CaseProgress
+from workflow.domain.entities import CaseRecord
+from workflow.domain.recording import Recording, RecordOutcome
+
+
+class CaseStore(Protocol):
+    """Case and page status and the audit trail (schema `workflow`, AD-4)."""
+
+    async def start(self, case: CaseRecord) -> CaseRecord:
+        """Store the case unless one with its id exists; return the stored one."""
+        ...
+
+    async def status(self, case_id: str) -> CaseStatus | None:
+        """The case's status, or None if the case is unknown."""
+        ...
+
+    async def record(
+        self, recording: Recording, recorded_at: datetime
+    ) -> RecordOutcome:
+        """Write the status changes and the audit event in one transaction, or neither.
+
+        A recording whose audit event is already in the trail writes nothing,
+        and neither does one whose status change may not follow the current
+        status (`domain/transitions.py`); the outcome says which.
+        The trail is append-only: no implementation updates or deletes an event.
+        """
+        ...
+
+    async def progress(self, case_id: str) -> CaseProgress | None:
+        """The case's status and its pages, or None if the case is unknown."""
+        ...
+
+    async def audit_trail(self, case_id: str) -> AuditTrail | None:
+        """The case's audit events in time order, or None if the case is unknown."""
+        ...
+
+
+class EngineState(StrEnum):
+    """What the engine holds for a case after a start."""
+
+    CREATED = "created"  # this call created the orchestration
+    ACTIVE = "active"  # it existed and is still to run, or running
+    COMPLETED = "completed"
+    # It failed or was terminated: nothing will run the case any more.
+    DEAD = "dead"
+
+
+class LifecycleEngine(Protocol):
+    """The orchestration engine (AD-5)."""
+
+    async def ensure_started(self, case: CaseRecord) -> EngineState:
+        """Make sure the case has its one orchestration, whose instance id is the `case_id`.
+
+        Returns the state that orchestration is in. A case that already has
+        one is left exactly as it is, whatever that state.
+        """
+        ...

@@ -28,6 +28,11 @@ services:
     # start-up, and newer builds are published only as `latest`. This is the
     # `latest` of 2026-08-18.
     image: mcr.microsoft.com/dts/dts-emulator@sha256:361323065a608d605f9d3ae56b854eb11f1c47fcc16845a37f948f03ca9c5fac
+    environment:
+      # The task hubs the emulator holds: `default` for the local run of
+      # `workflow`, and one that only its integration tests use, so a test
+      # never hands a case to the service you are running, or the other way round.
+      DTS_TASK_HUB_NAMES: default,aiuw-test
     ports:
       - "127.0.0.1:8080:8080" # the scheduler endpoint (gRPC)
       - "127.0.0.1:8082:8082" # its dashboard

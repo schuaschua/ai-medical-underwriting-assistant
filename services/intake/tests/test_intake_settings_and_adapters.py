@@ -266,6 +266,53 @@ def test_story_1_5_a_token_near_its_end_is_replaced_before_use() -> None:
     assert EntraToken(FakeCredential()).value() == FIRST_TOKEN
 
 
+class SlowCredential(FakeCredential):
+    """A credential whose fetch takes a moment, as a network call does."""
+
+    def get_token(self, *scopes: str, **kwargs: Any) -> Any:
+        time.sleep(0.05)
+        return super().get_token(*scopes, **kwargs)
+
+
+def test_story_1_6_callers_that_arrive_together_share_one_token_fetch() -> None:
+    credential = SlowCredential()
+    token = EntraToken(credential)
+
+    async def scenario() -> None:
+        await asyncio.gather(*(token.refresh() for _ in range(8)))
+
+    asyncio.run(scenario())
+
+    # One fetch, off the event loop; the others waited for it and used it.
+    assert len(credential.threads) == 1
+    assert token.value() == FIRST_TOKEN
+
+
+def test_story_1_6_the_connection_hook_never_fetches_a_token_that_is_still_valid() -> (
+    None
+):
+    now = [1_000_000.0]
+    credential = FakeCredential()
+    token = EntraToken(credential, clock=lambda: now[0])
+
+    async def refreshed_value() -> tuple[str, int]:
+        await token.refresh()
+        return token.value(), threading.get_ident()
+
+    first, loop_thread = asyncio.run(refreshed_value())
+    # Inside the refresh margin but not expired: what a reconnect just after
+    # a refresh can meet. The hook answers from memory, on the loop's thread.
+    now[0] = time.time() + 3600 - TOKEN_REFRESH_MARGIN_SECONDS + 5
+    assert token.value() == first
+    assert len(credential.threads) == 1
+
+    # The next refresh replaces it ahead of its end, off the loop.
+    second, loop_thread = asyncio.run(refreshed_value())
+    assert second != first
+    assert len(credential.threads) == 2
+    assert loop_thread not in credential.threads
+
+
 def test_story_1_5_the_service_refreshes_the_token_before_it_connects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -489,8 +536,11 @@ def test_story_1_5_local_setup_reports_the_containers(
 def test_story_1_5_the_bundled_head_is_the_newest_migration_in_the_package() -> None:
     versions = sorted(path.name for path in (MIGRATIONS_DIR / "versions").glob("*.py"))
 
-    assert versions == ["v0001_case_and_document.py"]
-    assert bundled_head() == "0001"
+    assert versions == [
+        "v0001_case_and_document.py",
+        "v0002_document_idempotency_key.py",
+    ]
+    assert bundled_head() == "0002"
     # Inside the package, so the image carries it.
     assert MIGRATIONS_DIR.parent.name == "intake"
     assert (MIGRATIONS_DIR / "env.py").is_file()

@@ -1,5 +1,8 @@
 """The routes of `intake`: the probes and `POST /cases` (spine, Operations).
 
+`POST /cases` takes an optional `Idempotency-Key` header: a repeat with the
+same key is answered with the case the first call created.
+
 No route here, or anywhere in the service, returns an uploaded original (AD-21).
 """
 
@@ -18,11 +21,13 @@ from contracts.models.intake import CaseCreated
 from contracts.models.web import Health
 from contracts.operations import PDF, get_operation
 from contracts.upload import (
+    IDEMPOTENCY_KEY_HEADER,
     MAX_UPLOAD_BYTES,
     TOO_LARGE_MESSAGE,
     check_received_length,
     check_upload_size,
     parse_declared_length,
+    parse_idempotency_key,
 )
 from intake.adapters.http.errors import UNSUPPORTED_MEDIA_TYPE_MESSAGE
 from intake.domain.ports import CaseRepository, OriginalStore
@@ -115,6 +120,10 @@ def build_router(dependencies: Dependencies) -> APIRouter:
 
     @router.post(create_case_operation.path, status_code=201)
     async def create_case_route(request: Request) -> CaseCreated:
+        # A malformed key is refused before a byte of the body is read.
+        idempotency_key = parse_idempotency_key(
+            request.headers.get(IDEMPOTENCY_KEY_HEADER)
+        )
         # One deadline for the whole call: reading the body, then storing it.
         loop = asyncio.get_running_loop()
         deadline = loop.time() + dependencies.upload_deadline_seconds
@@ -133,6 +142,7 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             repository=dependencies.repository,
             now=dependencies.now,
             deadline_seconds=max(deadline - loop.time(), 0.0),
+            idempotency_key=idempotency_key,
         )
 
     return router
