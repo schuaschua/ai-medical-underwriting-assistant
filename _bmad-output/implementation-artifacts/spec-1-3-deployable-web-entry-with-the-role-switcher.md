@@ -120,6 +120,13 @@ context:
 - Anything in Azure: no plan of `infra/demo/app` (it needs the `foundation` state) and no run of `deploy.yml`. Both files pass their linters (`terraform validate`, `actionlint`) only; in particular the 60-second wait, the revision check (`az resource show` on the app and its revision) and the plan guard have never met a real plan.
 - The checks ran on Node.js 22.19.0, not the 24.21.0 that CI and the image use; npm warned that `jsdom` and `react-router` ask for 22.22 or later.
 
+
+### Proven locally with the real Dapr runtime (2026-10-07, main session, after the owner ran `dapr init`)
+
+- `./tools/dev.sh` started the containers, ran the migrations, built the SPA and started `web`, `intake` and `workflow` with their sidecars (Dapr runtime 1.18.4). `/api/health` 200, `intake` and `workflow` `/ready` 200, `/` served the SPA as HTML, `/api/me` answered through the same origin.
+- Through the sidecars: an upload of `data/cases/case-002.pdf` answered 201; a retry with the same idempotency key returned the same case; a 6.3 MB PDF answered 201 (so the 16 MB sidecar limit holds above Dapr's 4 MB default); an 11 MB file answered 413 `file_too_large`; start answered 200 `running` and a repeat gave the same answer; a customer start with options answered 403; progress answered 200 with no pages; audit answered 403 for the customer and 200 for the underwriter; an underwriter upload answered 403.
+- Still unproven: the same path in the deployed Azure environment.
+
 ## Spec Change Log
 
 ## Review Triage Log

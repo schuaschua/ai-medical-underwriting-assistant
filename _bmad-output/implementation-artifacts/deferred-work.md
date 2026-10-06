@@ -43,7 +43,7 @@
   summary: Have the deploy show its plan for review before applying, once the first-build exception is closed.
   evidence: `deploy.yml` plans and applies in one job; `terraform.md` rule 26 wants a reviewed plan. Covered until the demo environment is up by the recorded exception.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
-  summary: Run `dapr init` once on the developer machine and prove `./tools/dev.sh` end to end.
+  summary: DONE 2026-10-07. Run `dapr init` once on the developer machine and prove `./tools/dev.sh` end to end.
   evidence: The Dapr runtime is not initialised here and `dapr init` installs outside the project folder, which the agent may not do. Needs the owner (Darrel).
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
   summary: Make an upload safe to retry (an idempotency key from the browser, or deduplication) so a timeout does not create a second case.

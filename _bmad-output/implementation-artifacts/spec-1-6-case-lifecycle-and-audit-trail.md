@@ -98,6 +98,13 @@ context:
 
 - **After review.** Status changes follow one transition table (`domain/transitions.py`), applied in the statement that makes the change; a late, repeated or out-of-order result writes nothing and has its own outcome. The orchestration marks a case failed (case-level `stage.failed`, ref = the case id, actor `workflow:case-lifecycle`) when its first step fails on every retry or answers with an error no retry can mend; a repeat start reports a case whose orchestration is dead as failed. A trigger (migration `0002`) refuses UPDATE, DELETE and TRUNCATE on the audit table for every role, a downgrade is refused while it holds rows, and readiness fails if the connected role could change the trail. The worker starts only once the schema is at the bundled head. Start options are accepted by `web` only from the underwriter role.
 
+
+### Proven locally with the real Dapr runtime (2026-10-07, main session, after the owner ran `dapr init`)
+
+- `./tools/dev.sh` started the containers, ran the migrations, built the SPA and started `web`, `intake` and `workflow` with their sidecars (Dapr runtime 1.18.4). `/api/health` 200, `intake` and `workflow` `/ready` 200, `/` served the SPA as HTML, `/api/me` answered through the same origin.
+- Through the sidecars: an upload of `data/cases/case-002.pdf` answered 201; a retry with the same idempotency key returned the same case; a 6.3 MB PDF answered 201 (so the 16 MB sidecar limit holds above Dapr's 4 MB default); an 11 MB file answered 413 `file_too_large`; start answered 200 `running` and a repeat gave the same answer; a customer start with options answered 403; progress answered 200 with no pages; audit answered 403 for the customer and 200 for the underwriter; an underwriter upload answered 403.
+- Still unproven: the same path in the deployed Azure environment.
+
 ## Spec Change Log
 
 ## Review Triage Log
