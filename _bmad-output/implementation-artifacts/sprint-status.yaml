@@ -1,0 +1,79 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-06-2026 14:30
+last_updated: 10-06-2026 14:30
+project: ai-medical-underwriting-assistant
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+development_status:
+  epic-1: backlog
+  1-1-shared-contracts-package: backlog
+  1-2-azure-foundation-for-the-demo-environment: backlog
+  1-3-deployable-web-entry-with-the-role-switcher: backlog
+  1-4-first-synthetic-case-documents: backlog
+  1-5-upload-a-document-and-see-the-case: backlog
+  1-6-case-lifecycle-and-audit-trail: backlog
+  1-7-pii-redaction-before-anything-else-reads-the-document: backlog
+  1-8-page-classification-with-a-confidence-and-a-reason: backlog
+  1-9-gate-routing-and-per-page-progress: backlog
+  1-10-customer-keeps-or-discards-a-non-medical-page: backlog
+  1-11-underwriter-triage-queue: backlog
+  1-12-audit-trail-view-for-a-case: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-synthetic-underwriting-manual-and-rule-table: backlog
+  2-2-manual-ingested-into-pgvector-as-smart-chunks: backlog
+  2-3-search-the-manual-for-rules: backlog
+  2-4-fact-extraction-with-checked-quotes: backlog
+  2-5-suggested-verdict-with-cited-reasons: backlog
+  2-6-rules-that-send-a-case-to-the-underwriter: backlog
+  2-7-result-view-with-clickable-citations: backlog
+  2-8-query-the-agent-s-log: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-full-synthetic-case-set-with-its-answer-key: backlog
+  3-2-baseline-rows-r1-and-r2: backlog
+  3-3-row-r5-on-azure-ai-search: backlog
+  3-4-bake-off-runner-scores-the-rows: backlog
+  3-5-retrieval-scoreboard: backlog
+  3-6-compare-two-rows-on-one-case: backlog
+  3-7-row-r4-with-a-reranker: backlog
+  3-8-row-r6-with-agentic-retrieval: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-scored-page-set-and-separate-training-set: backlog
+  4-2-document-intelligence-classifier-trained-and-available: backlog
+  4-3-runner-scores-both-classifiers-and-the-scoreboard-shows-the: backlog
+  epic-4-retrospective: optional
