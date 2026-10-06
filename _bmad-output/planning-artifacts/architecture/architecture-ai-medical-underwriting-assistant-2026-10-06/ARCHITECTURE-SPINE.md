@@ -205,7 +205,7 @@ Row `r6` needs Azure AI Search's preview API (`2026-08-01-preview`): the stable 
 
 - **Binds:** CAP-8, CAP-9; all AI-calling services
 - **Prevents:** contenders or stages quietly using different models, which breaks bake-off fairness.
-- **Rule:** All services use the same chat model deployment and the same embedding deployment on one Foundry account, reached with managed identity. Deployment names reach code only as settings. Each deployment is pinned to an exact model version with auto-upgrade off and the default content filter. Prompts live in the owning service's `prompts/` folder under version control. Each service calls the model through one gateway module, which retries a 429 or 5xx up to three times, honouring `Retry-After`, then raises `model_unavailable`.
+- **Rule:** All services use the same chat model deployment and the same embedding deployment on one Foundry account, reached with managed identity. Deployment names reach code only as settings. Both deployments are Global Standard, the cheapest type offered in West US 3, so model processing can happen outside the region. Each deployment is pinned to an exact model version with auto-upgrade off and the default content filter. Prompts live in the owning service's `prompts/` folder under version control. Each service calls the model through one gateway module, which retries a 429 or 5xx up to three times, honouring `Retry-After`, then raises `model_unavailable`.
 
 ### AD-17 — Bake-off scores come from one runner and are published as files
 
@@ -534,6 +534,8 @@ These were not chosen by Darrel. Each stands until corrected.
 | `security.md` rules 12, 18 | No per-turn credential and no per-user rate limit: there are no users (AD-9) | Darrel (project owner), 2026-10-06 | Same |
 | `security.md` rule 15 | `read_rule` takes a `rule_id` chosen by the model, checked server-side against the run (AD-15) | Darrel (project owner), 2026-10-06 | Same |
 | `security.md` rule 19 | No alert on AI writes; the audit trail and the queryable agent step log (AD-15) are the record | Darrel (project owner), 2026-10-06 | Same |
+| `security.md` rule 3 | Global Standard model deployments process synthetic data outside West US 3 (AD-16) | Darrel (project owner), 2026-10-06 | Before real data |
+| `terraform.md` rules 26 and 33 | For the first build, the agent may apply approved-in-advance plans and start deploys without a human reviewing each plan | Darrel (project owner), 2026-10-06 | The demo environment is up |
 | `coding-style.md` rule 23 | The eval runner writes cases to the one deployed environment (AD-17) | Darrel (project owner), 2026-10-06 | A second environment exists |
 | `security.md` rule 29 | One pre-release package, `azure-search-documents` 12.1.0b2, named here for `r6` (AD-11) | Darrel (project owner), 2026-10-06 | The stable SDK supports LLM query planning |
 | `azure.md` service set | Azure AI Search, Document Intelligence, Azure AI Language, Durable Task Scheduler and a Storage account are added (AD-5, AD-11, AD-13, AD-18, AD-21) | Spec constraint; Darrel, 2026-10-06 | Not applicable |
@@ -559,7 +561,6 @@ Accepted risk: anyone who finds the public URL can upload PDFs and spend model t
 
 - No architecture principles were agreed: Darrel skipped Da Vinci's principles round, and `docs/architecture/architecture.md` does not exist.
 - Foundry now lists newer chat models than `gpt-5.4`. Keep it, or move up before deployments are pinned?
-- Which Foundry deployment type will `westus3` use? A Global Standard deployment processes data outside the region and needs a `security.md` rule 3 exception (allowed for synthetic data).
 - Azure AI Language's document redaction: the overview names API version 2026-05-01 as generally available, the how-to samples still use a preview version. Confirm the version at build.
 - Redaction does not process text inside embedded images, so a photographed ID pasted into a page could keep its identifiers. Accept for the POC, or keep such pages out of the case set?
 - Will the redaction service mask a synthetic policy number, which is not a standard category? Test with the first synthetic case.

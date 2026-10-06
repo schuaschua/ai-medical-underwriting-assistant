@@ -136,3 +136,4 @@ Projects record their own deviations from this baseline here, each with who appr
 
 | Rule | Exception | Approved by (role) and date | Close by |
 | --- | --- | --- | --- |
+| 26, 33 | For the first build of the demo environment, the coding agent may apply plans and start deploys without a human reviewing each plan. | Project owner (Darrel), 2026-10-06 | The demo environment is up |

@@ -77,6 +77,7 @@ Projects record here the known gaps they accept (and declare in their Technical 
 | Rule 15: the verdict agent's `read_rule` tool takes a `rule_id` chosen by the model, checked server-side against the ids seen in that run (AD-15). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
 | Rule 19: no alert on AI writes; the audit trail and the queryable agent step log are the record (AD-8, AD-15). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
 | Rule 29: one pre-release package, `azure-search-documents` 12.1.0b2, is named in the architecture spine for retrieval row `r6` (AD-11). | Project owner (Darrel), 2026-10-06 | The stable SDK supports LLM query planning |
+| Rule 3: the Foundry model deployments are Global Standard, so synthetic data is processed outside West US 3 (architecture spine AD-16). | Project owner (Darrel), 2026-10-06 | Before real data |
 | Accepted risk: anyone who finds the public URL can upload PDFs and spend model tokens while the environment runs; bounded only by the budget alerts, low model deployment capacity and the compute ceilings. | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
 
 ## 10. Reporting
