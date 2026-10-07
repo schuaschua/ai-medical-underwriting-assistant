@@ -723,7 +723,7 @@ EXTRACTION_DATABASE_ENTRA_AUTH=true \
   uv run alembic -c services/extraction/alembic.ini upgrade head
 ```
 
-**Step 3. Grants.** The service role gets data rights on its own schema and nothing else: no `CREATE`, because only migrations change the schema, and read-only on the version table, so the service can check its revision but never change it. Sequences are included for tables that later get one. The schema and its tables are handed to the pipeline's role, so that it owns them as the spine's conventions say and its later migrations need no further grant.
+**Step 3. Grants.** The service role gets, table by table, the rights its code uses and nothing else. On `fact_set` all four data rights: a key row is inserted as `running`, updated when its result is stored or a stale one is taken over, and deleted when it is given up for a repeat. On `fact` only `SELECT` and `INSERT`: a fact is written once with its fact set's result and never changed or removed, so the role cannot alter a stored quote or its verification. No `CREATE`, because only migrations change the schema, and read-only on the version table, so the service can check its revision but never change it. Nothing is granted by default on tables a later migration adds: add each new table's line to this step with the migration that creates it. Sequences are included for tables that later get one. The schema and its tables are handed to the pipeline's role, so that it owns them as the spine's conventions say and its later migrations need no further grant.
 
 ```bash
 psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
@@ -755,15 +755,17 @@ END
 \$\$;
 
 GRANT USAGE ON SCHEMA extraction TO "$SERVICE_ROLE";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA extraction TO "$SERVICE_ROLE";
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA extraction TO "$SERVICE_ROLE";
+-- The key row of a page's extraction: inserted, settled or taken over, released.
+GRANT SELECT, INSERT, UPDATE, DELETE ON extraction.fact_set TO "$SERVICE_ROLE";
+-- Facts are added and read, never changed or removed.
+GRANT SELECT, INSERT ON extraction.fact TO "$SERVICE_ROLE";
 -- The version table is read-only for the service.
-REVOKE INSERT, UPDATE, DELETE ON extraction.alembic_version FROM "$SERVICE_ROLE";
+GRANT SELECT ON extraction.alembic_version TO "$SERVICE_ROLE";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA extraction TO "$SERVICE_ROLE";
 
--- Tables and sequences that later migrations add, run by the pipeline's role.
--- This needs membership of that role, granted in step 1.
-ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA extraction
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "$SERVICE_ROLE";
+-- Sequences that later migrations add, run by the pipeline's role. This needs
+-- membership of that role, granted in step 1. Tables get no default grant:
+-- each new table is granted by name above.
 ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA extraction
   GRANT USAGE, SELECT ON SEQUENCES TO "$SERVICE_ROLE";
 SQL
@@ -776,11 +778,11 @@ cleanup; trap - EXIT
 az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
 ```
 
-Then the `extraction` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run. Its other access, to the chat deployment it shares with `extraction`, is the Azure role Foundry User on the Foundry project, which the `app` stack assigns; nothing is done for it here. It holds no role on storage: it reads pages from `intake` through Dapr.
+Then the `extraction` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run. Its other access, to the chat deployment it shares with `classification`, is the Azure role Foundry User on the Foundry project, which the `app` stack assigns; nothing is done for it here. It holds no role on storage: it reads pages from `intake` through Dapr.
 
 `workflow` gets a migration with this story too (`0006`, table `decision_told`, with SELECT and INSERT for the service role): run section 5's upgrade steps for it in the same session, or `workflow` reports "not ready" and its worker does not start.
 
-**Upgrading an environment that is already set up.** Not yet run. When `extraction` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2 alone: the migrations bring the schema to the new head, and the default privileges of step 3 already cover tables and sequences that the pipeline's role creates. Run step 3 again only when a migration added objects while you, not the pipeline's role, ran it: the step hands every table and sequence in the schema over and repeats the grants, and is safe to run again. Finish with step 4. Until the migration step has run, `extraction` reports "not ready", because its image carries a newer head than the database.
+**Upgrading an environment that is already set up.** Not yet run. When `extraction` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2. If the migration added a table, add its grant to step 3 (the rights its code uses, by name) and run step 3 again: tables get no default grant here, and the step hands every table and sequence in the schema over and repeats the grants, so it is safe to run again. Finish with step 4. Until the migration step has run, `extraction` reports "not ready", because its image carries a newer head than the database.
 
 ## Out-of-band log
 

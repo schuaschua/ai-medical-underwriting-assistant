@@ -136,6 +136,8 @@ def status_after(event: AuditRecord) -> PageStatus:
         return PageStatus(event.detail.route)
     if event.action is AuditAction.STAGE_FAILED:
         return PageStatus.FAILED
+    if event.action is AuditAction.FACTS_EXTRACTED:
+        return PageStatus.EXTRACTED
     return _STATUS_AFTER_DECISION[event.action]
 
 
@@ -188,10 +190,13 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
     actions = [(event.action.value, event.page_id) for event in trail.events]
     # Story 1.13: the start first, by the role that asked for it. Then the
     # redaction, once; then per page its classification, its route and its
-    # decisions, each cause before its effect. Two pages are still being
-    # extracted, so the case is not completed and the trail does not say so.
+    # decisions, each cause before its effect. The two pages that reached
+    # `extracting`, one by the gate and one by an accept, are extracted
+    # (story 2.4), and with the last page final the case is completed: that
+    # is the trail's last event.
     assert actions[:2] == [("case.started", None), ("document.redacted", None)]
-    assert sorted(actions[2:]) == sorted(
+    assert actions[-1] == ("case.completed", None)
+    assert sorted(actions[2:-1]) == sorted(
         [("page.classified", page) for page in (first, second, third, fourth)]
         + [("page.routed", page) for page in (first, second, third, fourth)]
         + [
@@ -199,13 +204,21 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
             ("page.kept", second),
             ("page.accepted", second),
             ("page.denied", third),
+            ("facts.extracted", second),
+            ("facts.extracted", fourth),
         ]
     )
     for page_id, chain in {
         first: ["page.classified", "page.routed", "page.discarded"],
-        second: ["page.classified", "page.routed", "page.kept", "page.accepted"],
+        second: [
+            "page.classified",
+            "page.routed",
+            "page.kept",
+            "page.accepted",
+            "facts.extracted",
+        ],
         third: ["page.classified", "page.routed", "page.denied"],
-        fourth: ["page.classified", "page.routed"],
+        fourth: ["page.classified", "page.routed", "facts.extracted"],
     }.items():
         assert [action for action, page in actions if page == page_id] == chain
     # Each with its actor as recorded: the service and what did the work
@@ -222,6 +235,8 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
         ("page.kept", ActorKind.HUMAN, "customer"),
         ("page.accepted", ActorKind.HUMAN, "underwriter"),
         ("page.denied", ActorKind.HUMAN, "underwriter"),
+        ("facts.extracted", ActorKind.AI, "extraction:chat-main"),
+        ("case.completed", ActorKind.AI, "workflow:case-lifecycle"),
     }
     assert all(event.error_code is None for event in trail.events)
     assert all(event.occurred_at.utcoffset() == timedelta(0) for event in trail.events)
@@ -238,10 +253,15 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
         "awaiting_customer",
         "awaiting_triage",
         "extracting",
+        "extracted",
     ]
     assert [status.value for status in walked[first]][-1] == "discarded"
     assert [status.value for status in walked[third]][-1] == "denied"
-    assert [status.value for status in walked[fourth]][-1] == "extracting"
+    assert [status.value for status in walked[fourth]][-2:] == [
+        "extracting",
+        "extracted",
+    ]
+    assert progress.case_status.value == "completed"
 
 
 def test_story_1_12_a_failed_stage_is_in_the_trail_with_its_error_code(

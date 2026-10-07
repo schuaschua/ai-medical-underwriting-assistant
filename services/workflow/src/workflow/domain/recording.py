@@ -91,6 +91,12 @@ class Recording:
     page_change: PageChange | None = None
     # Set for a human decision; stored as its own row with the event (AD-10).
     decision: PageDecision | None = None
+    # Set for a done page stage result: once it is written, the store gives
+    # the case the status its pages then give it (`domain/case_status.py`),
+    # in the same transaction. That is how the last page reaching a final
+    # status completes the case, with its `case.completed` event. A
+    # recording never names `completed` itself.
+    follows_pages: bool = False
 
 
 # The page status a done stage result leaves its page in.
@@ -107,8 +113,8 @@ def plan_recording(result: StageResult) -> Recording:
 
     A failed result fails the case, and its page if it names one. A done
     redaction starts the tracking of its pages; a done classification or
-    extraction moves its page on. Nothing here routes a page: the gate is
-    a rule of its own (AD-7).
+    extraction moves its page on, and the case status then follows the
+    pages. Nothing here routes a page: the gate is a rule of its own (AD-7).
     """
     audit = result.audit
     # A page stage's record is about that stage's page; a case-level stage's
@@ -141,7 +147,9 @@ def plan_recording(result: StageResult) -> Recording:
     page_status = _PAGE_STATUS_WHEN_DONE.get(audit.action)
     if page_status is not None and audit.page_id is not None:
         return Recording(
-            audit=audit, page_change=PageChange(audit.page_id, page_status)
+            audit=audit,
+            page_change=PageChange(audit.page_id, page_status),
+            follows_pages=True,
         )
     return Recording(audit=audit)
 

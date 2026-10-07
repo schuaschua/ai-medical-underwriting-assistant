@@ -126,6 +126,23 @@ class Settings(BaseSettings):
     # started after it, and a case in flight goes on with the value it has.
     gate_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = DEFAULT_GATE_THRESHOLD
 
+    # AD-5: a decision is stored first and its orchestration told after. The
+    # service itself looks, this often, for stored decisions that carry no
+    # mark of having been told, and tells them: a waiting case does not
+    # depend on the browser repeating the decision. A timer of the service,
+    # never of the orchestration.
+    decision_tell_interval_seconds: Annotated[float, Field(gt=0)] = 15.0
+    # A decision younger than this is left alone: the request that stored it
+    # is still telling it.
+    decision_tell_grace_seconds: Annotated[float, Field(ge=0)] = 30.0
+    # No decision is ever given up. After a look that failed (the scheduler
+    # or the database could not be reached) the wait before the next look
+    # doubles, up to this long; a look that worked brings it back to the
+    # interval above.
+    decision_tell_max_interval_seconds: Annotated[float, Field(gt=0)] = 300.0
+    # How many decisions one look takes at most.
+    decision_tell_batch_size: Annotated[int, Field(ge=1, le=1000)] = 50
+
     # How many pages one read of a queue (`GET /pages?status=`) lists at most.
     # When more wait, the answer says so and the rest follow as pages are decided.
     page_queue_limit: Annotated[int, Field(ge=1, le=1000)] = DEFAULT_PAGE_QUEUE_LIMIT

@@ -24,8 +24,10 @@ from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
     StoreDown,
+    activity_task,
     after_start,
     classification_failed,
+    finish_extractions,
     starting,
 )
 
@@ -47,6 +49,7 @@ from contracts.ids import new_id
 from contracts.models.workflow import DecisionRecorded, DecisionRequest
 from workflow.adapters import orchestration, scheduler
 from workflow.adapters.orchestration import (
+    EXTRACT_FACTS,
     MARK_CASE_FAILED,
     SETTLE_CASE_AFTER_GATE,
     build_case_lifecycle,
@@ -116,7 +119,11 @@ def gated_case(
             case_id, eval_run_id=parameters.eval_run_id, trace_context={}
         )
         await record_stage_result(redacted, store=store)
-        for page_id, route in zip(redacted.page_ids, routes, strict=True):
+        # As the lifecycle does it: every page is classified, then every
+        # page is routed. A stage result lets the case status follow the
+        # pages (story 2.4), so the order is the real one.
+        classified = []
+        for page_id in redacted.page_ids:
             result = await stages.classify_page(
                 case_id,
                 page_id,
@@ -125,6 +132,10 @@ def gated_case(
                 trace_context={},
             )
             await record_stage_result(result, store=store)
+            classified.append(result)
+        for page_id, route, result in zip(
+            redacted.page_ids, routes, classified, strict=True
+        ):
             await record_route(
                 case_id,
                 page_id,
@@ -1132,7 +1143,7 @@ class WaitingContext:
 
     def call_activity(self, activity: str, **options: Any) -> object:
         self.asked.append({"activity": activity, **options})
-        return task.CompletableTask[Any]()
+        return activity_task(self, activity, options)
 
     def wait_for_external_event(self, name: str, **options: Any) -> object:
         waiting = task.CompletableTask[Any]()
@@ -1260,7 +1271,9 @@ def raise_events(context: WaitingContext, steps: Any, events: list[Raised]) -> A
             steps.send(waiting)
         except StopIteration as done:
             return done.value
-    return None
+    # Story 2.4: a page that reached `extracting`, by the gate or by an
+    # accept, is extracted now; each such extraction is answered as done.
+    return finish_extractions(steps, context)
 
 
 def test_story_1_10_the_lifecycle_waits_for_a_decision_about_each_waiting_page(
@@ -1277,9 +1290,15 @@ def test_story_1_10_the_lifecycle_waits_for_a_decision_about_each_waiting_page(
         decision_event(page_ids[1], PageStatus.AWAITING_CUSTOMER),
         decision_event(page_ids[2], PageStatus.AWAITING_TRIAGE),
     ]
-    # External events only: never a timer, and no activity that looks.
+    # External events only: never a timer, and no activity that looks. The
+    # one activity after the settle is the extraction of the page the gate
+    # sent on (story 2.4), which runs beside the waits.
     assert context.timers == 0
-    assert context.asked[-1]["activity"] == SETTLE_CASE_AFTER_GATE
+    assert [step["activity"] for step in context.asked[-2:]] == [
+        SETTLE_CASE_AFTER_GATE,
+        EXTRACT_FACTS,
+    ]
+    assert context.asked[-1]["input"]["page_id"] == page_ids[0]
     source = inspect.getsource(orchestration)
     assert "create_timer" not in source
     assert "sleep" not in source
@@ -1322,10 +1341,11 @@ def test_story_1_10_the_lifecycle_goes_on_page_by_page_as_decisions_arrive(
     [
         (["awaiting_customer"], ["discard"], "completed"),
         (["awaiting_customer"], ["keep", "deny"], "completed"),
-        # An accepted page is in work: extraction comes with story 2.4.
-        (["awaiting_customer"], ["keep", "accept"], "running"),
-        (["awaiting_triage"], ["accept"], "running"),
-        (["awaiting_triage", "extracting"], ["deny"], "running"),
+        # An accepted page is extracted (story 2.4), and so is one the gate
+        # sent on: the lifecycle ends once those extractions are done.
+        (["awaiting_customer"], ["keep", "accept"], "completed"),
+        (["awaiting_triage"], ["accept"], "completed"),
+        (["awaiting_triage", "extracting"], ["deny"], "completed"),
     ],
 )
 def test_story_1_10_the_lifecycle_ends_when_no_page_waits(
@@ -1392,7 +1412,8 @@ def test_story_1_10_a_page_decided_before_the_settle_is_not_waited_for(
     # Their events, raised before the settle, come all the same: nothing
     # waits under those names, and nothing is thrown off by them.
     result = raise_events(context, steps, [keeps(kept), accepts(kept), discards(third)])
-    assert result == {"case_id": case_id, "case_status": "running"}
+    # The accepted page is extracted (story 2.4), and then every page is final.
+    assert result == {"case_id": case_id, "case_status": "completed"}
 
 
 @pytest.mark.parametrize(
@@ -1525,7 +1546,7 @@ def test_story_1_10_the_waits_are_replayed_the_same_way(case_id: str) -> None:
         return waits, result["case_status"]
 
     assert run() == run()
-    assert run()[1] == "running"
+    assert run()[1] == "completed"
     # Deterministic: no clock, no random value, no I/O in the orchestrator.
     source = inspect.getsource(orchestration.build_case_lifecycle)
     for forbidden in ("datetime", "time.", "random", "uuid", "new_id", "await "):

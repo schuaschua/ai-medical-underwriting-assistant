@@ -30,8 +30,10 @@ from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
     SidecarStandIn,
+    activity_task,
     after_start,
     classification_done,
+    finish_extractions,
     starting,
 )
 
@@ -91,7 +93,7 @@ class RecordingContext:
 
     def call_activity(self, activity: str, **options: Any) -> object:
         self.asked.append({"activity": activity, **options})
-        return task.CompletableTask[Any]()
+        return activity_task(self, activity, options)
 
 
 def run_lifecycle(
@@ -120,7 +122,12 @@ def run_lifecycle(
         except StopIteration as done:
             return context.asked, done.value, asked_at_each_wait
         asked_at_each_wait.append(len(context.asked))
-    raise AssertionError("the orchestrator waited for more than it was answered")
+    # Story 2.4: what is left to answer are the extractions of the pages
+    # that reached `extracting`; each is answered as done.
+    finished = finish_extractions(steps, context)
+    if finished is None:
+        raise AssertionError("the orchestrator waited for more than it was answered")
+    return context.asked, finished, asked_at_each_wait
 
 
 def redacted(page_ids: list[str]) -> dict[str, Any]:
@@ -166,9 +173,10 @@ def test_story_1_8_after_redaction_every_page_is_classified_by_a_command_of_its_
     ]
     # In parallel: all three were asked for before the orchestrator waited.
     assert asked_at_each_wait[:3] == [1, 2, 5]
-    # The pages are classified and the case goes on running; what follows is
-    # the gate (story 1.9, test_workflow_gate.py).
-    assert result == {"case_id": case_id, "case_status": "running"}
+    # The pages are classified; what follows is the gate (story 1.9,
+    # test_workflow_gate.py) and, for pages it sends on, extraction (story
+    # 2.4), after which the case is complete.
+    assert result == {"case_id": case_id, "case_status": "completed"}
 
 
 def test_story_1_8_a_case_started_with_another_contender_is_classified_with_that_one(

@@ -5,6 +5,7 @@ Unit tests use them in place of PostgreSQL and the Durable Task Scheduler
 so the service package and its image hold no test code.
 """
 
+import asyncio
 import json
 import re
 import threading
@@ -14,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from durabletask import task
 
 from contracts.audit import AuditAction, AuditRecord, RouteDetail
 from contracts.decisions import STATUSES_AWAITING_A_DECISION
@@ -44,7 +46,7 @@ from workflow.domain.case_list import waiting_page_count
 from workflow.domain.case_status import case_status_after_gate, case_status_following
 from workflow.domain.decisions import case_takes_decisions
 from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
-from workflow.domain.ports import EngineState
+from workflow.domain.ports import EngineState, Told
 from workflow.domain.queue import queued_by
 from workflow.domain.recording import (
     Decided,
@@ -128,6 +130,10 @@ class MemoryCaseStore:
     pages: dict[str, MemoryPage] = field(default_factory=dict)
     events: list[tuple[datetime, Recording]] = field(default_factory=list)
     decisions: list[PageDecision] = field(default_factory=list)
+    # Story 2.4: the decisions an orchestration was told of, by decision id.
+    told_decisions: dict[str, datetime] = field(default_factory=dict)
+    # The mark cannot be written.
+    fail_marks: bool = False
     fail: bool = False
     # The audit event cannot be written: everything before it is undone.
     fail_audit_insert: bool = False
@@ -205,6 +211,12 @@ class MemoryCaseStore:
             case = replace(case, redaction_status=recording.redaction_status)
         self.cases[audit.case_id] = case
         self.events.append((recorded_at, recording))
+        if recording.follows_pages:
+            # As the real store: after the result's own event, so that a
+            # completion is the trail's last event.
+            self._follow_pages(
+                audit.case_id, recorded_at, at_the_gate=False, trace_id=audit.trace_id
+            )
         return RecordOutcome.RECORDED
 
     async def route_of(
@@ -307,6 +319,29 @@ class MemoryCaseStore:
         return self._follow_pages(
             case_id, settled_at, at_the_gate=True, trace_id=trace_id
         )
+
+    async def mark_decision_told(self, decision_id: str, told_at: datetime) -> None:
+        if self.fail or self.fail_marks:
+            raise StoreDown
+        self.told_decisions.setdefault(decision_id, told_at)
+
+    async def decisions_not_told(
+        self, decided_before: datetime, limit: int
+    ) -> list[PageDecision]:
+        if self.fail:
+            raise StoreDown
+        untold = sorted(
+            (
+                decision
+                for decision in self.decisions
+                if decision.decision_id not in self.told_decisions
+                # As the real store: a failed case has no lifecycle to tell.
+                and self.cases[decision.case_id].case_status is not CaseStatus.FAILED
+                and decision.occurred_at < decided_before
+            ),
+            key=lambda decision: (decision.occurred_at, decision.decision_id),
+        )
+        return untold[:limit]
 
     async def progress(self, case_id: str) -> CaseProgress | None:
         if self.fail:
@@ -455,6 +490,13 @@ class FakeEngine:
     told: list[tuple[str, str, PageStatus, Decision]] = field(default_factory=list)
     # The engine cannot be told: no event is raised.
     fail_events: bool = False
+    # Only the next this many attempts to tell it fail.
+    failing_events: int = 0
+    # Story 2.4: what the engine finds when it is asked to tell a decision:
+    # an orchestration to tell, or one that has ended, is missing or is dead.
+    orchestration: Told = Told.TOLD
+    # How often it was asked to tell a decision, reached or not.
+    tell_attempts: int = 0
 
     async def ensure_started(self, case: CaseRecord) -> EngineState:
         self.calls.append(case.case_id)
@@ -467,10 +509,16 @@ class FakeEngine:
 
     async def decision_made(
         self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
-    ) -> None:
+    ) -> Told:
+        self.tell_attempts += 1
         if self.fail_events:
             raise StoreDown
-        self.told.append((case_id, page_id, awaited, decision))
+        if self.failing_events > 0:
+            self.failing_events -= 1
+            raise StoreDown
+        if self.orchestration is Told.TOLD:
+            self.told.append((case_id, page_id, awaited, decision))
+        return self.orchestration
 
 
 @dataclass
@@ -642,6 +690,34 @@ def facts_done(case_id: str, page_id: str, **audit_changes: Any) -> FactSetResul
     )
 
 
+def facts_failed(
+    case_id: str,
+    page_id: str,
+    error_code: str = "invalid_model_output",
+    **audit_changes: Any,
+) -> FactSetResult:
+    fact_set_id = new_id()
+    return FactSetResult.model_validate(
+        {
+            "case_id": case_id,
+            "status": "failed",
+            "error_code": error_code,
+            "audit": audit_record(
+                case_id,
+                "stage.failed",
+                actor="extraction:chat-main",
+                page_id=page_id,
+                ref=fact_set_id,
+                **audit_changes,
+            ),
+            "fact_set_id": fact_set_id,
+            "page_id": page_id,
+            "fact_ids": [],
+            "unverified_count": 0,
+        }
+    )
+
+
 def verdict_done(case_id: str) -> VerdictRunResult:
     verdict_run_id = new_id()
     return VerdictRunResult.model_validate(
@@ -669,8 +745,8 @@ def verdict_done(case_id: str) -> VerdictRunResult:
 class FakeStages:
     """Stands in for the stage services: each answers its command as it would.
 
-    A case is redacted once and a page is classified once; every repeat gets
-    the stored result (AD-6).
+    A case is redacted once, and a page is classified once and extracted
+    once; every repeat gets the stored result (AD-6).
     """
 
     # What the stage does with a case it has no result for: "done" or "failed".
@@ -697,6 +773,20 @@ class FakeStages:
         default_factory=dict
     )
     classify_calls: list[tuple[str, str, str, str | None, dict[str, str]]] = field(
+        default_factory=list
+    )
+    # Extraction (story 2.4). What the stage does with a page it has no fact
+    # set for: "done" or "failed"; or, by page number, for some pages only.
+    extraction: str = "done"
+    extraction_error_code: str = "invalid_model_output"
+    failing_extraction_page_numbers: frozenset[int] = frozenset()
+    # As `script`, for the next extract commands.
+    extract_script: list[str] = field(default_factory=list)
+    # While set, an extract command does not answer until it is released: a
+    # page stays `extracting` for as long as a test needs it to.
+    extraction_hold: threading.Event | None = None
+    fact_sets: dict[tuple[str, str], FactSetResult] = field(default_factory=dict)
+    extract_calls: list[tuple[str, str, str | None, dict[str, str]]] = field(
         default_factory=list
     )
 
@@ -762,6 +852,43 @@ class FakeStages:
             )
         return self.classifications[key]
 
+    async def extract_facts(
+        self,
+        case_id: str,
+        page_id: str,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> FactSetResult:
+        self.extract_calls.append((case_id, page_id, eval_run_id, dict(trace_context)))
+        self._follow(self.extract_script, "That page could not be found.")
+        redacted = self.results.get(case_id)
+        if redacted is None or page_id not in redacted.page_ids:
+            raise DomainError(ErrorCode.NOT_FOUND, "That page could not be found.")
+        hold = self.extraction_hold
+        while hold is not None and not hold.is_set():
+            # Not a wait for time to pass: the other tasks get their turn.
+            await asyncio.sleep(0.01)
+        key = (case_id, page_id)
+        if key not in self.fact_sets:
+            page_number = redacted.page_ids.index(page_id) + 1
+            failing = (
+                page_number in self.failing_extraction_page_numbers
+                if self.failing_extraction_page_numbers
+                else self.extraction != "done"
+            )
+            self.fact_sets[key] = (
+                facts_failed(
+                    case_id,
+                    page_id,
+                    self.extraction_error_code,
+                    eval_run_id=eval_run_id,
+                )
+                if failing
+                else facts_done(case_id, page_id, eval_run_id=eval_run_id)
+            )
+        return self.fact_sets[key]
+
     def _read(
         self, case_id: str, page_id: str, page_number: int, eval_run_id: str | None
     ) -> ClassificationResult:
@@ -795,6 +922,7 @@ _REDACTION_PATH = re.compile(
     r"/v1\.0/invoke/intake/method/cases/(?P<case_id>[0-9a-f-]{36})/redaction"
 )
 _CLASSIFICATION_PATH = "/v1.0/invoke/classification/method/classifications"
+_EXTRACTION_PATH = "/v1.0/invoke/extraction/method/fact-sets"
 
 
 @dataclass
@@ -802,8 +930,8 @@ class SidecarStandIn:
     """Stands in for `workflow`'s Dapr sidecar, with the stage services behind it.
 
     An `httpx` transport handler: `httpx.MockTransport(stand_in.handle)`. It
-    answers the redaction command as `intake` does and the classify command
-    as `classification` does, over HTTP and in the contracts' shapes, so the
+    answers the redaction command as `intake` does, the classify command as
+    `classification` does and the extract command as `extraction` does, over HTTP and in the contracts' shapes, so the
     real client module is what the test runs.
     """
 
@@ -816,7 +944,11 @@ class SidecarStandIn:
 
     def redactions(self, case_id: str) -> int:
         """How often redaction was commanded for one case."""
-        return sum(case_id in request.url.path for request in self.requests)
+        return sum(
+            _REDACTION_PATH.fullmatch(request.url.path) is not None
+            and case_id in request.url.path
+            for request in self.requests
+        )
 
     def classify_commands(self, case_id: str) -> list[dict[str, Any]]:
         """The classify commands sent for one case, in the order they came."""
@@ -827,20 +959,37 @@ class SidecarStandIn:
         ]
         return [command for command in commands if command["case_id"] == case_id]
 
+    def extract_commands(self, case_id: str) -> list[dict[str, Any]]:
+        """The extract commands sent for one case, in the order they came."""
+        commands = [
+            json.loads(request.content)
+            for request in self.requests
+            if request.url.path == _EXTRACTION_PATH
+        ]
+        return [command for command in commands if command["case_id"] == case_id]
+
     async def handle(self, request: httpx.Request) -> httpx.Response:
         with self._lock:
             self.requests.append(request)
         match = _REDACTION_PATH.fullmatch(request.url.path)
         classify = request.url.path == _CLASSIFICATION_PATH
-        if (match is None and not classify) or request.method != "POST":
+        extract = request.url.path == _EXTRACTION_PATH
+        if (match is None and not classify and not extract) or request.method != "POST":
             # As the sidecar answers for an app or a method it cannot reach.
             return httpx.Response(500, json={"errorCode": "ERR_DIRECT_INVOKE"})
         command = json.loads(request.content)
-        result: RedactionResult | ClassificationResult
+        result: RedactionResult | ClassificationResult | FactSetResult
         try:
             if match is not None:
                 result = await self.stages.redact_document(
                     match["case_id"],
+                    eval_run_id=command.get("eval_run_id"),
+                    trace_context=dict(request.headers),
+                )
+            elif extract:
+                result = await self.stages.extract_facts(
+                    command["case_id"],
+                    command["page_id"],
                     eval_run_id=command.get("eval_run_id"),
                     trace_context=dict(request.headers),
                 )
@@ -858,3 +1007,67 @@ class SidecarStandIn:
                 json=error.to_body(None).model_dump(mode="json"),
             )
         return httpx.Response(200, json=result.model_dump(mode="json"))
+
+
+# --- The orchestrator, stepped by hand ------------------------------------------------
+
+# Story 2.4: what a done extraction's activity answers the orchestrator with.
+EXTRACTED = {"outcome": "ok", "case_status": "running"}
+EXTRACTION_FAILED = {"outcome": "ok", "case_status": "failed"}
+_EXTRACT_FACTS = "extract_facts"
+
+
+def activity_task(
+    context: object, activity: str, options: Mapping[str, Any]
+) -> task.CompletableTask[Any]:
+    """A task of the engine's own kind for an activity a stand-in context was asked for.
+
+    The context keeps it, with the activity's name and input, as
+    `activity_tasks`: the orchestrator looks at the tasks themselves once it
+    waits for several things side by side (story 2.4), so a test finishes a
+    task to answer it.
+    """
+    created = task.CompletableTask[Any]()
+    kept: list[tuple[str, Any, task.CompletableTask[Any]]] = (
+        context.__dict__.setdefault("activity_tasks", [])
+    )
+    kept.append((activity, options.get("input"), created))
+    return created
+
+
+def pending_extractions(context: object) -> list[tuple[str, task.CompletableTask[Any]]]:
+    """The extractions the orchestrator asked for and has no answer to yet, as (page id, task)."""
+    return [
+        (given["page_id"], asked)
+        for activity, given, asked in context.__dict__.get("activity_tasks", [])
+        if activity == _EXTRACT_FACTS and not asked.is_complete
+    ]
+
+
+def finish_extractions(
+    steps: Any,
+    context: object,
+    answers: Mapping[str, object] | None = None,
+) -> Any:
+    """Answer every extraction the orchestrator waits for, as the engine would; return its result.
+
+    Each is answered as done, or with what `answers` names for its page id
+    (an exception there fails the task, as when every retry failed). Goes on
+    for as long as answers bring new extractions. Returns None if the
+    orchestrator then still waits for something else: a person's decision.
+    """
+    while True:
+        pending = pending_extractions(context)
+        if not pending:
+            return None
+        for page_id, asked in pending:
+            answer = (answers or {}).get(page_id, EXTRACTED)
+            if isinstance(answer, Exception):
+                asked.fail("failed", answer)
+            else:
+                asked.complete(answer)
+            try:
+                # The engine resumes the orchestrator with the task that finished.
+                steps.send(asked)
+            except StopIteration as done:
+                return done.value

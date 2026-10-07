@@ -30,7 +30,9 @@ from workflow.adapters.scheduler import (
     build_worker,
 )
 from workflow.adapters.telemetry import configure_telemetry, instrument_app
+from workflow.domain.decisions import DecisionTeller, tell_untold_decisions
 from workflow.domain.entities import StartParameters
+from workflow.domain.ports import CaseStore, LifecycleEngine
 from workflow.settings import APP_ID, Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,62 @@ async def start_worker_when_ready(
         await sleep(check_seconds)
 
 
+def decision_teller(settings: Settings) -> DecisionTeller:
+    """What the service's telling of decisions runs with, as the settings say."""
+    return DecisionTeller(
+        interval_seconds=settings.decision_tell_interval_seconds,
+        max_interval_seconds=settings.decision_tell_max_interval_seconds,
+        grace_seconds=settings.decision_tell_grace_seconds,
+        batch_size=settings.decision_tell_batch_size,
+    )
+
+
+async def tell_decisions_again(
+    teller: DecisionTeller,
+    store: CaseStore,
+    engine: LifecycleEngine,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Look for stored decisions an orchestration was not told of, and tell them, for as long as the service runs.
+
+    AD-5: this is the service's timer, not the orchestration's. A look that
+    fails (the scheduler or the database is away, the schema not yet
+    migrated) is logged and the next one comes all the same, after a wait
+    that doubles with every failed look up to a cap. No decision is dropped,
+    however long the outage.
+    """
+    failed_looks = 0
+    while True:
+        await sleep(teller.wait_after(failed_looks))
+        try:
+            await tell_untold_decisions(teller, store=store, engine=engine)
+        except Exception as error:  # noqa: BLE001 - whatever failed, the next look comes
+            failed_looks += 1
+            # security rule 31: the type; the message can hold an address or SQL.
+            logger.warning(
+                "decisions not looked for: failed_looks=%d next_look_seconds=%g type=%s",
+                failed_looks,
+                teller.wait_after(failed_looks),
+                type(error).__qualname__,
+            )
+        else:
+            failed_looks = 0
+
+
+@asynccontextmanager
+async def telling_decisions_again(
+    teller: DecisionTeller, store: CaseStore, engine: LifecycleEngine
+) -> AsyncIterator[None]:
+    """The life of that task beside the app: started with it, cancelled at the end."""
+    telling = asyncio.create_task(tell_decisions_again(teller, store, engine))
+    try:
+        yield
+    finally:
+        telling.cancel()
+        with suppress(asyncio.CancelledError):
+            await telling
+
+
 async def _bounded(name: str, work: Awaitable[None], seconds: float) -> None:
     """Wait for one shutdown step, but not for ever; a failure is logged, not raised."""
     try:
@@ -130,9 +188,10 @@ def create_app(
 
     Without `dependencies` the real adapters are built: PostgreSQL and the
     Durable Task Scheduler as the settings describe them, the client that
-    commands the stage services through the Dapr sidecar, and the worker that
-    runs the case orchestration. Building them opens no connection; the
-    worker starts once the schema is migrated and stops with the app.
+    commands the stage services through the Dapr sidecar, the worker that
+    runs the case orchestration, and the task that tells an orchestration of
+    a stored decision it was not told of. Building them opens no connection;
+    the worker starts once the schema is migrated and stops with the app.
     `sidecar` stands in for the Dapr sidecar in tests.
     """
     if settings is None:
@@ -181,12 +240,19 @@ def create_app(
                         # AD-7: the one place the threshold enters the lifecycle.
                         settings.gate_threshold,
                     )
-                    async with running_worker(
-                        build_worker(settings, activities),
-                        wired.schema_revision,
-                        wired.head_revision,
-                        check_seconds=settings.worker_start_check_seconds,
-                        shutdown_seconds=settings.shutdown_timeout_seconds,
+                    async with (
+                        running_worker(
+                            build_worker(settings, activities),
+                            wired.schema_revision,
+                            wired.head_revision,
+                            check_seconds=settings.worker_start_check_seconds,
+                            shutdown_seconds=settings.shutdown_timeout_seconds,
+                        ),
+                        # AD-5: a decision whose event was lost is told
+                        # again by the service itself.
+                        telling_decisions_again(
+                            decision_teller(settings), store, wired.engine
+                        ),
                     ):
                         yield
             finally:

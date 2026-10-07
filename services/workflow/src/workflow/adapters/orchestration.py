@@ -7,13 +7,21 @@ step of work that may run more than once.
 
 A case whose page waits for a person stays alive here, waiting for that
 person's decision as an external event (AD-5): no polling and no timer. So a
-case may be in flight for as long as a person takes, and the body below can
-no longer be changed freely once such a case exists in a deployed
-environment: a replay of its history against other code would not match.
-A change that adds, removes or reorders what is yielded must then be made
-as a new version of the orchestration (a new name beside `CASE_LIFECYCLE`,
-which keeps running the cases it started), or be deployed only when no case
-is waiting.
+case may be in flight for as long as a person takes, and a replay of its
+history against other code would not match.
+
+Versioning. Story 2.4 changed what this body yields: every page that reaches
+`extracting` now gets an extraction activity, the waits and the extractions
+run side by side, and the orchestration ends only when the case is final. It
+was changed in place, under the same name, because nothing is deployed (the
+Azure environment is torn down while the stories are built) and the local
+emulator keeps its state in memory: no case can be waiting on the old body.
+That will not hold once a deployed case can be waiting for a person. From
+then on a change that adds, removes or reorders what is yielded, or renames
+an event, must be made as a new version of the orchestration: a new name
+beside `CASE_LIFECYCLE`, registered with the worker together with the old
+one, which keeps running the cases it started; new cases are started under
+the new name. The only other way is to deploy when no case waits.
 """
 
 from collections.abc import Generator
@@ -24,7 +32,11 @@ from durabletask import task
 
 from contracts.decisions import STATUSES_AWAITING_A_DECISION
 from contracts.enums import CaseStatus, PageStatus, StopAfter
-from workflow.domain.case_status import case_status_after_gate, case_status_following
+from workflow.domain.case_status import (
+    FINAL_PAGE_STATUSES,
+    case_status_after_gate,
+    case_status_following,
+)
 from workflow.domain.decisions import status_a_decision_leaves
 from workflow.domain.gate import Route, is_unit_number, route_page
 from workflow.settings import Settings
@@ -35,6 +47,7 @@ CONFIRM_CASE_STARTED = "confirm_case_started"
 REDACT_DOCUMENT = "redact_document"
 CLASSIFY_PAGE = "classify_page"
 ROUTE_PAGE = "route_page"
+EXTRACT_FACTS = "extract_facts"
 SETTLE_CASE_AFTER_GATE = "settle_case_after_gate"
 MARK_CASE_FAILED = "mark_case_failed"
 
@@ -67,6 +80,15 @@ PAGE_STATUSES = "page_statuses"
 _DECISION_EVENT = "decision"
 # The statuses after which nothing more happens to a case.
 _ENDED = frozenset({CaseStatus.FAILED.value, CaseStatus.COMPLETED.value})
+
+
+# The statuses the lifecycle knows what to do with once the gate is behind a
+# page: it is extracted, it waits for a person, or nothing more happens to it.
+_STATUSES_WITH_A_NEXT_STEP = (
+    frozenset({PageStatus.EXTRACTING})
+    | STATUSES_AWAITING_A_DECISION
+    | FINAL_PAGE_STATUSES
+)
 
 
 def decision_event(page_id: str, awaited: PageStatus) -> str:
@@ -315,60 +337,115 @@ def build_case_lifecycle(
             [route.page_status for route in stored], _stop_after(started)
         )
         if after_gate is CaseStatus.RUNNING:
-            # Every page went on to extraction: the case goes on running.
-            return {"case_id": case_id, CASE_STATUS: after_gate.value}
-        # A page waits for a person, or the case was told to stop after the
-        # gate. The case is given the status its stored pages give it: the
-        # activity works that out in the database, by the same rule, so a
-        # late run of it cannot undo a decision made before it.
-        try:
-            settled: dict[str, Any] | None = yield context.call_activity(
-                SETTLE_CASE_AFTER_GATE,
-                input={"case_id": case_id},
-                retry_policy=retry_policy,
-            )
-        except task.TaskFailedError:
-            settled = None
-        if (
-            not isinstance(settled, dict)
-            or settled.get(OUTCOME) != OK
-            # An answer that does not say what the case is: as a failed step.
-            or not isinstance(settled.get(CASE_STATUS), str)
+            # Every page went on to extraction: nobody is waited for, and
+            # the case stays `running` until its pages are extracted.
+            page_statuses: dict[str, PageStatus] | None = {
+                page_id: route.page_status
+                for page_id, route in zip(page_ids, stored, strict=True)
+            }
+        else:
+            # A page waits for a person, or the case was told to stop after
+            # the gate. The case is given the status its stored pages give
+            # it: the activity works that out in the database, by the same
+            # rule, so a late run of it cannot undo a decision made before it.
+            try:
+                settled: dict[str, Any] | None = yield context.call_activity(
+                    SETTLE_CASE_AFTER_GATE,
+                    input={"case_id": case_id},
+                    retry_policy=retry_policy,
+                )
+            except task.TaskFailedError:
+                settled = None
+            if (
+                not isinstance(settled, dict)
+                or settled.get(OUTCOME) != OK
+                # An answer that does not say what the case is: as a failed step.
+                or not isinstance(settled.get(CASE_STATUS), str)
+            ):
+                yield context.call_activity(
+                    MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+                )
+                return {"case_id": case_id, CASE_STATUS: FAILED}
+            if after_gate is CaseStatus.COMPLETED or settled[CASE_STATUS] in _ENDED:
+                # Told to stop after the gate; or the case has failed; or
+                # every waiting page was decided already and none is left
+                # in work.
+                return {"case_id": case_id, CASE_STATUS: settled[CASE_STATUS]}
+
+            # What each page is: the status the settle read for it, in the
+            # transaction that settled the case, and later the one a
+            # decision or an extraction leaves it in. Not its route: a page
+            # decided before the settle ran is not waited for, whether or
+            # not its event is still to come.
+            page_statuses = _settled_pages(settled, page_ids)
+        if page_statuses is None or any(
+            status not in _STATUSES_WITH_A_NEXT_STEP
+            for status in page_statuses.values()
         ):
-            yield context.call_activity(
-                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
-            )
-            return {"case_id": case_id, CASE_STATUS: FAILED}
-        if after_gate is CaseStatus.COMPLETED or settled[CASE_STATUS] in _ENDED:
-            # Told to stop after the gate; or the case has failed; or every
-            # waiting page was decided already and none is left in work.
-            return {"case_id": case_id, CASE_STATUS: settled[CASE_STATUS]}
-
-        # What each page is: the status the settle read for it, in the
-        # transaction that settled the case, and later the one a decision
-        # leaves it in. Not its route: a page decided before the settle ran
-        # is not waited for, whether or not its event is still to come.
-        page_statuses = _settled_pages(settled, page_ids)
-        if page_statuses is None:
+            # The settle did not say what the pages are; or a page is in a
+            # status that nothing here goes on from (`uploaded`,
+            # `classified`): it would be skipped, and the lifecycle would
+            # end with the case still `running`. As the other steps that
+            # cannot go on: the case is marked failed.
             yield context.call_activity(
                 MARK_CASE_FAILED, input=about, retry_policy=retry_policy
             )
             return {"case_id": case_id, CASE_STATUS: FAILED}
 
-        # AD-5, AD-10: the case waits for people, page by page. Each wait is
-        # an external event, raised by the decision operation once it has
-        # stored the decision. A decision stored after the settle read the
-        # pages has its event kept by the engine until its wait is made.
-        # Whatever follows a decision for one page starts when that
-        # decision comes, not when every page is decided: extraction of an
-        # accepted page comes with story 2.4.
-        waiting: dict[str, task.Task[Any]] = {
-            page_id: context.wait_for_external_event(decision_event(page_id, status))
-            for page_id, status in page_statuses.items()
-            if status in STATUSES_AWAITING_A_DECISION
-        }
-        while waiting:
-            yield task.when_any(list(waiting.values()))
+        # AD-5, AD-10, AD-14: from here on each page goes its own way, side
+        # by side with the others. A page that is `extracting`, by the gate
+        # or by an accept, gets one extraction command; a page that waits
+        # for a person gets a wait for that person's decision, an external
+        # event the decision operation raises once it has stored the
+        # decision (and `workflow` itself raises again if that was lost). A
+        # decision stored after the settle read the pages has its event
+        # kept by the engine until its wait is made. Whatever follows a
+        # decision for one page starts when that decision comes, not when
+        # every page is decided. No polling and no timer.
+        extracting: dict[str, task.Task[Any]] = {}
+        waiting: dict[str, task.Task[Any]] = {}
+
+        def go_on(page_id: str, status: PageStatus) -> None:
+            """Start what a page in that status needs next; a final page needs nothing."""
+            if status is PageStatus.EXTRACTING:
+                # Ids only (AD-6): the stage reads the page from `intake` itself.
+                extracting[page_id] = context.call_activity(
+                    EXTRACT_FACTS,
+                    input={**about, "page_id": page_id},
+                    retry_policy=stage_policy,
+                )
+            elif status in STATUSES_AWAITING_A_DECISION:
+                waiting[page_id] = context.wait_for_external_event(
+                    decision_event(page_id, status)
+                )
+
+        for page_id in page_ids:
+            go_on(page_id, page_statuses[page_id])
+        while extracting or waiting:
+            yield task.when_any([*extracting.values(), *waiting.values()])
+            for page_id, extracted in list(extracting.items()):
+                if not extracted.is_complete:
+                    continue
+                del extracting[page_id]
+                # A failed task is one whose every retry failed.
+                answer = None if extracted.is_failed else extracted.get_result()
+                if not isinstance(answer, dict) or answer.get(OUTCOME) != OK:
+                    # No result could be had or recorded, or the stage does
+                    # not hold the page: the case cannot go on.
+                    yield context.call_activity(
+                        MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+                    )
+                    return {"case_id": case_id, CASE_STATUS: FAILED}
+                if answer.get(CASE_STATUS) == FAILED:
+                    # A failed extraction has failed its page and the case,
+                    # in the recording of its result (AD-8); or the case had
+                    # failed before. The lifecycle ends here, also while
+                    # other pages wait for a person: a failed case takes no
+                    # decision, so nothing would ever wake those waits.
+                    return {"case_id": case_id, CASE_STATUS: FAILED}
+                # The recording moved the page to `extracted`, and the case
+                # to `completed` if it was the last page in work.
+                page_statuses[page_id] = PageStatus.EXTRACTED
             for page_id, decided in list(waiting.items()):
                 if not decided.is_complete:
                     continue
@@ -378,14 +455,13 @@ def build_case_lifecycle(
                 # An event that carries no decision for that status changes
                 # nothing: the page is waited for again.
                 page_statuses[page_id] = left if left is not None else awaited
-                if page_statuses[page_id] in STATUSES_AWAITING_A_DECISION:
-                    # A kept page now waits for the underwriter.
-                    waiting[page_id] = context.wait_for_external_event(
-                        decision_event(page_id, page_statuses[page_id])
-                    )
-        # No page waits any more. The decision operation has kept the case
-        # status in step with the pages (AD-5); this is the same rule, on
-        # the same decisions.
+                # A kept page now waits for the underwriter; an accepted one
+                # is extracted; a discarded or denied one is final.
+                go_on(page_id, page_statuses[page_id])
+        # Every page is final. The recordings of the decisions and of the
+        # extraction results have kept the case status in step with the
+        # pages (AD-5) and completed the case; this is the same rule, on the
+        # same pages.
         return {
             "case_id": case_id,
             CASE_STATUS: case_status_following(page_statuses.values()).value,

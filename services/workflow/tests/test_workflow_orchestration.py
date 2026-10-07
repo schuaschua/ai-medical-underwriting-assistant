@@ -19,7 +19,9 @@ from pydantic import ValidationError
 from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
+    activity_task,
     after_start,
+    finish_extractions,
     redaction_done,
     redaction_failed,
     starting,
@@ -78,7 +80,7 @@ class RecordingContext:
         self.asked.append({"activity": activity, **options})
         # A task of the engine's own kind: the orchestrator may wait for
         # several of them together (story 1.8).
-        return task.CompletableTask[Any]()
+        return activity_task(self, activity, options)
 
 
 CONFIRMED = {"outcome": "ok", "case_status": "running", "gate_threshold": 0.9}
@@ -122,7 +124,12 @@ def run_lifecycle(
                 steps.send(answer)
         except StopIteration as done:
             return context.asked, done.value
-    raise AssertionError("the orchestrator asked for more activities than expected")
+    # Story 2.4: what is left to answer are the extractions of the pages
+    # that reached `extracting`; each is answered as done.
+    finished = finish_extractions(steps, context)
+    if finished is None:
+        raise AssertionError("the orchestrator waited for more than it was answered")
+    return context.asked, finished
 
 
 def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
@@ -137,7 +144,9 @@ def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
         "input": case_id,
         "retry_policy": RETRY,
     }
-    assert result == {"case_id": case_id, "case_status": "running"}
+    # The one page is sent on by the gate and extracted (story 2.4): the
+    # orchestration ends when the case is final.
+    assert result == {"case_id": case_id, "case_status": "completed"}
 
 
 def test_story_1_6_the_orchestrator_is_deterministic(case_id: str) -> None:

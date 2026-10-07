@@ -8,7 +8,8 @@ domain code, whatever the caller or a prompt says.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from contracts.audit import AuditRecord
 from contracts.decisions import DecisionRule, decision_rule, human_role
@@ -23,9 +24,9 @@ from contracts.enums import (
 from contracts.errors import NO_TRACE_ID, DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.workflow import DecisionRecorded, DecisionRequest
-from workflow.domain.cases import utc_now
+from workflow.domain.cases import fail_case, utc_now
 from workflow.domain.entities import PageDecision
-from workflow.domain.ports import CaseStore, LifecycleEngine
+from workflow.domain.ports import CaseStore, LifecycleEngine, Told
 from workflow.domain.recording import DecisionOutcome, PageChange, Recording
 
 logger = logging.getLogger(__name__)
@@ -160,9 +161,10 @@ async def record_decision(
     once, and the event only wakes the lifecycle.
 
     The same decision again writes nothing: it is answered with the stored
-    one, and the event is raised again. That is how a decision whose event
-    could not be raised (`upstream_unavailable`) is not lost: the caller
-    repeats it.
+    one, and the event is raised again. A decision whose event could not be
+    raised (`upstream_unavailable`) is not lost either way: the caller may
+    repeat it, and if nobody does, the service tells the orchestration by
+    itself (`tell_untold_decisions`). A decision that was told is marked so.
 
     Refused, with nothing changed: an actor that is not a demo role
     (`actor_not_human`), a role deciding what is not its own
@@ -209,9 +211,14 @@ async def record_decision(
         )
         raise DomainError(ErrorCode.NOT_AWAITING_DECISION, NOT_AWAITING_MESSAGE)
     try:
-        await engine.decision_made(case_id, page_id, rule.awaits, request.decision)
+        told = await engine.decision_made(
+            case_id, page_id, rule.awaits, request.decision
+        )
     except Exception as error:
         # security rule 31: the error's type; its message can hold an address.
+        # The decision is stored and carries no mark of having been told:
+        # the service tells it again by itself (`tell_untold_decisions`),
+        # whether or not the caller repeats it.
         logger.error(
             "decision event not raised: case_id=%s page_id=%s type=%s",
             case_id,
@@ -219,4 +226,153 @@ async def record_decision(
             type(error).__qualname__,
         )
         raise DomainError(ErrorCode.UPSTREAM_UNAVAILABLE, NOT_TOLD_MESSAGE) from error
+    await _settle_telling(decided.decision, told, store, now, trace_id)
     return decision_recorded(decided.decision)
+
+
+async def _mark_told(
+    decision: PageDecision, store: CaseStore, now: Callable[[], datetime]
+) -> None:
+    """Note that the orchestration was told of a decision; a failure here is not the caller's.
+
+    Without the mark the decision is told once more later, which does no
+    harm: the orchestration takes each decision once.
+    """
+    try:
+        await store.mark_decision_told(decision.decision_id, now())
+    except Exception as error:  # noqa: BLE001 - the decision is stored and told; only the mark is missing
+        # security rule 31: ids and the error's type.
+        logger.warning(
+            "decision told but not marked: case_id=%s page_id=%s decision_id=%s type=%s",
+            decision.case_id,
+            decision.page_id,
+            decision.decision_id,
+            type(error).__qualname__,
+        )
+
+
+async def _settle_telling(
+    decision: PageDecision,
+    told: Told,
+    store: CaseStore,
+    now: Callable[[], datetime],
+    trace_id: str | None = None,
+) -> None:
+    """Act on what became of telling a decision: mark it, or see to a case nothing runs.
+
+    Told, or not needed because the lifecycle ended as it should: the
+    decision is marked. But when the case has no orchestration, or a dead
+    one, nothing will ever go on with the decision. It is not marked as
+    told. The case is failed through the lifecycle's own failure path
+    (status and one case-level `stage.failed` event, AD-8), so that it does
+    not stay `running` or waiting for ever, and the log says why. A failed
+    case's decisions are looked for no more. If the case cannot fail any
+    more because it is complete already, there is nothing left to wake and
+    the decision is marked after all.
+    """
+    if not told.nothing_runs_the_case:
+        await _mark_told(decision, store, now)
+        return
+    outcome = await fail_case(decision.case_id, store=store, trace_id=trace_id, now=now)
+    status = await store.status(decision.case_id)
+    # security rule 31: ids and codes.
+    logger.error(
+        "decision has no orchestration to tell: case_id=%s page_id=%s "
+        "decision_id=%s orchestration=%s case_failed=%s case_status=%s",
+        decision.case_id,
+        decision.page_id,
+        decision.decision_id,
+        told.value,
+        outcome.value,
+        status.value if status is not None else None,
+    )
+    if status is CaseStatus.COMPLETED:
+        await _mark_told(decision, store, now)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionTeller:
+    """What the service's own telling of decisions runs with (AD-5): the settings `WORKFLOW_DECISION_TELL_*`."""
+
+    # How long the service waits between two looks.
+    interval_seconds: float = 15.0
+    # After a look that failed (the scheduler or the database could not be
+    # reached) the wait doubles, up to this; a look that worked resets it.
+    max_interval_seconds: float = 300.0
+    # A decision younger than this is still being told by the request that stored it.
+    grace_seconds: float = 30.0
+    # How many decisions one look takes at most.
+    batch_size: int = 50
+
+    def wait_after(self, failed_looks: int) -> float:
+        """How long to wait before the next look, after that many failed looks in a row."""
+        if failed_looks <= 0:
+            return self.interval_seconds
+        # Capped before it is multiplied out, so a long outage cannot overflow.
+        doublings = min(failed_looks, 32)
+        return min(self.interval_seconds * 2.0**doublings, self.max_interval_seconds)
+
+
+async def tell_untold_decisions(
+    teller: DecisionTeller,
+    *,
+    store: CaseStore,
+    engine: LifecycleEngine,
+    now: Callable[[], datetime] = utc_now,
+) -> int:
+    """Tell the orchestrations of every stored decision they were not told of; answer how many were told.
+
+    A decision is stored by the request that makes it and its event is
+    raised afterwards. If that raise fails, or the process dies between the
+    two, the page and the case status are right and the orchestration waits.
+    This finds such decisions by the missing mark, once they are older than
+    the grace time, and raises their events: the same event the request
+    would have raised, which the orchestration takes once however often it
+    is told. What follows is as for the request (`_settle_telling`): a
+    decision that was told is marked; a case that turns out to have no
+    orchestration is failed, not left waiting.
+
+    No decision is ever given up. If the engine cannot be reached the look
+    ends there and raises, with a log line; the decision is still unmarked,
+    and the caller looks again after a wait that grows up to a cap
+    (`DecisionTeller.wait_after`).
+
+    It is the service that looks, on a timer of its own. The orchestration
+    neither polls nor has a timer (AD-5).
+    """
+    untold = await store.decisions_not_told(
+        now() - timedelta(seconds=teller.grace_seconds), teller.batch_size
+    )
+    told_now = 0
+    for decision in untold:
+        try:
+            told = await engine.decision_made(
+                decision.case_id,
+                decision.page_id,
+                decision_rule(decision.decision).awaits,
+                decision.decision,
+            )
+        except Exception as error:
+            # security rule 31: ids, counts and the error's type. The rest
+            # of this look would meet the same engine: it ends here.
+            logger.warning(
+                "decision not told again: case_id=%s page_id=%s decision_id=%s "
+                "told_in_this_look=%d left=%d type=%s",
+                decision.case_id,
+                decision.page_id,
+                decision.decision_id,
+                told_now,
+                len(untold) - told_now,
+                type(error).__qualname__,
+            )
+            raise
+        logger.info(
+            "decision told again: case_id=%s page_id=%s decision_id=%s orchestration=%s",
+            decision.case_id,
+            decision.page_id,
+            decision.decision_id,
+            told.value,
+        )
+        await _settle_telling(decision, told, store, now)
+        told_now += told is Told.TOLD
+    return told_now

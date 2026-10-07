@@ -27,7 +27,9 @@ from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
     SidecarStandIn,
+    activity_task,
     after_start,
+    finish_extractions,
     redaction_done,
     starting,
 )
@@ -89,7 +91,7 @@ class RecordingContext:
         self.asked.append({"activity": activity, **options})
         # A task of the engine's own kind: the orchestrator may wait for
         # several of them together (story 1.8).
-        return task.CompletableTask[Any]()
+        return activity_task(self, activity, options)
 
 
 def run_lifecycle(
@@ -112,7 +114,12 @@ def run_lifecycle(
                 steps.send(answer)
         except StopIteration as done:
             return context.asked, done.value
-    raise AssertionError("the orchestrator asked for more activities than expected")
+    # Story 2.4: what is left to answer are the extractions of the pages
+    # that reached `extracting`; each is answered as done.
+    finished = finish_extractions(steps, context)
+    if finished is None:
+        raise AssertionError("the orchestrator waited for more than it was answered")
+    return context.asked, finished
 
 
 def test_story_1_7_redaction_is_the_first_stage_the_orchestration_commands(
@@ -152,8 +159,9 @@ def test_story_1_7_redaction_is_the_first_stage_the_orchestration_commands(
         "retry_policy": STAGE_RETRY,
     }
     # A done redaction leaves the case running. What follows it, one classify
-    # command per page, is story 1.8's (test_workflow_classification.py).
-    assert result == {"case_id": case_id, "case_status": "running"}
+    # command per page, is story 1.8's (test_workflow_classification.py);
+    # the page is then sent on and extracted, and the case ends (story 2.4).
+    assert result == {"case_id": case_id, "case_status": "completed"}
 
 
 def test_story_1_7_a_failed_redaction_ends_the_case_as_failed_without_a_second_event(

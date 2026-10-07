@@ -21,8 +21,10 @@ from pydantic import ValidationError
 from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
+    activity_task,
     after_start,
     classification_failed,
+    finish_extractions,
     redaction_failed,
     starting,
 )
@@ -42,6 +44,7 @@ from contracts.models.workflow import CaseProgress
 from workflow.adapters import orchestration
 from workflow.adapters.orchestration import (
     CLASSIFY_PAGE,
+    EXTRACT_FACTS,
     MARK_CASE_FAILED,
     ROUTE_PAGE,
     SETTLE_CASE_AFTER_GATE,
@@ -474,7 +477,7 @@ class RecordingContext:
 
     def call_activity(self, activity: str, **options: Any) -> object:
         self.asked.append({"activity": activity, **options})
-        return task.CompletableTask[Any]()
+        return activity_task(self, activity, options)
 
     def wait_for_external_event(self, name: str, **options: Any) -> object:
         self.awaited.append(name)
@@ -514,7 +517,12 @@ def run_lifecycle(
         except StopIteration as done:
             return context.asked, done.value, asked_at_each_wait
         asked_at_each_wait.append(len(context.asked))
-    raise AssertionError("the orchestrator waited for more than it was answered")
+    # Story 2.4: what is left to answer are the extractions of the pages
+    # that reached `extracting`; each is answered as done.
+    finished = finish_extractions(steps, context)
+    if finished is None:
+        raise AssertionError("the orchestrator waited for more than it was answered")
+    return context.asked, finished, asked_at_each_wait
 
 
 def confirmed(threshold: object = THRESHOLD) -> dict[str, Any]:
@@ -605,14 +613,24 @@ def test_story_1_9_after_classification_every_page_is_routed_and_the_case_settle
         for page_id, answer, route in zip(page_ids, answers, routes, strict=True)
     ]
     # All four were asked for together, after every page was classified.
-    # After the settle nothing more is asked for: the lifecycle waits.
-    assert asked_at_each_wait == [1, 2, 6, 10, 11, 11]
+    # After the settle the one page the gate sent on is extracted (story
+    # 2.4); for the others the lifecycle waits.
+    assert asked_at_each_wait == [1, 2, 6, 10, 11, 12]
     # Then the case: a page waits for a person. The status is not handed
     # in: the activity works it out from the stored pages (story 1.10).
-    assert asked[-1] == {
+    assert asked[-2] == {
         "activity": SETTLE_CASE_AFTER_GATE,
         "input": {"case_id": case_id},
         "retry_policy": RETRY,
+    }
+    assert asked[-1] == {
+        "activity": EXTRACT_FACTS,
+        "input": {
+            "case_id": case_id,
+            "eval_run_id": eval_run_id,
+            "page_id": page_ids[0],
+        },
+        "retry_policy": STAGE_RETRY,
     }
     # The lifecycle does not end there: it waits for the decision about
     # each waiting page (story 1.10).
@@ -623,7 +641,7 @@ def test_story_1_9_after_classification_every_page_is_routed_and_the_case_settle
     )
 
 
-def test_story_1_9_a_case_whose_pages_all_go_to_extraction_goes_on_running(
+def test_story_1_9_a_case_whose_pages_all_go_to_extraction_is_not_settled_at_the_gate(
     case_id: str,
 ) -> None:
     asked, result, _ = run_lifecycle(
@@ -639,9 +657,11 @@ def test_story_1_9_a_case_whose_pages_all_go_to_extraction_goes_on_running(
     assert [step["input"]["route"] for step in routes_asked(asked)] == [
         "extracting"
     ] * 2
-    # Nothing to settle: the case is `running` already.
+    # Nothing to settle: the case is `running` already. Its pages are
+    # extracted next (story 2.4), and with the last of them the case ends.
     assert SETTLE_CASE_AFTER_GATE not in [step["activity"] for step in asked]
-    assert result == {"case_id": case_id, "case_status": "running"}
+    assert [step["activity"] for step in asked[-2:]] == [EXTRACT_FACTS] * 2
+    assert result == {"case_id": case_id, "case_status": "completed"}
 
 
 @pytest.mark.parametrize(
@@ -696,7 +716,8 @@ def test_story_1_9_a_case_is_routed_with_the_threshold_its_confirm_step_answered
     assert routes_asked(strict)[0]["input"]["threshold"] == 0.9
     assert routes_asked(lenient)[0]["input"]["route"] == "extracting"
     assert routes_asked(lenient)[0]["input"]["threshold"] == 0.5
-    assert result["case_status"] == "running"
+    # Sent on by the gate, the page is extracted and the case ends (story 2.4).
+    assert result["case_status"] == "completed"
     assert "gate_threshold" not in inspect.signature(build_case_lifecycle).parameters
 
 

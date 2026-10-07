@@ -169,15 +169,18 @@ and its stored text from `intake` (the redacted reading, and nothing else of the
 model once for the page's medical facts, each a one-line statement and a verbatim quote, and then
 checks every quote in code. The check is one function in the contracts package
 (`contracts.text.find_quote`): a quote is found when it occurs in the page text once both are
-normalised (case, spacing, line breaks, ligatures and a PDF's invisible characters do not count), and
-the answer is where it sits in the text as stored: `quote_start` and `quote_end`, counted in Unicode
-code points like `intake`'s word boxes (`QUOTE_OFFSET_UNIT`), the first place if the words occur
-twice. Only a found quote makes a fact `quote_verified`. A fact whose quote is not on the page is
+normalised (case, spacing, line breaks, ligatures and a PDF's invisible characters do not count) and
+stands there whole, not inside a word or a number (`5.6` is not found in `15.6`, nor `4 %` in
+`7.4 %`). The answer is where it sits in the text as stored: `quote_start` and `quote_end`, counted
+in Unicode code points like `intake`'s word boxes (`QUOTE_OFFSET_UNIT`), the first place if the words
+occur twice. Only a found quote makes a fact `quote_verified`. A fact whose quote is not on the page is
 stored and flagged, with no offsets; it is never dropped and never shown as verified. A masked value
 such as `[Person]` is never a fact: a proposal whose statement holds a mask token, or whose quote is
 nothing but mask tokens, is left out and counted in the log. The model decides none of this: ids,
 page numbers, verification and offsets are set by code. A page with nothing medical is a done result
-with no facts; an answer that is not the shape asked for fails the page with `invalid_model_output`.
+with no facts. A single proposal that cannot be a fact (no quote, another field) is left out and
+counted in the log; an answer that is not the shape asked for, or that was cut off at the token
+limit (`reason=answer_cut_off` in the log), fails the page with `invalid_model_output`.
 `GET /cases/<case_id>/facts` on the service lists the stored facts in page order; no screen shows
 them yet.
 
@@ -191,9 +194,13 @@ person is `failed`, its orchestration ends, and the waiting page takes no decisi
 A waiting case no longer depends on the browser. A decision is stored first and the orchestration
 told after; each decision that was told is marked (table `workflow.decision_told`). Every
 `WORKFLOW_DECISION_TELL_INTERVAL_SECONDS` (15) `workflow` itself looks for stored decisions older
-than `WORKFLOW_DECISION_TELL_GRACE_SECONDS` (30) that carry no mark, and raises their events again,
-at most `WORKFLOW_DECISION_TELL_MAX_ATTEMPTS` (20) times each per process, with a log line for every
-attempt. That is a timer of the service; the orchestration still neither polls nor has a timer.
+than `WORKFLOW_DECISION_TELL_GRACE_SECONDS` (30) that carry no mark, and raises their events again.
+It never gives one up: after a look in which the scheduler could not be reached, the wait before the
+next look doubles, up to `WORKFLOW_DECISION_TELL_MAX_INTERVAL_SECONDS` (300), with a log line each
+time. If a decision's case turns out to have no orchestration, or a failed or terminated one, the
+decision is not marked as told and the case is failed with a case-level `stage.failed` event, so it
+does not stay `running` with a page nothing will extract. That is a timer of the service; the
+orchestration still neither polls nor has a timer.
 
 `web` passes a decision on (`POST /api/cases/<case_id>/pages/<page_id>/decisions`, body
 `{"decision": ...}`) with the request's demo role as the actor, and adds no rule of its own. It also

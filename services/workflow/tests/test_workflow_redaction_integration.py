@@ -111,22 +111,24 @@ def test_story_1_7_a_started_case_is_redacted_and_its_pages_are_tracked_as_uploa
         )
         trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
 
+    # The lifecycle ran on to its end (story 2.4).
     assert json.loads(state.serialized_output or "") == {
         "case_id": case_id,
-        "case_status": "running",
+        "case_status": "completed",
     }
     # Redaction is done, and each page of the result is tracked: as
     # `uploaded` first, and by now, the lifecycle having run on, as
-    # `classified` (story 1.8) and then routed by the gate (story 1.9).
+    # `classified` (story 1.8), routed by the gate (story 1.9) and
+    # extracted (story 2.4).
     assert (progress.case_status.value, progress.redaction_status.value) == (
-        "running",
+        "completed",
         "done",
     )
     result = sidecar.stages.results[case_id]
     assert [(page.page_id, page.page_number) for page in progress.pages] == [
         (page_id, number) for number, page_id in enumerate(result.page_ids, 1)
     ]
-    assert {page.page_status.value for page in progress.pages} == {"extracting"}
+    assert {page.page_status.value for page in progress.pages} == {"extracted"}
     # One `document.redacted` event whose detail is a count per category.
     (event,) = (
         event for event in trail.events if event.action.value == "document.redacted"
@@ -205,7 +207,7 @@ def test_story_1_7_in_progress_is_retried_until_the_stage_answers(
         completed(scheduler_client, case_id)
 
     assert sidecar.redactions(case_id) == 4
-    assert case_row(service_settings, case_id) == ("running", "done")
+    assert case_row(service_settings, case_id) == ("completed", "done")
     # One redaction event, however often the command was sent.
     assert [row[0] for row in audit_rows(service_settings, case_id)].count(
         "document.redacted"

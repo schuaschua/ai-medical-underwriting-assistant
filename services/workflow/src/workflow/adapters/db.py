@@ -111,6 +111,7 @@ CASE_STATUS_TABLE = "case_status"
 PAGE_STATUS_TABLE = "page_status"
 AUDIT_EVENT_TABLE = "audit_event"
 HUMAN_DECISION_TABLE = "human_decision"
+DECISION_TOLD_TABLE = "decision_told"
 # AD-8: one event per case, page, action and reference; a null page counts as
 # one value, so a case-level event cannot be written twice either.
 AUDIT_EVENT_UNIQUE = "uq_workflow_audit_event_subject"
@@ -256,6 +257,22 @@ human_decision_table = Table(
         name="ck_workflow_human_decision_decision",
     ),
     Index("ix_workflow_human_decision_case_id", "case_id"),
+)
+
+# AD-5: the mark that a case's orchestration was told of a stored decision,
+# one row per decision told. A table of its own, so that the decision's row
+# is never changed: like it, this one is only ever added to. A decision
+# without a row here is told again by the service (`domain/decisions.py`).
+decision_told_table = Table(
+    DECISION_TOLD_TABLE,
+    metadata,
+    Column(
+        "decision_id",
+        Uuid(as_uuid=False),
+        ForeignKey(human_decision_table.c.decision_id),
+        primary_key=True,
+    ),
+    Column("told_at", DateTime(timezone=True), nullable=False),
 )
 
 # Alembic's own table, in the service's schema (Conventions, Database).
@@ -693,20 +710,26 @@ class SqlCaseStore:
         audit = recording.audit
         if recording.case_status is CaseStatus.COMPLETED:
             # A case is completed where its `case.completed` event is
-            # written with the status (`_follow_pages`), and nowhere else.
+            # written with the status (`_follow_pages`), and nowhere else:
+            # a recording asks for that with `follows_pages`.
             raise ValueError(
                 "a recording does not complete a case: the case status follows its pages"
             )
         # The case's row is locked first, so two recordings for one case run
         # one after the other and the check below cannot be raced.
         locked = await connection.execute(
-            select(case_status_table.c.case_status)
+            select(
+                case_status_table.c.case_status,
+                case_status_table.c.stop_after,
+                case_status_table.c.eval_run_id,
+            )
             .where(case_status_table.c.case_id == audit.case_id)
             .with_for_update()
         )
-        case_status = locked.scalar_one_or_none()
-        if case_status is None:
+        case = locked.first()
+        if case is None:
             raise _Refused(RecordOutcome.UNKNOWN_CASE)
+        case_status = case.case_status
         # AD-8: an activity that ran again finds its event and writes nothing.
         existing = await connection.execute(
             select(audit_event_table.c.audit_event_id).where(
@@ -805,13 +828,30 @@ class SqlCaseStore:
             )
             if changed.first() is None:
                 raise _Refused(RecordOutcome.OUT_OF_ORDER)
-        # Last, in the same transaction: if this insert fails, the status
-        # changes above are rolled back with it.
+        # In the same transaction: if this insert fails, the status changes
+        # above are rolled back with it.
         await connection.execute(
             insert(audit_event_table).values(
                 **_audit_values(recording, recorded_at, audit.eval_run_id)
             )
         )
+        if recording.follows_pages:
+            # A page stage result moved its page: the case status follows
+            # the pages, here and not later (AD-5), by the rule every
+            # decision uses. After the result's own event, so that a result
+            # that completes the case leaves `case.completed` as the
+            # trail's last event; that event is written there and nowhere
+            # else.
+            await _follow_pages(
+                connection,
+                audit.case_id,
+                CaseStatus(case_status),
+                StopAfter(case.stop_after) if case.stop_after is not None else None,
+                recorded_at,
+                at_the_gate=False,
+                eval_run_id=case.eval_run_id,
+                trace_id=audit.trace_id,
+            )
 
     async def decide(self, recording: Recording, recorded_at: datetime) -> Decided:
         """Write a human decision in one transaction, or nothing (AD-8, AD-10)."""
@@ -962,6 +1002,48 @@ class SqlCaseStore:
                     eval_run_id=case.eval_run_id,
                     trace_id=trace_id,
                 )
+
+    async def mark_decision_told(self, decision_id: str, told_at: datetime) -> None:
+        """Add the mark that the orchestration was told of a decision; once, whatever is repeated."""
+        with adapter_span(tracer, "workflow.db.mark_decision_told"):
+            async with self._database.begin() as connection:
+                await connection.execute(
+                    upsert(decision_told_table)
+                    .values(decision_id=decision_id, told_at=told_at)
+                    .on_conflict_do_nothing(
+                        index_elements=[decision_told_table.c.decision_id]
+                    )
+                )
+
+    async def decisions_not_told(
+        self, decided_before: datetime, limit: int
+    ) -> list[PageDecision]:
+        """The decisions without that mark, made before the given time, oldest first."""
+        told = exists().where(
+            decision_told_table.c.decision_id == human_decision_table.c.decision_id
+        )
+        # A failed case has no lifecycle to tell: its orchestration ended
+        # itself, or is dead and was the reason the case was failed.
+        of_a_failed_case = exists().where(
+            case_status_table.c.case_id == human_decision_table.c.case_id,
+            case_status_table.c.case_status == CaseStatus.FAILED.value,
+        )
+        statement = (
+            select(human_decision_table)
+            .where(
+                ~told,
+                ~of_a_failed_case,
+                human_decision_table.c.occurred_at < decided_before,
+            )
+            .order_by(
+                human_decision_table.c.occurred_at, human_decision_table.c.decision_id
+            )
+            .limit(limit)
+        )
+        with adapter_span(tracer, "workflow.db.read_decisions_not_told"):
+            async with self._database.connect() as connection:
+                rows = (await connection.execute(statement)).all()
+        return [_decision(row) for row in rows]
 
     async def progress(self, case_id: str) -> CaseProgress | None:
         """The case's status and its tracked pages, by page number, with their failure codes."""

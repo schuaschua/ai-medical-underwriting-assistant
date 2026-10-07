@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -171,7 +172,13 @@ def code_of(response: Any) -> tuple[int, str]:
 def test_story_1_10_decisions_move_a_started_case_page_by_page_to_its_end(
     service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
 ) -> None:
-    sidecar = SidecarStandIn(FakeStages(pages=4, readings=READINGS))
+    # Story 2.4: a page that reaches `extracting` is extracted. The stage
+    # holds its answer until the decisions are made, so that what the
+    # decisions alone change can be seen first.
+    extraction = threading.Event()
+    sidecar = SidecarStandIn(
+        FakeStages(pages=4, readings=READINGS, extraction_hold=extraction)
+    )
     case_id, eval_run_id = new_id(), new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
@@ -214,6 +221,8 @@ def test_story_1_10_decisions_move_a_started_case_page_by_page_to_its_end(
         # The underwriter answers for the kept page and the unsure one.
         denied = post(client, case_id, second, "deny", UNDERWRITER)
         accepted = post(client, case_id, third, "accept", UNDERWRITER)
+        after_underwriter = client.get(f"/cases/{case_id}/progress").json()
+        extraction.set()
         ended = scheduler_client.wait_for_orchestration_completion(case_id, timeout=60)
         progress = client.get(f"/cases/{case_id}/progress").json()
         # A decision repeated after the lifecycle has ended is still answered.
@@ -251,21 +260,33 @@ def test_story_1_10_decisions_move_a_started_case_page_by_page_to_its_end(
     assert keep_after_discard == (409, "not_awaiting_decision")
     assert accepted_again.json() == accepted.json()
 
-    # In the end: no page waits, two are in work (no extraction before
-    # story 2.4), so the case runs and its lifecycle has ended.
-    assert [page["page_status"] for page in progress["pages"]] == [
+    # After the underwriter: no page waits, two are in work, so the case runs.
+    assert [page["page_status"] for page in after_underwriter["pages"]] == [
         "discarded",
         "denied",
         "extracting",
         "extracting",
     ]
-    assert progress["case_status"] == "running"
+    assert after_underwriter["case_status"] == "running"
+    # In the end (story 2.4): the page the gate sent on and the accepted one
+    # are extracted, every page is final, the case is completed and its
+    # lifecycle has ended.
+    assert [page["page_status"] for page in progress["pages"]] == [
+        "discarded",
+        "denied",
+        "extracted",
+        "extracted",
+    ]
+    assert progress["case_status"] == "completed"
     assert ended is not None
     assert ended.runtime_status is OrchestrationStatus.COMPLETED
     assert json.loads(ended.serialized_output or "") == {
         "case_id": case_id,
-        "case_status": "running",
+        "case_status": "completed",
     }
+    assert sorted(
+        command["page_id"] for command in sidecar.extract_commands(case_id)
+    ) == sorted([third, fourth])
     # One row per decision, and one event each: actor kind `human`, the
     # actor the demo role, the reference the decision's id, the case's run.
     rows = decision_rows(service_settings, case_id)
@@ -342,9 +363,12 @@ def gated_case(
     async def scenario() -> None:
         await store.start(*starting(new_case(case_id, parameters, NOW)))
         await record_stage_result(redaction_done(case_id, page_ids), store=store)
-        for page_id, route in zip(page_ids, routes, strict=True):
-            done = classification_done(case_id, page_id)
+        # As the lifecycle does it: every page is classified, then every
+        # page is routed (a stage result lets the case follow its pages).
+        classified = [classification_done(case_id, page_id) for page_id in page_ids]
+        for done in classified:
             await record_stage_result(done, store=store)
+        for page_id, route, done in zip(page_ids, routes, classified, strict=True):
             await record_route(
                 case_id, page_id, done.classification_id, route, 0.9, store=store
             )

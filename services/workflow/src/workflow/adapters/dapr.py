@@ -17,6 +17,7 @@ from contracts.enums import ClassifierContender, Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
 from contracts.models._stage import StageResult
 from contracts.models.classification import ClassificationResult, ClassifyCommand
+from contracts.models.extraction import ExtractFactsCommand, FactSetResult
 from contracts.models.intake import RedactionCommand, RedactionResult
 from contracts.operations import Operation, get_operation
 from workflow.adapters.telemetry import adapter_span
@@ -149,6 +150,38 @@ class StageClient:
         if result.page_id != page_id or result.contender is not contender:
             # Recording it would move another page, or route this one on
             # another classifier's reading.
+            raise DomainError(ErrorCode.VALIDATION_FAILED, WRONG_PAGE_MESSAGE)
+        return result
+
+    async def extract_facts(
+        self,
+        case_id: str,
+        page_id: str,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> FactSetResult:
+        """`POST /fact-sets` on `extraction` (AD-14): the facts of one page.
+
+        Idempotent on case and page. The answer is the stored result, done
+        or failed. `in_progress` and `not_found` (the page is not the
+        case's) are raised with their own codes; any other failure of the
+        call is `upstream_unavailable`.
+        """
+        operation = get_operation("extract_facts")
+        result = await self._command(
+            operation,
+            operation.path,
+            # Ids only (AD-6): the stage reads the page's text from `intake` itself.
+            ExtractFactsCommand(
+                case_id=case_id, page_id=page_id, eval_run_id=eval_run_id
+            ),
+            FactSetResult,
+            case_id,
+            trace_context,
+        )
+        if result.page_id != page_id:
+            # Recording it would move another page.
             raise DomainError(ErrorCode.VALIDATION_FAILED, WRONG_PAGE_MESSAGE)
         return result
 

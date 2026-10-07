@@ -37,6 +37,7 @@ from workflow.adapters.orchestration import (
     CLASSIFY_PAGE,
     CONFIDENCE,
     CONFIRM_CASE_STARTED,
+    EXTRACT_FACTS,
     GATE_THRESHOLD,
     IS_MEDICAL,
     MARK_CASE_FAILED,
@@ -65,7 +66,7 @@ from workflow.domain.cases import (
 from workflow.domain.entities import CaseRecord
 from workflow.domain.gate import DEFAULT_GATE_THRESHOLD, Route, is_unit_number
 from workflow.domain.lifecycle import case_started
-from workflow.domain.ports import CaseStore, EngineState, StageServices
+from workflow.domain.ports import CaseStore, EngineState, StageServices, Told
 from workflow.domain.recording import RecordOutcome
 from workflow.settings import Settings
 
@@ -225,30 +226,34 @@ class SchedulerEngine:
 
     async def decision_made(
         self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
-    ) -> None:
-        """Raise the external event that tells the case's orchestration of a stored decision (AD-5)."""
-        await asyncio.to_thread(
+    ) -> Told:
+        """Raise the external event that tells the case's orchestration of a stored decision (AD-5).
+
+        Answers whether there was an orchestration to tell.
+        """
+        return await asyncio.to_thread(
             self._decision_made, case_id, page_id, awaited, decision
         )
 
     def _decision_made(
         self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
-    ) -> None:
+    ) -> Told:
         existing = self._state(case_id)
         if existing is None or existing.runtime_status in _DEAD:
-            # Nobody will ever be told: the decision is stored, and the case
-            # has no lifecycle to go on with it. Ids only (security rule 31).
+            # Nobody can be told: the decision is stored, and the case has
+            # no lifecycle to go on with it. The caller is told so, and
+            # sees to the case. Ids only (security rule 31).
             logger.warning(
                 "decision not told: case_id=%s page_id=%s orchestration=%s",
                 case_id,
                 page_id,
                 "missing" if existing is None else existing.runtime_status.name.lower(),
             )
-            return
+            return Told.MISSING if existing is None else Told.DEAD
         if existing.runtime_status is OrchestrationStatus.COMPLETED:
             # The lifecycle ended as it should: the decision was told before
             # and is repeated now. Nothing waits for it.
-            return
+            return Told.ENDED
         # The scheduler keeps an event raised before its wait, so a decision
         # made while the case is still being settled is not missed.
         try:
@@ -264,6 +269,8 @@ class SchedulerEngine:
                 case_id,
                 page_id,
             )
+            return Told.ENDED
+        return Told.TOLD
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self._client.close)
@@ -437,6 +444,41 @@ class Activities:
             }
         return answer
 
+    def extract_facts(
+        self, context: task.ActivityContext, command: dict[str, str | None]
+    ) -> dict[str, str]:
+        """AD-14: have `extraction` read the facts of one page, and record the result it stored.
+
+        As for classification: one call to the stage, then the one recording
+        path; `in_progress`, or no answer, fails the activity and the engine
+        sends the command again. A page that is not the case's is answered
+        as refused, not retried. A done result moves its page from
+        `extracting` to `extracted` with its `facts.extracted` event, and in
+        that same recording the case status follows the pages: the last page
+        to become final completes the case (AD-8). A failed result fails the
+        page and the case. The answer hands nothing of the facts on: ids
+        and statuses only (AD-6).
+        """
+        case_id = str(command["case_id"])
+        page_id = str(command["page_id"])
+        try:
+            result = self._run(
+                EXTRACT_FACTS,
+                case_id,
+                self._stages.extract_facts(
+                    case_id,
+                    page_id,
+                    eval_run_id=command.get("eval_run_id"),
+                    # Read here, on the activity's thread, where its trace is.
+                    trace_context=trace_headers(),
+                ),
+                self._stage_timeout_seconds + _STAGE_CALL_SLACK_SECONDS,
+            )
+            outcome = self.record(EXTRACT_FACTS, result)
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        return self._stage_answer(EXTRACT_FACTS, result, outcome)
+
     def route_page(
         self, context: task.ActivityContext, routed: dict[str, Any]
     ) -> dict[str, str]:
@@ -552,6 +594,8 @@ class Activities:
             # event; or the case had failed before this result came.
             return {OUTCOME: OK, CASE_STATUS: CaseStatus.FAILED.value}
         if outcome in _IN_THE_TRAIL:
+            # Not failed: the lifecycle goes on. Whether the case is
+            # complete by now is the store's to say, not this answer's.
             return {OUTCOME: OK, CASE_STATUS: CaseStatus.RUNNING.value}
         # The result contradicts what is stored: the case cannot go on.
         logger.error(
@@ -660,6 +704,7 @@ def build_worker(
     worker.add_activity(activities.redact_document)
     worker.add_activity(activities.classify_page)
     worker.add_activity(activities.route_page)
+    worker.add_activity(activities.extract_facts)
     worker.add_activity(activities.settle_case_after_gate)
     worker.add_activity(activities.mark_case_failed)
     return worker

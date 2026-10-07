@@ -8,9 +8,10 @@ from typing import Protocol
 from contracts.audit import AuditRecord, RouteDetail
 from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
 from contracts.models.classification import ClassificationResult
+from contracts.models.extraction import FactSetResult
 from contracts.models.intake import RedactionResult
 from contracts.models.workflow import AuditTrail, CaseList, CaseProgress, PageQueue
-from workflow.domain.entities import CaseRecord, SettledCase
+from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
 from workflow.domain.recording import Decided, Recording, RecordOutcome
 
 
@@ -35,9 +36,12 @@ class CaseStore(Protocol):
     ) -> RecordOutcome:
         """Write the status changes and the audit event in one transaction, or neither.
 
-        A recording never completes a case: that is done where the
-        `case.completed` event is written with the status (`decide`,
-        `settle_case`), and a recording that asks for it is a `ValueError`.
+        A recording never names `completed` as the case status: one that
+        does is a `ValueError`. A case is completed only where its pages are
+        followed and the `case.completed` event is written with the status:
+        in `decide`, in `settle_case`, and here for a recording that
+        `follows_pages` (a done page stage result), after its own event, so
+        that `case.completed` is the trail's last.
         A recording whose audit event is already in the trail writes nothing,
         and neither does one whose status change may not follow the current
         status (`domain/transitions.py`); the outcome says which.
@@ -79,6 +83,25 @@ class CaseStore(Protocol):
         the same transaction, once. The answer holds the status the case
         has and the statuses of its pages as that transaction read them.
         None if the case is unknown.
+        """
+        ...
+
+    async def mark_decision_told(self, decision_id: str, told_at: datetime) -> None:
+        """Note that the case's orchestration was told of a stored decision (AD-5).
+
+        A mark of its own, added once and never changed: marking a decision
+        again does nothing.
+        """
+        ...
+
+    async def decisions_not_told(
+        self, decided_before: datetime, limit: int
+    ) -> list[PageDecision]:
+        """The stored decisions that carry no such mark, oldest first, at most `limit`.
+
+        Only decisions made before `decided_before`: a younger one is still
+        being told by the call that stored it. Decisions of a failed case
+        are left out, since a failed case has no lifecycle to tell.
         """
         ...
 
@@ -132,6 +155,24 @@ class EngineState(StrEnum):
     DEAD = "dead"
 
 
+class Told(StrEnum):
+    """What became of telling a case's orchestration of a stored decision."""
+
+    # The event was raised: the orchestration is there to take it.
+    TOLD = "told"
+    # The orchestration has ended as it should; nothing waits for the event.
+    ENDED = "ended"
+    # There is no orchestration for the case.
+    MISSING = "missing"
+    # It failed or was terminated: nothing will run the case any more.
+    DEAD = "dead"
+
+    @property
+    def nothing_runs_the_case(self) -> bool:
+        """Whether no orchestration is there to go on with the case."""
+        return self in (Told.MISSING, Told.DEAD)
+
+
 class LifecycleEngine(Protocol):
     """The orchestration engine (AD-5)."""
 
@@ -145,12 +186,13 @@ class LifecycleEngine(Protocol):
 
     async def decision_made(
         self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
-    ) -> None:
+    ) -> Told:
         """Tell the case's orchestration of a stored decision, by an external event (AD-5).
 
         `awaited` is the status the page had for the decision. Telling it
-        twice does no harm, and neither does telling an orchestration that
-        has ended. Raises if the engine could not be told.
+        twice does no harm. Answers whether there was an orchestration to
+        tell: one that has ended, is missing or is dead is told nothing,
+        and the answer says which. Raises if the engine could not be reached.
         """
         ...
 
@@ -188,4 +230,15 @@ class StageServices(Protocol):
         Besides the errors above it raises `validation_failed` when the
         stage cannot run that contender; like `not_found`, no repeat mends it.
         """
+        ...
+
+    async def extract_facts(
+        self,
+        case_id: str,
+        page_id: str,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> FactSetResult:
+        """AD-14: have `extraction` read the facts of one page that reached `extracting`."""
         ...

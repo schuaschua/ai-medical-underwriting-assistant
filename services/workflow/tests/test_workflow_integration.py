@@ -203,8 +203,9 @@ def service(
     """The service as it really runs: its own role, its worker, the emulator.
 
     Its Dapr sidecar is a stand-in behind which `intake` redacts every case
-    (story 1.7) and `classification` classifies every page (story 1.8): a
-    started case runs on until its pages are classified.
+    (story 1.7), `classification` classifies every page (story 1.8) and
+    `extraction` extracts every page the gate sends on (story 2.4): a
+    started case runs on to its end.
     """
     with TestClient(
         create_app(service_settings, sidecar=SidecarStandIn().transport()),
@@ -237,13 +238,14 @@ def test_story_1_6_a_started_case_has_exactly_one_orchestration_named_by_its_cas
     assert json.loads(state.serialized_input or "") == response.json()
     assert json.loads(state.serialized_output or "") == {
         "case_id": case_id,
-        "case_status": "running",
+        "case_status": "completed",
     }
     assert [item.instance_id for item in instances_of(scheduler_client, case_id)] == [
         case_id
     ]
-    # Story 1.7: the lifecycle now runs on through redaction, which is done.
-    assert case_row(service_settings, case_id) == ("running", "done")
+    # Story 1.7: the lifecycle runs on through redaction, which is done; and
+    # since story 2.4 to the end: the pages are extracted, the case completed.
+    assert case_row(service_settings, case_id) == ("completed", "done")
 
 
 def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
@@ -253,8 +255,8 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
 ) -> None:
     case_id = new_id()
     # Started with nothing asked for: every page of the stand-in's case goes
-    # on to extraction, so the case is `running` before, while and after its
-    # lifecycle runs (story 1.9), and each answer below can be compared whole.
+    # on to extraction and is extracted, so the case is `running` while its
+    # lifecycle runs and `completed` after it (story 2.4).
     first = service.post(f"/cases/{case_id}/start", json=STARTED_BY)
     # Once more straight away, and again after the orchestration has ended:
     # without the guard the scheduler would put a new run in a finished one's place.
@@ -270,7 +272,10 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
 
     for response in (first, again_at_once, again_later):
         assert response.status_code == 200
-        assert response.json() == first.json()
+    # A repeat answers with what the case was started with, and the status
+    # it has by now: nothing a repeat asks for is taken.
+    assert {**again_at_once.json(), "case_status": "running"} == first.json()
+    assert again_later.json() == {**first.json(), "case_status": "completed"}
     assert first.json()["case_status"] == "running"
     assert first.json()["stop_after"] is None
     (after,) = instances_of(scheduler_client, case_id)
@@ -285,7 +290,8 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     assert len(rows_before) == 1
     # Nothing was run a second time: the trail holds the one event of the
     # one redaction (story 1.7), one for each of its two pages'
-    # classification (story 1.8) and one for each page's route (story 1.9),
+    # classification (story 1.8), one for each page's route (story 1.9),
+    # one for each page's extraction and the one completion (story 2.4),
     # and no more.
     assert [row[0] for row in audit_rows(service_settings, case_id)] == [
         "document.redacted",
@@ -293,6 +299,9 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
         "page.classified",
         "page.routed",
         "page.routed",
+        "facts.extracted",
+        "facts.extracted",
+        "case.completed",
     ]
 
 
@@ -359,18 +368,22 @@ def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
         service.get(f"/cases/{case_id}/progress").json()
     )
     trail = AuditTrail.model_validate(service.get(f"/cases/{case_id}/audit").json())
-    assert progress.case_status is CaseStatus.RUNNING
+    assert progress.case_status is CaseStatus.COMPLETED
     # Story 1.7: redaction is done, and its pages and its event are there.
     # Story 1.8: each page is classified, with an event of its own.
     # Story 1.9: the gate sends each on, here to extraction, with its event.
+    # Story 2.4: each is extracted, with its event, and the case completed.
     assert [page.page_status.value for page in progress.pages] == [
-        "extracting",
-        "extracting",
+        "extracted",
+        "extracted",
     ]
     # Story 1.13: the start is the trail's first event.
     assert trail.events[0].action.value == "case.started"
-    assert sorted(event.action.value for event in trail.events[1:]) == [
+    assert trail.events[-1].action.value == "case.completed"
+    assert sorted(event.action.value for event in trail.events[1:-1]) == [
         "document.redacted",
+        "facts.extracted",
+        "facts.extracted",
         "page.classified",
         "page.classified",
         "page.routed",
@@ -806,6 +819,8 @@ def test_story_1_6_the_service_role_has_exactly_the_rights_the_migration_gives(
         # AD-8: no UPDATE, no DELETE, no TRUNCATE.
         ("audit_event", "INSERT,SELECT"),
         ("case_status", "INSERT,SELECT,UPDATE"),
+        # AD-5: the mark that a decision was told is added and read (story 2.4).
+        ("decision_told", "INSERT,SELECT"),
         # AD-10: a decision is added and read, never changed (story 1.10).
         ("human_decision", "INSERT,SELECT"),
         ("page_status", "INSERT,SELECT,UPDATE"),
@@ -904,6 +919,7 @@ def test_story_1_6_migration_keeps_everything_in_schema_workflow(
         ("workflow", "alembic_version"),
         ("workflow", "audit_event"),
         ("workflow", "case_status"),
+        ("workflow", "decision_told"),
         ("workflow", "human_decision"),
         ("workflow", "page_status"),
     ]
@@ -1352,10 +1368,11 @@ def test_story_1_6_a_result_that_arrives_out_of_order_changes_nothing_in_the_dat
 
     assert (late, twice) == (RecordOutcome.OUT_OF_ORDER, RecordOutcome.OUT_OF_ORDER)
     # No status moved and no audit row was written for either.
-    # The start, the redaction and the classification; then the extraction.
+    # The start, the redaction and the classification; then the extraction
+    # and, the one page being final with it, the completion (story 2.4).
     assert len(before[0]) == 3
     assert snapshot(service_settings) == after_extraction
-    assert len(after_extraction[0]) == 4
+    assert len(after_extraction[0]) == 5
 
 
 @pytest.mark.parametrize("final", ["extracted", "discarded", "denied", "failed"])

@@ -9,6 +9,7 @@ would be: behind it `intake` answers the redaction command and
 import asyncio
 import contextlib
 import json
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -138,7 +139,12 @@ def workflow_service(
 def test_story_1_9_every_page_of_a_started_case_leaves_classified_for_its_route(
     service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
 ) -> None:
-    sidecar = SidecarStandIn(FakeStages(pages=6, readings=MIXED))
+    # Story 2.4: a page the gate sends on is extracted next. The stage
+    # holds its answer here, so that the gate's own work is what is seen.
+    extraction = threading.Event()
+    sidecar = SidecarStandIn(
+        FakeStages(pages=6, readings=MIXED, extraction_hold=extraction)
+    )
     case_id, eval_run_id = new_id(), new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
@@ -152,6 +158,7 @@ def test_story_1_9_every_page_of_a_started_case_leaves_classified_for_its_route(
         )
         trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
         state = scheduler_client.get_orchestration_state(case_id)
+        extraction.set()
         # Nobody will decide these pages: the waiting lifecycle is ended.
         scheduler_client.terminate_orchestration(case_id)
         scheduler_client.wait_for_orchestration_completion(case_id, timeout=60)
@@ -211,10 +218,11 @@ def test_story_1_9_a_case_started_with_another_threshold_is_routed_with_that_one
             client.get(f"/cases/{case_id}/progress").json()
         )
 
-    # WORKFLOW_GATE_THRESHOLD=0.5: a medical page at 0.6 goes on to extraction.
-    assert [page.page_status.value for page in progress.pages] == ["extracting"] * 2
-    assert progress.case_status is CaseStatus.RUNNING
-    assert json.loads(state.serialized_output or "")["case_status"] == "running"
+    # WORKFLOW_GATE_THRESHOLD=0.5: a medical page at 0.6 goes on to
+    # extraction, where it is extracted (story 2.4), and the case ends.
+    assert [page.page_status.value for page in progress.pages] == ["extracted"] * 2
+    assert progress.case_status is CaseStatus.COMPLETED
+    assert json.loads(state.serialized_output or "")["case_status"] == "completed"
     details = [
         row[3]
         for row in audit_rows(service_settings, case_id)

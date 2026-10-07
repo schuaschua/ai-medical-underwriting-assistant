@@ -120,14 +120,14 @@ def test_story_1_8_every_page_of_a_started_case_is_classified_with_one_event_eac
     page_ids = sidecar.stages.results[case_id].page_ids
     # Every page was classified, and then routed by the gate (story 1.9):
     # each is a lab report the classifier is sure of, so each goes on to
-    # extraction and the case goes on `running`.
+    # extraction, is extracted (story 2.4), and the case is completed.
     assert json.loads(state.serialized_output or "") == {
         "case_id": case_id,
-        "case_status": "running",
+        "case_status": "completed",
     }
-    assert progress.case_status.value == "running"
+    assert progress.case_status.value == "completed"
     assert [(page.page_id, page.page_status.value) for page in progress.pages] == [
-        (page_id, "extracting") for page_id in page_ids
+        (page_id, "extracted") for page_id in page_ids
     ]
     # One command per page, with ids only, the contender the case was started
     # with (the default, `llm`) and its run id.
@@ -154,8 +154,9 @@ def test_story_1_8_every_page_of_a_started_case_is_classified_with_one_event_eac
         assert event.ref == stored.classification_id
         assert event.detail is None
         assert event.eval_run_id == eval_run_id
-    # The start, the redaction, four classifications and four routes.
-    assert len(trail.events) == 10
+    # The start, the redaction, four classifications and four routes; then
+    # four extractions and the completion (story 2.4).
+    assert len(trail.events) == 15
     assert trail.events[0].action.value == "case.started"
     # Redaction came first: nothing was classified before it was done.
     assert sidecar.requests[0].url.path.endswith(f"/cases/{case_id}/redaction")
@@ -247,11 +248,14 @@ def test_story_1_8_in_progress_is_retried_until_the_stage_answers(
         completed(scheduler_client, case_id)
 
     assert len(sidecar.classify_commands(case_id)) == 4
-    assert [row[2] for row in page_rows(service_settings, case_id)] == ["extracting"]
+    # Classified in the end, sent on by the gate and extracted (story 2.4).
+    assert [row[2] for row in page_rows(service_settings, case_id)] == ["extracted"]
     assert [row[0] for row in audit_rows(service_settings, case_id)] == [
         "document.redacted",
         "page.classified",
         "page.routed",
+        "facts.extracted",
+        "case.completed",
     ]
 
 
