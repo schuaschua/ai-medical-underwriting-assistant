@@ -99,6 +99,116 @@ variable "classification_ready_path" {
   type        = string
 }
 
+variable "extraction_port" {
+  description = "Port the extraction container listens on."
+  type        = number
+}
+
+variable "extraction_health_path" {
+  description = "Path of the extraction service's health route, the target of its startup and liveness probes."
+  type        = string
+}
+
+variable "extraction_ready_path" {
+  description = "Path of the extraction service's readiness route, which fails until the database schema is at the migration head bundled in the image."
+  type        = string
+}
+
+variable "retrieval_port" {
+  description = "Port the retrieval container listens on."
+  type        = number
+}
+
+variable "retrieval_health_path" {
+  description = "Path of the retrieval service's health route, the target of its startup and liveness probes."
+  type        = string
+}
+
+variable "retrieval_ready_path" {
+  description = "Path of the retrieval service's readiness route, which fails until the database schema is at the migration head bundled in the image."
+  type        = string
+}
+
+variable "manual_blob_name" {
+  description = "Name of the underwriting manual's PDF in the `manual` container, which the ingestion job reads (spine AD-12). An operator uploads it (infra/bootstrap/README.md, section 7)."
+  type        = string
+}
+
+variable "layout_api_version" {
+  description = "API version of Document Intelligence's layout analysis, which parses the manual for the ingestion job."
+  type        = string
+}
+
+variable "retrieval_model_max_concurrent_calls" {
+  description = "The most calls to the chat and embedding deployments the retrieval service, or its ingestion job, has under way at once. The chat deployment is shared with the other services: lower it if the token rate limit is hit."
+  type        = number
+
+  validation {
+    condition     = var.retrieval_model_max_concurrent_calls == floor(var.retrieval_model_max_concurrent_calls) && var.retrieval_model_max_concurrent_calls >= 1 && var.retrieval_model_max_concurrent_calls <= 100
+    error_message = "retrieval_model_max_concurrent_calls must be a whole number from 1 to 100."
+  }
+}
+
+variable "search_candidate_depth" {
+  description = "Retrieval row r3: how many chunks the vector search and the full-text search each hand to the rank fusion. Never fewer than the most items a search may ask for (50)."
+  type        = number
+
+  validation {
+    condition     = var.search_candidate_depth == floor(var.search_candidate_depth) && var.search_candidate_depth >= 50 && var.search_candidate_depth <= 1000
+    error_message = "search_candidate_depth must be a whole number from 50 to 1000."
+  }
+}
+
+variable "search_embedding_timeout_seconds" {
+  description = "How long the one embedding call of a search's query may take, in seconds. Not longer than search_deadline_seconds."
+  type        = number
+
+  validation {
+    condition     = var.search_embedding_timeout_seconds > 0
+    error_message = "search_embedding_timeout_seconds must be above 0."
+  }
+}
+
+variable "search_embedding_max_retries" {
+  description = "How often a search sends its query's embedding call again when it is answered 429 or 5xx, before the search is model_unavailable."
+  type        = number
+
+  validation {
+    condition     = var.search_embedding_max_retries == floor(var.search_embedding_max_retries) && var.search_embedding_max_retries >= 0 && var.search_embedding_max_retries <= 10
+    error_message = "search_embedding_max_retries must be a whole number from 0 to 10."
+  }
+}
+
+variable "search_deadline_seconds" {
+  description = "The deadline over one whole search, the embedding call and both database reads included, in seconds. When it passes the search is answered model_unavailable or upstream_unavailable."
+  type        = number
+
+  validation {
+    condition     = var.search_deadline_seconds >= var.search_embedding_timeout_seconds
+    error_message = "search_deadline_seconds must not be shorter than search_embedding_timeout_seconds."
+  }
+}
+
+variable "ingest_deadline_seconds" {
+  description = "The ingestion job's own deadline: after this long it ends itself with `stage_timeout` and leaves the index as it was. The one transaction that stores a finished run is not cut off by it."
+  type        = number
+
+  validation {
+    condition     = var.ingest_deadline_seconds == floor(var.ingest_deadline_seconds) && var.ingest_deadline_seconds >= 60
+    error_message = "ingest_deadline_seconds must be a whole number of at least 60."
+  }
+}
+
+variable "ingest_timeout_seconds" {
+  description = "How long one execution of the ingestion job may run before the platform ends it. Longer than the job's own deadline (ingest_deadline_seconds), so that the job ends itself first and says why, with room left for storing its result."
+  type        = number
+
+  validation {
+    condition     = var.ingest_timeout_seconds == floor(var.ingest_timeout_seconds) && var.ingest_timeout_seconds >= var.ingest_deadline_seconds + 120
+    error_message = "ingest_timeout_seconds must be a whole number at least 120 above ingest_deadline_seconds, the job's own deadline."
+  }
+}
+
 variable "gate_threshold" {
   description = "The gate's confidence threshold (spine AD-7): a page classified at or above it is routed by its label, one below it goes to triage. Passed to workflow only. A case keeps the value in force when its lifecycle confirmed it, so a change applies to cases started after it."
   type        = number
@@ -136,6 +246,16 @@ variable "model_max_concurrent_calls" {
   validation {
     condition     = var.model_max_concurrent_calls == floor(var.model_max_concurrent_calls) && var.model_max_concurrent_calls >= 1 && var.model_max_concurrent_calls <= 100
     error_message = "model_max_concurrent_calls must be a whole number from 1 to 100."
+  }
+}
+
+variable "extraction_model_max_concurrent_calls" {
+  description = "The most calls to the chat deployment the extraction service has under way at once, however many pages are being read: one call per page. Lower it if the deployment's token rate limit is hit."
+  type        = number
+
+  validation {
+    condition     = var.extraction_model_max_concurrent_calls == floor(var.extraction_model_max_concurrent_calls) && var.extraction_model_max_concurrent_calls >= 1 && var.extraction_model_max_concurrent_calls <= 100
+    error_message = "extraction_model_max_concurrent_calls must be a whole number from 1 to 100."
   }
 }
 

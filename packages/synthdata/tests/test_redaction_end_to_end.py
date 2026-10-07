@@ -17,6 +17,7 @@ import pytest
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from synthdata_stack import (
     LocalClassification,
+    LocalExtraction,
     LocalIntake,
     ServicesBehindSidecar,
     audit_rows,
@@ -39,10 +40,13 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
 ) -> None:
     case_id, _ = intake.upload("case-002.pdf")
     sidecar = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
 
     progress, trail, _ = start_and_wait(
@@ -56,17 +60,18 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
     # Progress: redaction done, and the six pages of the case tracked: as
     # `uploaded` when redaction ended. By now each page is classified (story
     # 1.8) and routed by the gate (story 1.9), the three medical pages on to
-    # extraction and the other three back to the customer, so the case waits
-    # for a human, and its lifecycle with it (story 1.10).
+    # extraction, where they are extracted by now (story 2.4), and the other
+    # three back to the customer, so the case waits for a human, and its
+    # lifecycle with it (story 1.10).
     assert (progress.case_status.value, progress.redaction_status.value) == (
         "awaiting_human",
         "done",
     )
     assert [page.page_number for page in progress.pages] == [1, 2, 3, 4, 5, 6]
     assert [page.page_status.value for page in progress.pages] == [
-        "extracting",
-        "extracting",
-        "extracting",
+        "extracted",
+        "extracted",
+        "extracted",
         "awaiting_customer",
         "awaiting_customer",
         "awaiting_customer",

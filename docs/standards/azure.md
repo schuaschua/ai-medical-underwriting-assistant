@@ -123,6 +123,7 @@ Resource types this project adds to the baseline table. Abbreviations are from t
 | Durable Task Scheduler task hub (child of the scheduler) | none in CAF | `<project>-<env>` |
 | Diagnostic setting (child of the resource it reads) | `diag` | `diag-<project>-<env>-<rgn>` |
 | PostgreSQL database (child of the server) | none | `<project>` |
+| Container Apps job | `caj` | `caj-<project>-<env>-<rgn>-<role>` |
 
 Three things belonging to the environment are not `westus3` resources in `rg-aiuw-demo-wus3`: the action group `ag-aiuw-demo-wus3` (Azure Monitor action groups are global, location `global`); the budget `budget-aiuw-demo` (a budget has no region); and the deployment identity `id-aiuw-demo-wus3-deploy`, which has location `westus3` but sits in the central state resource group `rg-tfstate-sea` (rule 31).
 
@@ -134,8 +135,8 @@ Placeholder until the `app` stack assigns them (story 1.3); the source is the ar
 | --- | --- | --- |
 | AcrPull | Container registry | all seven runtime identities |
 | Monitoring Metrics Publisher | Application Insights | all seven runtime identities |
-| Storage Blob Data Contributor | One blob container | `intake` (`originals`, `cases`), `classification` (`classifier-training`), `retrieval` (`manual`), Azure AI Language's own identity (`cases`) |
-| Storage Blob Data Reader | One blob container | Azure AI Language's own identity (`originals`), Document Intelligence's own identity (`classifier-training`, `manual`) |
+| Storage Blob Data Contributor | One blob container | `intake` (`originals`, `cases`), `classification` (`classifier-training`), Azure AI Language's own identity (`cases`) |
+| Storage Blob Data Reader | One blob container | `retrieval` (`manual`), Azure AI Language's own identity (`originals`), Document Intelligence's own identity (`classifier-training`) |
 | Cognitive Services User | Azure AI Language, Document Intelligence or the Foundry account | `intake` (Language), `classification` and `retrieval` (Document Intelligence), Azure AI Search's own identity (Foundry account) |
 | Foundry User | Foundry project | `classification`, `extraction`, `retrieval`, `verdict` |
 | Search Index Data Contributor, Search Service Contributor | Azure AI Search | `retrieval` |

@@ -7,7 +7,9 @@ members = [
     "aiunderwriter",
     "classification",
     "contracts",
+    "extraction",
     "intake",
+    "retrieval",
     "synthdata",
     "web",
     "workflow",
@@ -20,7 +22,9 @@ source = { virtual = "." }
 dependencies = [
     { name = "classification" },
     { name = "contracts" },
+    { name = "extraction" },
     { name = "intake" },
+    { name = "retrieval" },
     { name = "web" },
     { name = "workflow" },
 ]
@@ -39,7 +43,9 @@ dev = [
 requires-dist = [
     { name = "classification", editable = "services/classification" },
     { name = "contracts", editable = "packages/contracts" },
+    { name = "extraction", editable = "services/extraction" },
     { name = "intake", editable = "services/intake" },
+    { name = "retrieval", editable = "services/retrieval" },
     { name = "web", editable = "services/web" },
     { name = "workflow", editable = "services/workflow" },
 ]
@@ -506,6 +512,43 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ac/ed/4e6020f6fd1bc6b91eb50c423fab37a20065b2eef369a4741c6f6fdd90ba/durabletask_azuremanaged-1.11.0.tar.gz", hash = "sha256:f295ecba06ca5804b40d901f6f15a3ad69c42ec397396f7e009afbd6f61369b3", size = 22645, upload-time = "2026-09-29T18:46:38.805Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/f3/13b047effea85a0cd90cddc2f4695d8fc003b371c87ceaef8a948a2e2d05/durabletask_azuremanaged-1.11.0-py3-none-any.whl", hash = "sha256:4fbe34b104c23c9a6e878ee91ab1b040754a2a6e19b4ec93eacfb3ab25fa02b8", size = 30135, upload-time = "2026-09-29T18:46:39.815Z" },
+]
+
+[[package]]
+name = "extraction"
+version = "0.1.0"
+source = { editable = "services/extraction" }
+dependencies = [
+    { name = "alembic" },
+    { name = "azure-identity" },
+    { name = "azure-monitor-opentelemetry" },
+    { name = "contracts" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "httpx2" },
+    { name = "openai" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = "==1.20.0" },
+    { name = "azure-identity", specifier = "==1.26.0" },
+    { name = "azure-monitor-opentelemetry", specifier = "==1.8.10" },
+    { name = "contracts", editable = "packages/contracts" },
+    { name = "fastapi", specifier = "==0.142.2" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "httpx2", specifier = "==2.13.1" },
+    { name = "openai", specifier = "==3.24.0" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.6" },
+    { name = "pydantic", specifier = "==2.13.5" },
+    { name = "pydantic-settings", specifier = "==2.15.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.1.3" },
+    { name = "uvicorn", specifier = "==0.54.0" },
 ]
 
 [[package]]
@@ -1168,6 +1211,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pgvector"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/ec/6eb80aebc728200f95229219882994c1b0585b956ca47da5edb9d062627a/pgvector-0.5.0.tar.gz", hash = "sha256:07a9dcf735696879406983afc6eba9a787cef7c0cf6c367ca1a5779f036dee74", size = 35170, upload-time = "2026-07-06T18:27:27.767Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5c/e4/a5573f2c579ca9ad133293bfb624148ba0893674ca4a6eeec85ced9a6a09/pgvector-0.5.0-py3-none-any.whl", hash = "sha256:fedc9800894e6da2be51358d7b7c574bf34f247ca741a5a09513622135f5964f", size = 30958, upload-time = "2026-07-06T18:27:26.797Z" },
+]
+
+[[package]]
 name = "pluggy"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1417,6 +1469,45 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
+]
+
+[[package]]
+name = "retrieval"
+version = "0.1.0"
+source = { editable = "services/retrieval" }
+dependencies = [
+    { name = "alembic" },
+    { name = "azure-identity" },
+    { name = "azure-monitor-opentelemetry" },
+    { name = "azure-storage-blob" },
+    { name = "contracts" },
+    { name = "fastapi" },
+    { name = "httpx2" },
+    { name = "openai" },
+    { name = "pgvector" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = "==1.20.0" },
+    { name = "azure-identity", specifier = "==1.26.0" },
+    { name = "azure-monitor-opentelemetry", specifier = "==1.8.10" },
+    { name = "azure-storage-blob", specifier = "==12.31.0" },
+    { name = "contracts", editable = "packages/contracts" },
+    { name = "fastapi", specifier = "==0.142.2" },
+    { name = "httpx2", specifier = "==2.13.1" },
+    { name = "openai", specifier = "==3.24.0" },
+    { name = "pgvector", specifier = "==0.5.0" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.6" },
+    { name = "pydantic", specifier = "==2.13.5" },
+    { name = "pydantic-settings", specifier = "==2.15.0" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.1.3" },
+    { name = "uvicorn", specifier = "==0.54.0" },
 ]
 
 [[package]]

@@ -510,3 +510,24 @@ def test_story_2_1_guard_catches_service_code_that_names_the_rule_table(
         ]
     finally:
         shutil.rmtree(scratch)
+
+
+def test_story_2_2_the_guard_covers_the_retrieval_service_and_its_ingestion_job() -> (
+    None
+):
+    # The same scan as story 1.4's, looked at for the one service that reads
+    # the manual: neither it nor its job, its migrations or its tests name
+    # the answer key or the generator's package.
+    retrieval = [
+        path
+        for path in _files("services")
+        if path.relative_to(REPO_ROOT).parts[:2] == ("services", "retrieval")
+    ]
+    names = {path.name for path in retrieval}
+
+    assert {"ingest.py", "chunker.py", "v0001_chunk.py", "retrieval_fakes.py"} <= names
+    assert _naming_the_answer_key(retrieval) == []
+    generator = re.compile(rb"\bsynthdata\b")
+    assert [
+        path.name for path in retrieval if generator.search(path.read_bytes())
+    ] == []

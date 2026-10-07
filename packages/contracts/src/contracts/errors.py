@@ -38,6 +38,9 @@ class ErrorCode(StrEnum):
     PAGES_NOT_TERMINAL = "pages_not_terminal"
     # AD-15: `read_rule` was given a rule id not seen earlier in the run.
     RULE_NOT_SEEN = "rule_not_seen"
+    # AD-11: the ladder row is a real one, but this build cannot answer with
+    # it yet. An unknown row is `validation_failed`.
+    RETRIEVER_NOT_AVAILABLE = "retriever_not_available"
     # AD-6: the stage passed its own deadline.
     STAGE_TIMEOUT = "stage_timeout"
     STAGE_FAILED = "stage_failed"
@@ -69,6 +72,7 @@ HTTP_STATUS: Mapping[ErrorCode, int] = MappingProxyType(
         ErrorCode.NOT_AWAITING_DECISION: 409,
         ErrorCode.PAGES_NOT_TERMINAL: 409,
         ErrorCode.RULE_NOT_SEEN: 409,
+        ErrorCode.RETRIEVER_NOT_AVAILABLE: 409,
         ErrorCode.STAGE_TIMEOUT: 504,
         ErrorCode.STAGE_FAILED: 500,
         ErrorCode.REDACTION_FAILED: 502,

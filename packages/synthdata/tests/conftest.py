@@ -20,19 +20,35 @@ from azure.storage.blob import ContainerClient
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from psycopg import sql
 from pydantic import SecretStr
-from synthdata_stack import LocalClassification, LocalIntake
+from synthdata_stack import (
+    LocalClassification,
+    LocalExtraction,
+    LocalIntake,
+    LocalRetrieval,
+)
 from workflow_local import as_service
 
 from classification.adapters.migrations import (
     alembic_config as classification_alembic_config,
 )
 from classification.settings import Settings as ClassificationSettings
+from extraction.adapters.migrations import alembic_config as extraction_alembic_config
+from extraction.settings import Settings as ExtractionSettings
 from intake.adapters.blob import build_blob_service, ensure_local_containers
 from intake.adapters.migrations import alembic_config as intake_alembic_config
 from intake.settings import Settings as IntakeSettings
+from retrieval.adapters.blob import build_blob_service as build_retrieval_blobs
+from retrieval.adapters.migrations import alembic_config as retrieval_alembic_config
+from retrieval.settings import Settings as RetrievalSettings
 from synthdata.foundry_standin import DEFAULT_PORT as MODEL_PORT
-from synthdata.foundry_standin import LOCAL_DEPLOYMENT, FoundryStandIn
+from synthdata.foundry_standin import (
+    LOCAL_DEPLOYMENT,
+    LOCAL_EMBEDDING_DEPLOYMENT,
+    FoundryStandIn,
+)
 from synthdata.language_standin import DEFAULT_PORT, EMULATOR, LanguageStandIn
+from synthdata.layout_standin import DEFAULT_PORT as LAYOUT_PORT
+from synthdata.layout_standin import LayoutStandIn
 from workflow.adapters.local_role import ensure_local_service_role
 from workflow.adapters.migrations import alembic_config as workflow_alembic_config
 from workflow.adapters.scheduler import build_client
@@ -223,3 +239,90 @@ def classification(
 ) -> LocalClassification:
     """`classification` on this test's database, with the model stand-in behind it."""
     return LocalClassification(classification_settings, model_stand_in, intake)
+
+
+# --- extraction and the model stand-in (story 2.4) -----------------------------------
+
+
+@pytest.fixture
+def extraction_settings(migrated_database: IntakeSettings) -> ExtractionSettings:
+    """`extraction`'s settings for the same database, with its migrations applied."""
+    settings = ExtractionSettings(
+        applicationinsights_connection_string=None,
+        database_name=migrated_database.database_name,
+        # Where the stand-in listens when it runs as a process. The tests
+        # hand the app a transport to it and never use the network.
+        model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
+        chat_deployment=LOCAL_DEPLOYMENT,
+        # A throttled call is sent again at once.
+        model_retry_seconds=0.01,
+    )
+    command.upgrade(extraction_alembic_config(settings), "head")
+    return settings
+
+
+@pytest.fixture
+def extraction(
+    extraction_settings: ExtractionSettings,
+    model_stand_in: FoundryStandIn,
+    intake: LocalIntake,
+) -> LocalExtraction:
+    """`extraction` on this test's database, with the model stand-in behind it."""
+    return LocalExtraction(extraction_settings, model_stand_in, intake)
+
+
+# --- retrieval's ingestion job and the layout stand-in (story 2.2) -------------------
+
+
+@pytest.fixture
+def layout_stand_in() -> LayoutStandIn:
+    """The stand-in for Document Intelligence's layout model."""
+    return LayoutStandIn()
+
+
+@pytest.fixture
+def retrieval_settings(
+    migrated_database: IntakeSettings,
+) -> Iterator[RetrievalSettings]:
+    """`retrieval`'s settings for the same database, migrated, with a manual container of the test's own."""
+    settings = RetrievalSettings(
+        applicationinsights_connection_string=None,
+        database_name=migrated_database.database_name,
+        blob_connection_string=SecretStr(EMULATOR),
+        manual_container=f"manual-test-{secrets.token_hex(6)}",
+        # Where the stand-ins listen when they run as processes. The tests
+        # hand the job a transport to each and never use the network.
+        layout_endpoint=f"http://127.0.0.1:{LAYOUT_PORT}",
+        model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
+        chat_deployment=LOCAL_DEPLOYMENT,
+        embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+        # A throttled call is sent again at once, and a running analysis
+        # looked at again at once.
+        model_retry_seconds=0.01,
+        layout_poll_seconds=0.01,
+    )
+    command.upgrade(retrieval_alembic_config(settings), "head")
+    try:
+        yield settings
+    finally:
+        with contextlib.suppress(ResourceNotFoundError):
+            build_retrieval_blobs(settings).delete_container(settings.manual_container)
+
+
+@pytest.fixture
+def retrieval(
+    retrieval_settings: RetrievalSettings,
+    layout_stand_in: LayoutStandIn,
+    model_stand_in: FoundryStandIn,
+) -> LocalRetrieval:
+    """The ingestion job on this test's database, with the project's manual uploaded."""
+    job = LocalRetrieval(retrieval_settings, layout_stand_in, model_stand_in)
+    job.upload()
+    return job
+
+
+@pytest.fixture
+def ingested_manual(retrieval: LocalRetrieval) -> LocalRetrieval:
+    """The project's manual, ingested: one `smart` chunk per rule, in this test's database."""
+    assert retrieval.ingest() == 0
+    return retrieval

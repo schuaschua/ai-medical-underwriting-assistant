@@ -53,9 +53,11 @@ jobs:
         # Azure: where `intake` would call Azure AI Language, the tests run
         # its stand-in (packages/synthdata, a dev dependency that `uv sync`
         # installed) over the blob emulator, in the test process and once as
-        # a process of its own. Where `classification` would call the Foundry
-        # chat deployment, they run that package's stand-in for it, in the
-        # test process.
+        # a process of its own. Where `classification` and `extraction` would
+        # call the Foundry chat deployment, they run that package's stand-in
+        # for it, in the test process. `retrieval`'s ingestion job is run the same way over
+        # the manual in the blob emulator, with the stand-ins for Document
+        # Intelligence's layout model and for the Foundry deployments.
         run: docker compose up --detach --wait postgres azurite scheduler
 
       - name: Test with coverage
@@ -132,6 +134,12 @@ jobs:
       CLASSIFICATION_IMAGE: aiuw-classification:ci
       CLASSIFICATION_CONTAINER: aiuw-classification-ci
       CLASSIFICATION_URL: http://127.0.0.1:18083
+      RETRIEVAL_IMAGE: aiuw-retrieval:ci
+      RETRIEVAL_CONTAINER: aiuw-retrieval-ci
+      RETRIEVAL_URL: http://127.0.0.1:18084
+      EXTRACTION_IMAGE: aiuw-extraction:ci
+      EXTRACTION_CONTAINER: aiuw-extraction-ci
+      EXTRACTION_URL: http://127.0.0.1:18085
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -149,6 +157,12 @@ jobs:
 
       - name: Build classification
         run: docker build --file services/classification/Dockerfile --tag "$CLASSIFICATION_IMAGE" .
+
+      - name: Build retrieval
+        run: docker build --file services/retrieval/Dockerfile --tag "$RETRIEVAL_IMAGE" .
+
+      - name: Build extraction
+        run: docker build --file services/extraction/Dockerfile --tag "$EXTRACTION_IMAGE" .
 
       - name: Run web
         run: docker run --detach --publish 127.0.0.1:18080:8000 --name "$WEB_CONTAINER" "$WEB_IMAGE"
@@ -179,6 +193,23 @@ jobs:
             --env CLASSIFICATION_MODEL_ENDPOINT=http://127.0.0.1:5101 \
             --env CLASSIFICATION_CHAT_DEPLOYMENT=local-stand-in \
             --name "$CLASSIFICATION_CONTAINER" "$CLASSIFICATION_IMAGE"
+
+      - name: Run retrieval
+        # No database is given to it, and nothing else: the service has its
+        # probes only, and needs neither the models nor the manual.
+        run: |
+          docker run --detach --publish 127.0.0.1:18084:8004 \
+            --name "$RETRIEVAL_CONTAINER" "$RETRIEVAL_IMAGE"
+
+      - name: Run extraction
+        # No database is given to it. The first value is the place of the
+        # model stand-in and the second a deployment name; nothing is
+        # listening there and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18085:8005 \
+            --env EXTRACTION_MODEL_ENDPOINT=http://127.0.0.1:5101 \
+            --env EXTRACTION_CHAT_DEPLOYMENT=local-stand-in \
+            --name "$EXTRACTION_CONTAINER" "$EXTRACTION_IMAGE"
 
       - name: Check web's health, the SPA page and the user
         run: |
@@ -295,6 +326,92 @@ jobs:
             exit 1
           fi
 
+      - name: Check retrieval's health, its readiness, the user and the ingestion job
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${RETRIEVAL_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/retrieval-ready.json" --write-out '%{http_code}' \
+            "${RETRIEVAL_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::retrieval's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/retrieval-ready.json" > /dev/null; then
+            echo "::error::retrieval's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$RETRIEVAL_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The retrieval container runs as root."
+            exit 1
+          fi
+          # The image carries its prompt and the vector column's type (story
+          # 2.2), and it never holds a stand-in, which is a dev tool.
+          docker exec "$RETRIEVAL_CONTAINER" python -c \
+            "from retrieval.prompts import CHUNK_CONTEXT, load_prompt; assert load_prompt(CHUNK_CONTEXT)"
+          docker exec "$RETRIEVAL_CONTAINER" python -c "import pgvector.sqlalchemy"
+          if docker exec "$RETRIEVAL_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The retrieval image holds a stand-in."
+            exit 1
+          fi
+          # The ingestion job is the same image with another command. With
+          # nothing configured it must end non-zero and say so, not hang.
+          if docker run --rm "$RETRIEVAL_IMAGE" python -m retrieval.ingest \
+            > "$RUNNER_TEMP/ingest.log" 2>&1; then
+            echo "::error::The ingestion job ended with status 0 without any setting."
+            exit 1
+          fi
+          if ! grep --quiet "ingestion failed: code=internal_error reason=not_configured" "$RUNNER_TEMP/ingest.log"; then
+            echo "::error::The ingestion job did not say why it failed."
+            cat "$RUNNER_TEMP/ingest.log"
+            exit 1
+          fi
+
+      - name: Check extraction's health, its readiness and the user
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${EXTRACTION_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/extraction-ready.json" --write-out '%{http_code}' \
+            "${EXTRACTION_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::extraction's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/extraction-ready.json" > /dev/null; then
+            echo "::error::extraction's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$EXTRACTION_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The extraction container runs as root."
+            exit 1
+          fi
+          # The image carries its prompt and the contracts' quote finder
+          # (story 2.4), and it never holds the model stand-in, which is a
+          # dev tool.
+          docker exec "$EXTRACTION_CONTAINER" python -c \
+            "from extraction.prompts import EXTRACT_FACTS, load_prompt; assert load_prompt(EXTRACT_FACTS)"
+          docker exec "$EXTRACTION_CONTAINER" python -c \
+            "from contracts.text import find_quote; assert find_quote('HbA1c\n7.4 %', 'hba1c 7.4 %')"
+          if docker exec "$EXTRACTION_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The extraction image holds the model stand-in."
+            exit 1
+          fi
+
       - name: Show the containers' logs
         if: ${{ failure() }}
         # Each on its own: a container that never started must not hide the other's log.
@@ -303,6 +420,8 @@ jobs:
           docker logs "$INTAKE_CONTAINER" || true
           docker logs "$WORKFLOW_CONTAINER" || true
           docker logs "$CLASSIFICATION_CONTAINER" || true
+          docker logs "$RETRIEVAL_CONTAINER" || true
+          docker logs "$EXTRACTION_CONTAINER" || true
 
       - name: Remove the containers
         if: ${{ always() }}
@@ -311,6 +430,8 @@ jobs:
           docker rm --force "$INTAKE_CONTAINER" || true
           docker rm --force "$WORKFLOW_CONTAINER" || true
           docker rm --force "$CLASSIFICATION_CONTAINER" || true
+          docker rm --force "$RETRIEVAL_CONTAINER" || true
+          docker rm --force "$EXTRACTION_CONTAINER" || true
 
   dependency-scan:
     # security.md rule 28: any known vulnerability in a locked Python package,

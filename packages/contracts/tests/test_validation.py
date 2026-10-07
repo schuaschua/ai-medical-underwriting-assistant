@@ -26,7 +26,13 @@ from contracts.models.intake import (
     RedactionResult,
     WordBox,
 )
-from contracts.models.retrieval import MAX_TOP_K, SearchItem, SearchRequest
+from contracts.models.retrieval import (
+    MAX_QUERY_CHARS,
+    MAX_TOP_K,
+    RuleText,
+    SearchItem,
+    SearchRequest,
+)
 from contracts.models.verdict import (
     SUGGESTION_LABEL,
     Reason,
@@ -426,6 +432,7 @@ def test_story_1_1_error_catalogue_is_exactly_these_codes_and_statuses() -> None
         "not_awaiting_decision": 409,
         "pages_not_terminal": 409,
         "rule_not_seen": 409,
+        "retriever_not_available": 409,
         "stage_timeout": 504,
         "stage_failed": 500,
         "redaction_failed": 502,
@@ -1095,3 +1102,45 @@ def test_story_1_12_the_audit_trail_says_whether_more_events_exist() -> None:
     assert AuditTrail.model_validate(trail).has_more is True
     with pytest.raises(ValidationError):
         AuditTrail.model_validate({"case_id": CASE, "events": [audit()]})
+
+
+def test_story_2_3_a_rule_read_names_the_rules_its_text_refers_to() -> None:
+    rule = {
+        "rule_id": "UW-DM-003",
+        "chunk_id": "smart-UW-DM-003",
+        "chunk_set": "smart",
+        "text": "Rule UW-DM-003: text. See rule UW-HT-002.",
+        "manual_page": 12,
+        "impairment": "Type 2 diabetes mellitus",
+        "reference_rule_ids": ["UW-HT-002"],
+    }
+
+    assert RuleText.model_validate(rule).reference_rule_ids == ["UW-HT-002"]
+    # A rule that refers to none says so with an empty list, never by leaving it out.
+    assert RuleText.model_validate({**rule, "reference_rule_ids": []})
+    without = {key: value for key, value in rule.items() if key != "reference_rule_ids"}
+    for refused in (without, {**rule, "reference_rule_ids": ["not-a-rule"]}):
+        with pytest.raises(ValidationError):
+            RuleText.model_validate(refused)
+
+
+def test_story_2_3_a_row_that_is_not_built_has_a_code_of_its_own() -> None:
+    error = DomainError(
+        ErrorCode.RETRIEVER_NOT_AVAILABLE, "That retrieval row is not available yet."
+    )
+
+    # Refused, not broken: no 5xx, and not the code of an unknown row.
+    assert error.http_status == 409
+    assert error.code is not ErrorCode.VALIDATION_FAILED
+
+
+def test_story_2_3_a_query_has_a_longest_length() -> None:
+    at_limit = {"query": "a" * MAX_QUERY_CHARS, "retriever_config": "r3"}
+
+    assert MAX_QUERY_CHARS == 2000
+    assert len(SearchRequest.model_validate(at_limit).query) == MAX_QUERY_CHARS
+    with pytest.raises(ValidationError):
+        SearchRequest.model_validate({**at_limit, "query": "a" * (MAX_QUERY_CHARS + 1)})
+    # Still refused when blank, however long.
+    with pytest.raises(ValidationError):
+        SearchRequest.model_validate({**at_limit, "query": " " * 10})

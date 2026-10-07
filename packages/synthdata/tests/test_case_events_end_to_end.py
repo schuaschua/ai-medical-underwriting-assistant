@@ -19,6 +19,7 @@ from synthdata_stack import (
     CASES_DIR,
     PDF,
     LocalClassification,
+    LocalExtraction,
     LocalIntake,
     RunningService,
     ServicesBehindSidecar,
@@ -62,6 +63,7 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_is_started_complet
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
     tmp_path: Path,
 ) -> None:
     # The stand-in's runs differ on every page: each is classified at 0.6,
@@ -69,7 +71,9 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_is_started_complet
     classification.model.mode = Mode.DISAGREE
     page_count = len(answer_key("case-001")["pages"])
     behind_workflow = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
     eval_run_id = new_id()
     started: list[str] = []

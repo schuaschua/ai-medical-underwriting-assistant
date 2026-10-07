@@ -141,6 +141,31 @@ jobs:
             --file services/classification/Dockerfile \
             .
 
+      - name: Build and push the retrieval image
+        # The `app` stack runs this image twice: as the retrieval service and,
+        # with another command, as the job that ingests the manual. As for
+        # intake, its migrations are not run here yet: an operator runs them
+        # as described in infra/bootstrap/README.md, section 7, and retrieval
+        # reports "not ready" until that is done.
+        run: |
+          az acr build \
+            --registry "$REGISTRY_NAME" \
+            --image "retrieval:${GITHUB_SHA}" \
+            --file services/retrieval/Dockerfile \
+            .
+
+      - name: Build and push the extraction image
+        # The `app` stack runs this image too. As for intake, its migrations
+        # are not run here yet: an operator runs them as described in
+        # infra/bootstrap/README.md, section 8, and extraction reports
+        # "not ready" until that is done.
+        run: |
+          az acr build \
+            --registry "$REGISTRY_NAME" \
+            --image "extraction:${GITHUB_SHA}" \
+            --file services/extraction/Dockerfile \
+            .
+
       - name: Init
         run: terraform -chdir="$APP_STACK" init -no-color -lockfile=readonly
 
@@ -263,6 +288,74 @@ jobs:
           echo "::error::classification's latest revision does not run ${expected}."
           exit 1
 
+      - name: retrieval runs this commit's image
+        # Read-only, and as for intake: the latest revision must be this
+        # commit's image, and is not required to be ready
+        # (infra/bootstrap/README.md, section 7).
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw retrieval_container_app_id)"
+          expected="${REGISTRY_LOGIN_SERVER}/retrieval:${GITHUB_SHA}"
+          for attempt in $(seq 1 30); do
+            latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+            image=""
+            if [[ -n "$latest" ]]; then
+              image="$(az resource show --ids "${app_id}/revisions/${latest}" \
+                --query 'properties.template.containers[0].image' --output tsv)"
+            fi
+            if [[ "$image" == "$expected" ]]; then
+              echo "retrieval's latest revision ${latest} runs ${image}."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: latest=${latest} image=${image}"
+            sleep 10
+          done
+          echo "::error::retrieval's latest revision does not run ${expected}."
+          exit 1
+
+      - name: extraction runs this commit's image
+        # Read-only, and as for intake: the latest revision must be this
+        # commit's image, and is not required to be ready
+        # (infra/bootstrap/README.md, section 8).
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw extraction_container_app_id)"
+          expected="${REGISTRY_LOGIN_SERVER}/extraction:${GITHUB_SHA}"
+          for attempt in $(seq 1 30); do
+            latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+            image=""
+            if [[ -n "$latest" ]]; then
+              image="$(az resource show --ids "${app_id}/revisions/${latest}" \
+                --query 'properties.template.containers[0].image' --output tsv)"
+            fi
+            if [[ "$image" == "$expected" ]]; then
+              echo "extraction's latest revision ${latest} runs ${image}."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: latest=${latest} image=${image}"
+            sleep 10
+          done
+          echo "::error::extraction's latest revision does not run ${expected}."
+          exit 1
+
+      - name: the ingestion job runs this commit's image
+        # Read-only. The job is not a revision of an app: its template is
+        # read directly. A job left on an older image would ingest the manual
+        # with an older chunker or prompt than the service it fills the index for.
+        run: |
+          job_id="$(terraform -chdir="$APP_STACK" output -raw retrieval_ingest_job_id)"
+          expected="${REGISTRY_LOGIN_SERVER}/retrieval:${GITHUB_SHA}"
+          for attempt in $(seq 1 12); do
+            image="$(az resource show --ids "$job_id" \
+              --query 'properties.template.containers[0].image' --output tsv)"
+            if [[ "$image" == "$expected" ]]; then
+              echo "The ingestion job runs ${image}."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: image=${image}"
+            sleep 10
+          done
+          echo "::error::The ingestion job does not run ${expected}."
+          exit 1
+
       - name: Smoke check
         # Read-only: the health route, and the SPA's entry page (an image
         # without the built SPA would answer the first and not the second).
@@ -321,3 +414,35 @@ jobs:
           else
             echo "::warning::classification is NOT ready (latest=${latest}, ready=${ready}). A started case will fail once its document is redacted, until the service's database role exists and its migrations have run: infra/bootstrap/README.md, section 6."
           fi
+
+      - name: Say whether extraction is ready
+        # Read-only, and never fails the run: as for intake, a green deploy
+        # must not be read as "facts are extracted".
+        if: ${{ success() }}
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw extraction_container_app_id)"
+          latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+          ready="$(az resource show --ids "$app_id" --query properties.latestReadyRevisionName --output tsv)"
+          if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+            echo "::notice::extraction is ready (revision ${latest})."
+          else
+            echo "::warning::extraction is NOT ready (latest=${latest}, ready=${ready}). A case will fail once a page reaches extraction, until the service's database role exists and its migrations have run: infra/bootstrap/README.md, section 8."
+          fi
+
+      - name: Say whether retrieval is ready, and that the manual is ingested by hand
+        # Read-only, and never fails the run. The ingestion job is deployed
+        # with this commit's image and is not started here: it needs the
+        # manual in its container, the database role and the migrations, which
+        # are still a manual step. It is safe to start again after any deploy.
+        if: ${{ success() }}
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw retrieval_container_app_id)"
+          job="$(terraform -chdir="$APP_STACK" output -raw retrieval_ingest_job_name)"
+          latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+          ready="$(az resource show --ids "$app_id" --query properties.latestReadyRevisionName --output tsv)"
+          if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+            echo "::notice::retrieval is ready (revision ${latest})."
+          else
+            echo "::warning::retrieval is NOT ready (latest=${latest}, ready=${ready}). Its database role must exist and its migrations must have run: infra/bootstrap/README.md, section 7."
+          fi
+          echo "::notice::The manual is ingested by the job ${job}, which this workflow does not start: infra/bootstrap/README.md, section 7."

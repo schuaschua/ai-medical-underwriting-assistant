@@ -22,11 +22,13 @@ from synthdata_stack import (
     CASES_DIR,
     PDF,
     LocalClassification,
+    LocalExtraction,
     LocalIntake,
     RunningService,
     ServicesBehindSidecar,
     answer_key,
     end_lifecycle,
+    wait_for_extractions,
     web_service,
     workflow_service,
 )
@@ -66,6 +68,7 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
     tmp_path: Path,
     decision: str,
 ) -> None:
@@ -73,7 +76,9 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
     expected_types = [page["page_type"] for page in key["pages"]]
     assert expected_types[3:] == ["invoice", "other", "other"]
     behind_workflow = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
 
     with workflow_service(workflow_service_settings, behind_workflow) as workflow:
@@ -99,6 +104,9 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
                     == 200
                 )
                 wait_for_case_status(workflow, case_id, "awaiting_human", 90)
+                # Story 2.4: the pages the gate sent on are extracted while
+                # the others wait for the customer.
+                wait_for_extractions(workflow, case_id)
                 waiting = progress_of(web, case_id)
                 classifications = web.get(
                     f"/api/cases/{case_id}/classifications", headers=CUSTOMER
@@ -107,7 +115,7 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
                 # The stand-in is sure of every page (1.0): the three medical
                 # pages went on, the three others wait for the customer.
                 statuses = [page["page_status"] for page in waiting["pages"]]
-                assert statuses == ["extracting"] * 3 + ["awaiting_customer"] * 3
+                assert statuses == ["extracted"] * 3 + ["awaiting_customer"] * 3
                 invoice, second, third = (
                     page["page_id"] for page in waiting["pages"][3:]
                 )
@@ -172,9 +180,9 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
     # One page discarded, one kept for the underwriter, one still waiting:
     # the case waits for a human.
     assert [page["page_status"] for page in after_two["pages"]] == [
-        "extracting",
-        "extracting",
-        "extracting",
+        "extracted",
+        "extracted",
+        "extracted",
         LEAVES[decision],
         LEAVES[OTHER[decision]],
         "awaiting_customer",
@@ -188,20 +196,22 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
     )
     # The kept page waits for the underwriter, so the case still waits.
     assert before_underwriter["case_status"] == "awaiting_human"
-    # No page waits any more and three are in work: the case follows.
-    assert [page["page_status"] for page in final["pages"]][:3] == ["extracting"] * 3
+    # No page waits any more and the three medical pages are extracted
+    # (story 2.4): every page is final, and the case follows.
+    assert [page["page_status"] for page in final["pages"]][:3] == ["extracted"] * 3
     assert sorted(page["page_status"] for page in final["pages"][3:]) == [
         "denied",
         "discarded",
         "discarded",
     ]
-    assert final["case_status"] == "running"
+    assert final["case_status"] == "completed"
     assert ended is not None
     assert ended.runtime_status is OrchestrationStatus.COMPLETED
     assert json.loads(ended.serialized_output or "") == {
         "case_id": case_id,
-        "case_status": "running",
+        "case_status": "completed",
     }
+    assert trail["events"][-1]["action"] == "case.completed"
 
     # The trail: the customer's two answers first, each a human's, about
     # its page, after that page's route.
@@ -244,4 +254,6 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
     } == {
         ("intake", "POST", "redaction"),
         ("classification", "POST", "classifications"),
+        # Story 2.4: one command per page that reached `extracting`.
+        ("extraction", "POST", "fact-sets"),
     }

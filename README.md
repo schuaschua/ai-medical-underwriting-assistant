@@ -22,7 +22,7 @@ holds the ruff, mypy and pytest settings for every member.
   audit record, enums, the error catalogue, the `rule_id` patterns, the page type mapping, the eval
   query builder and text normalisation. It imports only the standard library and pydantic. A change to
   it is one pull request that updates every affected service.
-- `services/` holds the seven services. So far there are four. `services/web/` is the FastAPI service
+- `services/` holds the seven services. So far there are six. `services/web/` is the FastAPI service
   that serves the React app in `services/web/spa/` and every `/api` route from one origin.
   `services/intake/` owns cases, documents and the stored PDFs: database schema `intake` and the blob
   containers `originals` and `cases`. `services/workflow/` owns the case lifecycle: one orchestration
@@ -33,8 +33,13 @@ holds the ruff, mypy and pytest settings for every member.
   its Dapr sidecar: it asks `intake` to create a case from an upload, then asks `workflow` to start
   it. It passes a person's decision about a page on to `workflow`, reads the classifications from
   `classification`, and composes the underwriter's triage queue from `workflow`'s queue and those
-  classifications; a page's thumbnail it reads from `intake`. `workflow` commands `intake` and `classification`, and `classification` reads
-  each page from `intake`. No service imports another service's code.
+  classifications; a page's thumbnail it reads from `intake`. `workflow` commands `intake`, `classification` and `extraction`, and `classification` reads
+  each page from `intake`. `services/extraction/` reads the medical facts of each page that reaches
+  extraction, each with a verbatim quote that code checks against the page text `intake` stores
+  (database schema `extraction`); its prompt is in `services/extraction/src/extraction/prompts/`. `services/retrieval/` owns the underwriting manual's rules as chunks with
+  vectors (database schema `retrieval`, blob container `manual`) and the one-off job that ingests the
+  manual; its prompt is in `services/retrieval/src/retrieval/prompts/`. It searches those chunks
+  (`POST /searches`) and reads a rule by its id (`GET /rules/<rule_id>`), and calls no other service. No service imports another service's code.
 
 ### Install and check
 
@@ -76,8 +81,9 @@ One command starts everything:
 
 It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
 containers (`compose.yaml`), applies the database migrations, builds the SPA, starts a stand-in for
-Azure AI Language and one for the Foundry chat deployment (see below), and runs the `web`, `intake`,
-`workflow` and `classification` services, each with its Dapr sidecar (`dapr.yaml`; each later service
+Azure AI Language, one for the Foundry model deployments and one for Document Intelligence's layout
+model (see below), ingests the underwriting manual, and runs the `web`, `intake`, `workflow`,
+`classification`, `extraction` and `retrieval` services, each with its Dapr sidecar (`dapr.yaml`; each later service
 is added to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
 its API share that one address: `/api/health` answers without a role, and every other `/api` route
@@ -115,8 +121,9 @@ setting `WORKFLOW_GATE_THRESHOLD` (default `0.90`, refused at start-up outside 0
 value in force when its lifecycle confirmed it, so a change applies to cases started after it.
 Each route is written with a `page.routed` event by `workflow:gate`, which names the classification it
 came from, the route and the threshold used. After the gate a case with a page that waits for a person
-shows as `awaiting_human`; a case whose pages all went to extraction stays `running`; a case started
-with `stop_after: gate` ends as `completed`.
+shows as `awaiting_human`; a case whose pages all went to extraction stays `running` until they are
+extracted (see below); a case started with `stop_after: gate` ends as `completed` and none of its
+pages is extracted.
 
 A page that waits for a person is decided by a person and by nothing else. There is one operation for
 it, `POST /cases/<case_id>/pages/<page_id>/decisions` on `workflow`, and no other way a page is kept,
@@ -149,10 +156,44 @@ the orchestration: if the event cannot be raised the call answers 502, and sendi
 again raises it, as long as the case's orchestration is still alive. For an orchestration that has
 completed nothing is raised and nothing is said; for one that is missing, failed or terminated
 nothing is raised and `workflow` logs a warning (`decision not told`), because the decision is stored
-and no lifecycle will go on with it. An accepted page stays `extracting`: extraction comes with a later story.
+and no lifecycle will go on with it.
 Because a waiting case keeps its orchestration alive, the orchestration's code may not be changed
 freely once a deployed case is in flight: see the note at the top of
 `services/workflow/src/workflow/adapters/orchestration.py`.
+
+**Facts with checked quotes (story 2.4).** Every page that reaches `extracting`, by the gate or by an
+underwriter's accept, gets one command from `workflow` to `extraction` (`POST /fact-sets`, keyed on
+case and page). The waits for people and the extractions run side by side: an accepted page is
+extracted when it is accepted, not when every page is decided. `extraction` reads the page's number
+and its stored text from `intake` (the redacted reading, and nothing else of the page), asks the chat
+model once for the page's medical facts, each a one-line statement and a verbatim quote, and then
+checks every quote in code. The check is one function in the contracts package
+(`contracts.text.find_quote`): a quote is found when it occurs in the page text once both are
+normalised (case, spacing, line breaks, ligatures and a PDF's invisible characters do not count), and
+the answer is where it sits in the text as stored: `quote_start` and `quote_end`, counted in Unicode
+code points like `intake`'s word boxes (`QUOTE_OFFSET_UNIT`), the first place if the words occur
+twice. Only a found quote makes a fact `quote_verified`. A fact whose quote is not on the page is
+stored and flagged, with no offsets; it is never dropped and never shown as verified. A masked value
+such as `[Person]` is never a fact: a proposal whose statement holds a mask token, or whose quote is
+nothing but mask tokens, is left out and counted in the log. The model decides none of this: ids,
+page numbers, verification and offsets are set by code. A page with nothing medical is a done result
+with no facts; an answer that is not the shape asked for fails the page with `invalid_model_output`.
+`GET /cases/<case_id>/facts` on the service lists the stored facts in page order; no screen shows
+them yet.
+
+`workflow` records each result: a done one moves the page to `extracted` with a `facts.extracted`
+event naming the service and the model deployment, a failed one fails the page and the case with
+`stage.failed`. In that same recording the case status follows the pages, so the last page to become
+final (`extracted`, `discarded` or `denied`) completes the case, with `case.completed` as the trail's
+last event, and the orchestration ends. A case whose extraction fails while another page waits for a
+person is `failed`, its orchestration ends, and the waiting page takes no decision.
+
+A waiting case no longer depends on the browser. A decision is stored first and the orchestration
+told after; each decision that was told is marked (table `workflow.decision_told`). Every
+`WORKFLOW_DECISION_TELL_INTERVAL_SECONDS` (15) `workflow` itself looks for stored decisions older
+than `WORKFLOW_DECISION_TELL_GRACE_SECONDS` (30) that carry no mark, and raises their events again,
+at most `WORKFLOW_DECISION_TELL_MAX_ATTEMPTS` (20) times each per process, with a log line for every
+attempt. That is a timer of the service; the orchestration still neither polls nor has a timer.
 
 `web` passes a decision on (`POST /api/cases/<case_id>/pages/<page_id>/decisions`, body
 `{"decision": ...}`) with the request's demo role as the actor, and adds no rule of its own. It also
@@ -303,15 +344,140 @@ agree, so 0.6, which sends every page to triage), `--mode mixed` (its runs disag
 takes for a laboratory report or an identity document, so one case shows all three routes of the
 gate: with `data/cases/case-002.pdf` two pages go to extraction, one to triage and three back to the
 customer), `--mode invalid` (an answer that is not the JSON asked for) or `--mode throttled`
-(every call answered 429) to see the other outcomes; with `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
+(every call answered 429) to see the other outcomes. For extraction it reads the labelled values and
+the table rows the generator prints on the medical pages, and nothing else; `--mode
+quote_not_on_page` adds to every page a fact whose quote is on no page (stored as unverified), and
+`--mode masked_value` adds a masked value proposed as a fact (never stored); with `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
 (`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`). It is part of the same dev-only package, and
-`classification` refuses a plain-HTTP model endpoint that is not on this machine. Locally the audit
-trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT` in `dapr.yaml`); in
-Azure that setting is the name of the real deployment.
+`classification` and `extraction` refuse a plain-HTTP model endpoint that is not on this machine.
+Locally the audit trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT` and
+`EXTRACTION_CHAT_DEPLOYMENT` in `dapr.yaml`); in Azure those settings are the name of the real
+deployment.
 
-The services never run migrations when they start, here or in Azure, and `intake`, `workflow` and
-`classification` each report "not ready" (`/ready`) until their schema is at the newest migration they
-ship with. Locally, one script stands in
+**The manual's rules as chunks (story 2.2).** `retrieval` holds the underwriting manual
+(`data/manual/underwriting-manual.pdf`) as one `smart` chunk per rule, in table `retrieval.chunk`. A
+one-off job on the service's own package fills it, `python -m retrieval.ingest`; locally:
+
+```sh
+./tools/ingest-local.sh
+```
+
+`./tools/dev.sh` runs it for you after `./tools/migrate-local.sh`, which creates schema `retrieval`
+(with the `vector` extension) and uploads the manual to the emulator's `manual` container. The job
+calls no other service of ours. It reads the PDF from the container, has Document Intelligence's
+layout model parse it, and cuts the parsed text into chunks of exactly one rule each: a definition is
+found by the contracts' marker (`Rule <rule_id>:`), its section by the number printed with the
+heading above it, and page headers, footers and page numbers are left out (by the layout model's
+roles, or because they repeat on most pages). Each chunk has the rule's definition as its text, the
+part of the manual it is printed in (`section_id`, for example `2.4`), the section's heading as its
+`impairment`, the page of the definition, and the rules its text refers to (`reference_rule_ids`);
+its `rule_ids` are only the rule it defines. `chunk_id` is `smart-<rule_id>`, so it is the same on
+every run and in any other store. The chat model then writes one context line per chunk that says
+where the rule sits in the manual, and the embedding model (`text-embedding-3-large`, 3,072
+dimensions, named only in `RETRIEVAL_EMBEDDING_DEPLOYMENT`) embeds the context line followed by the
+chunk text. There is no approximate index on the vectors: search will be exact. The chunk text also
+has a stored full-text column with a GIN index (`text_search`, configuration `english`), in which
+every rule id is one word (`UW-DM-001` is indexed as `uwdm001`), so story 2.3 needs no second
+migration for hybrid search.
+
+The job is safe to run again. Each chunk is stored with a hash of what its context line and vector
+were made from (the rule as the chat model is shown it, the prompt and the two deployment names); a
+run calls a model only for a chunk whose hash differs. The index also notes what it was last built
+from, in one row of `retrieval.ingest_run`: the manual's SHA-256, the prompt's digest and the
+deployment names. A second run over the same manual finds them unchanged and ends there
+(`skipped=yes` in its last log line): it changes nothing, calls no model and does not send the manual
+to Document Intelligence again. Before it spends anything a run reads what is stored and checks
+that the schema is at the migration it ships with, and before the context lines it makes one small
+embedding call. A run that would remove more than a tenth of the stored chunks
+(`RETRIEVAL_INGEST_MAX_REMOVED_SHARE`) is refused and its log names them; set
+`RETRIEVAL_INGEST_ALLOW_LARGE_REMOVAL=true` for the one run of a manual that really lost those
+rules. Two runs at once cannot undo each other: the second to store finds the index changed and
+writes nothing. After a change to the manual it rewrites the chunks that changed, removes
+the chunks whose rule is gone, and writes everything in one transaction at its end. It fails loudly:
+a rule id defined twice, a definition with no text or cut short, a page with no text, no rule at all,
+a heading whose number is taken, skipped or of another section, rules of one section with two id
+codes, a rule that is referred to and defined nowhere, a context
+line that is empty, longer than one line or over `RETRIEVAL_CONTEXT_LINE_MAX_CHARS` (300), a vector
+of another size, a missing manual, a layout analysis that fails or does not end, or a model that is
+not available after its retries each end the job with exit status 1 and one log line,
+`ingestion failed: code=<error code> reason=<what exactly>`, and leave the index as it was. Its logs
+hold ids, counts and timings, never text of the manual. Nothing in `retrieval` reads `data/answer-key/`:
+the job learns the rules from the manual alone, and only a test outside `services/` compares its
+chunks with the rule table.
+
+Locally Document Intelligence is a stand-in, `uv run python -m synthdata.layout_standin` (port 5102):
+it reads the PDF it is sent with PyMuPDF and answers in the shape of the service's layout result
+(pages, lines, words, and paragraphs with a page and a role). It is not a layout model; start it with
+`--no-roles` to leave the roles out, or with `--mode fail`, `reject`, `throttled` or `hang` to see a
+failed job. The model stand-in (port 5101) answers the job as well: a context line built from the
+headings it is shown, and on `POST /openai/v1/embeddings` vectors that count words, so that the same
+text always gets the same vector and texts that share words are close. They know nothing of meaning.
+`./tools/ingest-local.sh` uses the stand-ins `./tools/dev.sh` started, or starts its own.
+
+**Search the manual for rules (story 2.3).** `retrieval` has two reads, and neither stores anything.
+With `./tools/dev.sh` running:
+
+```sh
+curl -s -X POST http://localhost:8004/searches -H 'content-type: application/json' \
+  -d '{"query": "Type 2 diabetes mellitus: HbA1c from 8.0 to below 9.0 %", "retriever_config": "r3", "top_k": 5}'
+curl -s http://localhost:8004/rules/UW-DM-003
+```
+
+`POST /searches` is the one search operation for every row of the retrieval ladder: a query, a
+`retriever_config` and `top_k` (default 5, at most 50) in; `retriever_config`, `latency_ms` (the time
+`retrieval` spent, the embedding call included) and ranked items out, each with `chunk_id`, `rule_ids`,
+`rank`, `score`, `text`, `manual_page` and `impairment`. Only row `r3` is built. Its steps, each a
+function of its own in `services/retrieval/src/retrieval/`:
+
+1. The query is embedded once, exactly as it was asked, through the model gateway on the one embedding
+   deployment, the same the chunks were embedded with (`domain/search.py`, `embed_query`).
+2. The vector side: exact cosine nearest-neighbour over the `smart` chunks, with no approximate index
+   (`adapters/index.py`, `nearest_statement`).
+3. The full-text side: PostgreSQL full-text search over the stored column `text_search`
+   (`matching_statement`), in the same configuration (`english`, the constant `TEXT_SEARCH_CONFIG`) and
+   with every rule id written as one word, as at ingestion, so `UW-DM-001` in a query is found whole.
+   The query's words are read with `plainto_tsquery` and joined with "or", so a chunk that holds some
+   of them matches: a query is a sentence about a fact, not a keyword list. Matches are ranked with
+   `ts_rank`, divided by the logarithm of the chunk's length, and a chunk that defines a rule the query
+   names by its id comes before the chunks that only refer to it.
+4. The two ranked lists are fused with reciprocal rank fusion (`domain/fusion.py`): a chunk's score is
+   the sum of `1 / (60 + rank)` over the sides that found it, so a chunk only one side found is still
+   ranked, and the largest score there is, is 2/61. Each side hands the fusion its best 50 chunks
+   (`RETRIEVAL_SEARCH_CANDIDATE_DEPTH`), or twice `top_k` when that is more. Both lists are read on
+   one connection in one read-only, repeatable-read transaction, so they see the same index.
+5. The best `top_k` become the items, ranked from 1 (`rank_items`). Equal scores come in the order of
+   their `chunk_id`, on each side and in the fusion, so the same query on the same index always gives
+   the same answer.
+
+There is no reranker, no query rewriting by a model and no cache. The other rows are named in one
+table (`domain/rows.py`) and refused with `retriever_not_available` (409) until Epic 3 builds them; a
+`retriever_config` that is no row at all is `validation_failed` (422), as are a blank query and a
+`top_k` outside 1 to 50 or a query over 2,000 characters. A search has a short budget of its own,
+apart from the ingestion job's model settings: 3 seconds for the query's embedding call
+(`RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS`), one retry (`RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES`)
+and 8 seconds for the whole search (`RETRIEVAL_SEARCH_DEADLINE_SECONDS`). When the embedding model
+fails after its retries, or the deadline passes while it is awaited, a search is `model_unavailable`
+(503); when the database cannot be read, ends a statement for its time limit, or holds the search
+past its deadline, it is `upstream_unavailable` (502). There is never a partial result. A search is
+also refused (`model_unavailable`) when the last ingest run recorded another embedding deployment
+than the service is set to (`RETRIEVAL_EMBEDDING_DEPLOYMENT`): vectors of two models are not
+comparable. The record is read with every search, in the search's own transaction, so a new
+ingestion is seen at once. `GET /rules/<rule_id>` answers the `smart` chunk
+that defines the rule: its text, manual page, impairment, chunk id and chunk set, and the rules its
+text refers to (`reference_rule_ids`). An unknown rule is `not_found` (404) and a malformed id 422.
+With `?retriever_config=`, every row on the `smart` set answers the same chunk, and `r1` is
+`retriever_not_available` until the `fixed` set exists. Logs name the row, counts and timings, never
+the query. The service needs `RETRIEVAL_MODEL_ENDPOINT` and `RETRIEVAL_EMBEDDING_DEPLOYMENT` to search
+(`dapr.yaml` names the stand-in); without them it says once at start-up that searches are off, still
+answers its probes and rule reads, and tells a search that it is not configured to search. A test
+outside `services/` searches the ingested manual for every rule of the rule table by its impairment
+and threshold and prints how many came first, in the top 3 and in the top 5
+(`uv run pytest packages/synthdata/tests/test_manual_search_end_to_end.py -s`). The stand-in's vectors
+only count shared words, so those numbers say little about the real embedding model.
+
+The services never run migrations when they start, here or in Azure, and `intake`, `workflow`,
+`classification`, `extraction` and `retrieval` each report "not ready" (`/ready`) until their schema is at the
+newest migration they ship with. Locally, one script stands in
 for the pipeline's migration step. `./tools/dev.sh` runs it for you; run it yourself after pulling a
 change that adds a migration:
 
@@ -325,7 +491,11 @@ creates the blob containers `originals` and `cases` in the emulator. For `workfl
 database role `workflow` and applies that service's migrations
 (`uv run alembic -c services/workflow/alembic.ini upgrade head`, with
 `WORKFLOW_DATABASE_SERVICE_ROLE=workflow`), which grant the role its rights. For `classification` it
-applies that service's migrations (`uv run alembic -c services/classification/alembic.ini upgrade head`).
+applies that service's migrations (`uv run alembic -c services/classification/alembic.ini upgrade head`),
+and for `extraction` likewise (`uv run alembic -c services/extraction/alembic.ini upgrade head`).
+For `retrieval` it applies that service's migrations
+(`uv run alembic -c services/retrieval/alembic.ini upgrade head`) and uploads the manual to the
+emulator's `manual` container (`uv run python -m retrieval.local_setup data/manual/underwriting-manual.pdf`).
 It can be run again safely.
 
 `workflow` runs as that role, not as the database's own user, so the rule that the audit trail is
@@ -340,7 +510,10 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | Stand-in for Azure AI Language (this machine only) | `http://localhost:5100` |
 | `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`, `POST /cases/<case_id>/pages/<page_id>/decisions`, `GET /pages?status=<status>`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
 | `classification` (`/health`, `/ready`, `POST /classifications`, `GET /cases/<case_id>/classifications`), and its Dapr sidecar | `http://localhost:8003`, `http://localhost:3503` |
-| Stand-in for the Foundry chat deployment (this machine only) | `http://localhost:5101` |
+| Stand-in for the Foundry chat and embedding deployments (this machine only) | `http://localhost:5101` |
+| `retrieval` (`/health`, `/ready`, `POST /searches`, `GET /rules/<rule_id>`), and its Dapr sidecar | `http://localhost:8004`, `http://localhost:3504` |
+| `extraction` (`/health`, `/ready`, `POST /fact-sets`, `GET /cases/<case_id>/facts`), and its Dapr sidecar | `http://localhost:8005`, `http://localhost:3505` |
+| Stand-in for Document Intelligence's layout model (this machine only) | `http://localhost:5102` |
 | PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
 | Durable Task Scheduler emulator (task hubs `default` and, for tests, `aiuw-test`), and its dashboard | `localhost:8080`, <http://localhost:8082/> |
@@ -357,7 +530,9 @@ redacted PDF with its own identity. `workflow` commands `intake` through its own
 `classification` reads pages from `intake` through its own sidecar (`CLASSIFICATION_DAPR_HTTP_PORT`);
 in Azure it signs in to PostgreSQL and to the chat deployment with its managed identity
 (`CLASSIFICATION_MODEL_ENDPOINT` is the Foundry account's endpoint there, with
-`CLASSIFICATION_MODEL_ENTRA_AUTH=true`; there is no key).
+`CLASSIFICATION_MODEL_ENTRA_AUTH=true`; there is no key). `extraction` reads page text from `intake`
+through its own sidecar (`EXTRACTION_DAPR_HTTP_PORT`) and signs in the same way
+(`EXTRACTION_MODEL_ENDPOINT`, `EXTRACTION_MODEL_ENTRA_AUTH=true`).
 `workflow` reaches the scheduler emulator without a credential; in Azure it signs in to the Durable Task
 Scheduler and PostgreSQL with its managed identity. The emulator keeps its state in memory, so
 orchestrations are gone after `docker compose stop`, while case status and the audit trail stay in
@@ -376,6 +551,8 @@ docker run --rm -p 8000:8000 aiuw-web:dev
 docker build -f services/intake/Dockerfile -t aiuw-intake:dev .
 docker build -f services/workflow/Dockerfile -t aiuw-workflow:dev .
 docker build -f services/classification/Dockerfile -t aiuw-classification:dev .
+docker build -f services/extraction/Dockerfile -t aiuw-extraction:dev .
+docker build -f services/retrieval/Dockerfile -t aiuw-retrieval:dev .   # the service, and the job: python -m retrieval.ingest
 ```
 
 ### Contract types
@@ -400,6 +577,23 @@ ingress only. `workflow` is held at one replica and holds Durable Task Data Cont
 hub. For redaction `intake` holds Cognitive Services User on Azure AI Language, and Language's own
 identity may read the `originals` container and write the `cases` container. `classification` is held
 at one replica and holds Foundry User on the Foundry project, for the chat deployment.
+
+Story 2.2 adds a fifth Container App, `retrieval` (internal ingress, one replica), and a Container
+Apps job, `caj-aiuw-demo-wus3-ingest`, on the same image and identity with the command
+`python -m retrieval.ingest`. That identity holds Foundry User on the Foundry project, Cognitive
+Services User on Document Intelligence and Storage Blob Data Reader on the `manual` container;
+Document Intelligence is sent the manual's bytes and holds no role on storage. The deploy builds the `retrieval`
+image, fails unless `retrieval`'s latest revision runs it, and says whether it is ready. It does not
+start the job: the manual is uploaded, the database role and migrations are done, and the job is
+started by an operator (`infra/bootstrap/README.md`, section 7).
+
+Story 2.4 adds a sixth Container App, `extraction` (internal ingress, one replica, so that its own
+cap on model calls is the cap for the environment). Its identity holds Foundry User on the Foundry
+project, for the chat deployment it shares with `classification`, and no role on storage: it reads
+pages from `intake` only. The deploy builds the `extraction` image, fails unless `extraction`'s
+latest revision runs it, and says whether it is ready. Its database role and migration are a manual
+step (`infra/bootstrap/README.md`, section 8); until it is done, a case fails once a page reaches
+extraction.
 
 The `deploy` workflow (`.github/workflows/deploy.yml`) is started by hand on `main` and deploys only
 the commit `main` is at. It builds the `web`, `intake`, `workflow` and `classification` images in the

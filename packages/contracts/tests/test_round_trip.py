@@ -367,6 +367,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "text": "Rule UW-DM-003: HbA1c from 8.0% to 8.9% carries a debit of 50%.",
         "manual_page": 12,
         "impairment": "Diabetes mellitus",
+        "reference_rule_ids": ["UW-HT-002"],
     },
     "Reason": REASON,
     "VerdictOutput": {

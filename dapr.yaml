@@ -94,3 +94,60 @@ apps:
       # deployment name is what the audit trail then names as the model.
       CLASSIFICATION_MODEL_ENDPOINT: "http://127.0.0.1:5101"
       CLASSIFICATION_CHAT_DEPLOYMENT: "local-stand-in"
+  - appID: extraction
+    appDirPath: ./services/extraction
+    appProtocol: http
+    appPort: 8005
+    daprHTTPPort: 3505
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "extraction"]
+    env:
+      EXTRACTION_HOST: "127.0.0.1"
+      EXTRACTION_PORT: "8005"
+      # The PostgreSQL of compose.yaml, which has no password.
+      EXTRACTION_DATABASE_HOST: "127.0.0.1"
+      EXTRACTION_DATABASE_NAME: "aiuw"
+      EXTRACTION_DATABASE_USER: "aiuw"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it reads each page's text from intake.
+      EXTRACTION_DAPR_HTTP_PORT: "3505"
+      # The chat deployment is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata), the one classification uses: the Azure
+      # environment is down while coding. It takes no credential, and it
+      # exists only on a developer machine. The deployment name is what the
+      # audit trail then names as the model.
+      EXTRACTION_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      EXTRACTION_CHAT_DEPLOYMENT: "local-stand-in"
+  - appID: retrieval
+    appDirPath: ./services/retrieval
+    appProtocol: http
+    appPort: 8004
+    daprHTTPPort: 3504
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "retrieval"]
+    env:
+      RETRIEVAL_HOST: "127.0.0.1"
+      RETRIEVAL_PORT: "8004"
+      # The PostgreSQL of compose.yaml, which has no password. The manual is
+      # ingested by a job on the same package, not by the service:
+      # tools/ingest-local.sh runs it against the stand-ins for Document
+      # Intelligence and the Foundry deployments (packages/synthdata).
+      RETRIEVAL_DATABASE_HOST: "127.0.0.1"
+      RETRIEVAL_DATABASE_NAME: "aiuw"
+      RETRIEVAL_DATABASE_USER: "aiuw"
+      # A search embeds its query on the embedding deployment the chunks
+      # were embedded with: locally the stand-in that tools/dev.sh starts,
+      # under the name tools/ingest-local.sh ingests with. It takes no
+      # credential, and it exists only on a developer machine.
+      RETRIEVAL_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      RETRIEVAL_EMBEDDING_DEPLOYMENT: "local-stand-in-embedding"
+      # Row r3: how many chunks the vector search and the full-text search
+      # each hand to the rank fusion.
+      RETRIEVAL_SEARCH_CANDIDATE_DEPTH: "50"
+      # A search's own short budget: the query's embedding call, how often
+      # it is sent again, and the deadline over the whole search.
+      RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS: "3"
+      RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES: "1"
+      RETRIEVAL_SEARCH_DEADLINE_SECONDS: "8"

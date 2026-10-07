@@ -495,6 +495,293 @@ Then the `classification` app's latest revision becomes ready within a minute or
 
 **Upgrading an environment that is already set up.** Not yet run. When `classification` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2 alone: the migrations bring the schema to the new head, and the default privileges of step 3 already cover tables and sequences that the pipeline's role creates. Run step 3 again only when a migration added objects while you, not the pipeline's role, ran it: the step hands every table and sequence in the schema over and repeats the grants, and is safe to run again. Finish with step 4. Until the migration step has run, `classification` reports "not ready", because its image carries a newer head than the database.
 
+## 7. Database role for `retrieval`, the manual and the ingestion job
+
+Added by story 2.2. Not yet run: the environment was down while the story was built, so these steps are written from sections 4 and 6, which have been run or mirror ones that have, and are on the list for the final test session (`_bmad-output/implementation-artifacts/deferred-work.md`). Add each run to the log below.
+
+`retrieval` owns schema `retrieval`: one table, `chunk`, that holds one row per rule of the underwriting manual with its text, context line and vector (spine AD-4, AD-12), and the blob container `manual`, which holds the manual's PDF. The service and its ingestion job share one image, one identity and so one database role. As for `intake`, an operator does these steps once after the `foundation` and `app` stacks are up, and again after every teardown. Until steps 0 to 4 are done, `retrieval` reports "not ready"; until steps 5 and 6 are done, the table is empty and no rule can be found.
+
+Steps 0 to 4 are those of section 6 with this service's names, and one difference: the first migration creates the `vector` extension. The extension is on the server's allow-list (`azure.extensions = VECTOR` in the `foundation` stack), and creating it needs the `azure_pg_admin` role, which you hold as an Entra administrator of the server. Run the steps in this order, in one shell, from the repository root.
+
+**Step 0. Set up the shell, and open the firewall for your address.** The `trap` removes the firewall rule and the token when the shell exits, also after a failed step; `set -e` stops at the first error.
+
+```bash
+set -euo pipefail
+
+SERVER="$(terraform -chdir=infra/demo/foundation output -raw postgresql_server_name)"
+HOST="$(terraform -chdir=infra/demo/foundation output -raw postgresql_fqdn)"
+DATABASE="$(terraform -chdir=infra/demo/foundation output -raw postgresql_database_name)"
+ME="$(az ad signed-in-user show --query id -o tsv)"   # your database role is named after your object id
+SERVICE_ROLE="id-aiuw-demo-wus3-retrieval"            # must equal: terraform -chdir=infra/demo/app output retrieval_database_role
+DEPLOY_ROLE="id-aiuw-demo-wus3-deploy"                # the pipeline's role, which will run migrations later
+
+cleanup() {
+  # Always: the temporary firewall rule (azure.md rule 13) and the token.
+  az postgres flexible-server firewall-rule delete -g rg-aiuw-demo-wus3 -n "$SERVER" \
+    --rule-name operator-bootstrap --yes || true
+  unset PGPASSWORD
+}
+trap cleanup EXIT
+
+az postgres flexible-server firewall-rule create -g rg-aiuw-demo-wus3 -n "$SERVER" \
+  --rule-name operator-bootstrap --start-ip-address "$(curl -s https://api.ipify.org)"
+
+# An Entra token is the password. It lasts about an hour.
+export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+```
+
+**Step 1. Roles.** Principals are created in the `postgres` database; the service's role is named after its identity. Your own role is made a member of the pipeline's role, which step 3 needs; if section 4 was done in this bring-up it is one already, and that statement changes nothing.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
+-- Created only if it is not there yet, so this step can be run again.
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_ROLE') THEN
+    PERFORM pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+  END IF;
+END
+\$\$;
+GRANT "$DEPLOY_ROLE" TO "$ME";
+SQL
+```
+
+**Step 2. Schema and migrations.** The service never migrates at start-up, and its readiness probe fails until the schema is at the migration head bundled in its image. This creates the `vector` extension (in schema `public`, where the service role finds its type), schema `retrieval`, the `chunk` table with its stored full-text column and index, and the version table. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
+
+```bash
+RETRIEVAL_DATABASE_HOST="$HOST" RETRIEVAL_DATABASE_NAME="$DATABASE" RETRIEVAL_DATABASE_USER="$ME" \
+RETRIEVAL_DATABASE_ENTRA_AUTH=true \
+  uv run alembic -c services/retrieval/alembic.ini upgrade head
+```
+
+If this step fails at `CREATE EXTENSION`, the server does not allow the extension or your role may not create it: check `az postgres flexible-server parameter show -g rg-aiuw-demo-wus3 -s "$SERVER" -n azure.extensions`, and note the finding in the log below. The extension stays with you as its owner; a later migration run by the pipeline's role does not create it again (`IF NOT EXISTS`).
+
+**Step 3. Grants.** The service role gets data rights on its own schema and nothing else: no `CREATE`, because only migrations change the schema, and read-only on the version table. The ingestion job writes and deletes chunks with this role. The schema and its table are handed to the pipeline's role, as in section 6.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
+-- Hand the schema and everything in it to the pipeline's role.
+ALTER SCHEMA retrieval OWNER TO "$DEPLOY_ROLE";
+DO \$\$
+DECLARE item record;
+BEGIN
+  FOR item IN
+    SELECT c.relname, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'retrieval' AND c.relkind IN ('r', 'p', 'S')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i') AND c.relkind = 'S'
+      )
+    ORDER BY c.relkind DESC
+  LOOP
+    EXECUTE format(
+      'ALTER %s retrieval.%I OWNER TO %I',
+      CASE WHEN item.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+      item.relname, '$DEPLOY_ROLE'
+    );
+  END LOOP;
+END
+\$\$;
+
+GRANT USAGE ON SCHEMA retrieval TO "$SERVICE_ROLE";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA retrieval TO "$SERVICE_ROLE";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA retrieval TO "$SERVICE_ROLE";
+-- The version table is read-only for the service.
+REVOKE INSERT, UPDATE, DELETE ON retrieval.alembic_version FROM "$SERVICE_ROLE";
+
+-- Tables and sequences that later migrations add, run by the pipeline's role.
+-- This needs membership of that role, granted in step 1.
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA retrieval
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "$SERVICE_ROLE";
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA retrieval
+  GRANT USAGE, SELECT ON SEQUENCES TO "$SERVICE_ROLE";
+SQL
+```
+
+**Step 4. Close up and check.** Leaving the shell runs the `trap`; to stay in the shell, run it now.
+
+```bash
+cleanup; trap - EXIT
+az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
+```
+
+Then the `retrieval` app's latest revision becomes ready within a minute or so.
+
+**Step 5. Upload the manual.** The `foundation` stack owns the `manual` container; the manual is the committed, synthetic PDF. The upload signs in with your own Azure sign-in (`--auth-mode login`, never an account key), so you need a data role on the container for it: Storage Blob Data Contributor on the `manual` container, assigned to yourself for the upload only. The `trap` takes the role away again when the shell exits, also when the upload fails under `set -e`; the upload starts only once the role is honoured. Record the commands in the log below. (`retrieval` itself may only read the container.)
+
+```bash
+ACCOUNT="$(terraform -chdir=infra/demo/foundation output -raw storage_account_name)"
+MANUAL_SCOPE="$(terraform -chdir=infra/demo/foundation output -json storage_container_ids | jq -r .manual)"
+
+remove_upload_role() {
+  # Always: your own write access to the container ends with this step.
+  az role assignment delete --assignee "$ME" --role "Storage Blob Data Contributor" \
+    --scope "$MANUAL_SCOPE" || true
+}
+trap remove_upload_role EXIT
+
+az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Storage Blob Data Contributor" --scope "$MANUAL_SCOPE"
+
+# A new role assignment takes a minute or two to be honoured: wait until the
+# container can be listed with it, for five minutes at most.
+for attempt in $(seq 1 30); do
+  if az storage blob list --auth-mode login --account-name "$ACCOUNT" --container-name manual \
+    --num-results 1 --output none 2>/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 30 ]; then
+    echo "The role on the manual container is still not honoured." >&2
+    exit 1
+  fi
+  sleep 10
+done
+
+az storage blob upload --auth-mode login --account-name "$ACCOUNT" --container-name manual \
+  --name underwriting-manual.pdf --file data/manual/underwriting-manual.pdf \
+  --content-type application/pdf --overwrite
+
+remove_upload_role; trap - EXIT
+az role assignment list --assignee "$ME" --scope "$MANUAL_SCOPE" -o table   # no Storage Blob Data Contributor of yours
+```
+
+The blob's name must equal `manual_blob_name` in `infra/demo/app/terraform.tfvars`.
+
+**Step 6. Start the ingestion job and read its result.** The job is the Container Apps job `caj-aiuw-demo-wus3-ingest` (`terraform -chdir=infra/demo/app output -raw retrieval_ingest_job_name`), on the `retrieval` image and identity. It never starts by itself.
+
+```bash
+JOB="$(terraform -chdir=infra/demo/app output -raw retrieval_ingest_job_name)"
+EXECUTION="$(az containerapp job start -g rg-aiuw-demo-wus3 -n "$JOB" --query name -o tsv)"
+az containerapp job execution show -g rg-aiuw-demo-wus3 -n "$JOB" --job-execution-name "$EXECUTION" \
+  --query properties.status -o tsv        # Running, then Succeeded or Failed
+az containerapp job logs show -g rg-aiuw-demo-wus3 -n "$JOB" --execution "$EXECUTION" --container ingest
+```
+
+A run that succeeds ends with `ingestion done: pages=206 chunks=111 written=111 moved=0 removed=0 unchanged=0 skipped=no`. A run that fails ends with `ingestion failed: code=<error code> reason=<what exactly>` and leaves the table as it was; the reasons are listed in the root `README.md`. Starting the job again is safe: over the same manual, with the same deployments and prompt, it ends early with `written=0 ... unchanged=111 skipped=yes`, without sending the manual to Document Intelligence or calling a model. What the index was built from is one row of `retrieval.ingest_run` (the manual's SHA-256, the prompt's digest, the deployment names). A run that would remove more than a tenth of the stored chunks is refused (`too_many_chunks_removed`), because a manual that was parsed badly looks like one that lost its rules; its log names the chunks, and after checking them the one run is let through with `RETRIEVAL_INGEST_ALLOW_LARGE_REMOVAL=true` on that execution. Start it again after uploading a changed manual, and after a deploy that changed the context-line prompt or a deployment name (every chunk is then written again, about a hundred chat calls).
+
+**Upgrading an environment that is already set up.** Not yet run. When `retrieval` ships a new migration and the database was bootstrapped before, run step 0, then step 2 alone, and finish with step 4, as in section 6. The job does not need to run again for a migration that keeps the `chunk` table's rows.
+
+## 8. Database role for `extraction`
+
+Added by story 2.4. Not yet run: the environment was down while the story was built, so these steps are written from sections 4 and 6, and are on the list for the final test session (`_bmad-output/implementation-artifacts/deferred-work.md`). Add each run to the log below.
+
+`extraction` owns schema `extraction`: table `fact_set`, which holds the key row and the stored result of each page's extraction, and table `fact`, one row per fact with its quote, whether the quote was found on the page and where (spine AD-4, AD-6, AD-14). As for `intake`, an operator does these steps once after the `foundation` stack is up, and again after every teardown. Until this section is done, `extraction` reports "not ready", and a case fails once a page reaches extraction (about five minutes after, when `workflow`'s retries of the extract command are spent), because no facts can be stored.
+
+The steps are those of section 4 with this service's names: its migrations create the schema and the two tables and grant nothing, so step 3 grants the service role its rights and hands the schema to the pipeline's role. Run them in this order, in one shell, from the repository root.
+
+**Step 0. Set up the shell, and open the firewall for your address.** The `trap` removes the firewall rule and the token when the shell exits, also after a failed step; `set -e` stops at the first error.
+
+```bash
+set -euo pipefail
+
+SERVER="$(terraform -chdir=infra/demo/foundation output -raw postgresql_server_name)"
+HOST="$(terraform -chdir=infra/demo/foundation output -raw postgresql_fqdn)"
+DATABASE="$(terraform -chdir=infra/demo/foundation output -raw postgresql_database_name)"
+ME="$(az ad signed-in-user show --query id -o tsv)"   # your database role is named after your object id
+SERVICE_ROLE="id-aiuw-demo-wus3-extraction"           # must equal: terraform -chdir=infra/demo/app output extraction_database_role
+DEPLOY_ROLE="id-aiuw-demo-wus3-deploy"                # the pipeline's role, which will run migrations later
+
+cleanup() {
+  # Always: the temporary firewall rule (azure.md rule 13) and the token.
+  az postgres flexible-server firewall-rule delete -g rg-aiuw-demo-wus3 -n "$SERVER" \
+    --rule-name operator-bootstrap --yes || true
+  unset PGPASSWORD
+}
+trap cleanup EXIT
+
+az postgres flexible-server firewall-rule create -g rg-aiuw-demo-wus3 -n "$SERVER" \
+  --rule-name operator-bootstrap --start-ip-address "$(curl -s https://api.ipify.org)"
+
+# An Entra token is the password. It lasts about an hour.
+export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+```
+
+**Step 1. Roles.** Principals are created in the `postgres` database; the service's role is named after its identity. Your own role is made a member of the pipeline's role, which step 3 needs; if section 4 was done in this bring-up it is one already, and that statement changes nothing.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
+-- Created only if it is not there yet, so this step can be run again.
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_ROLE') THEN
+    PERFORM pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+  END IF;
+END
+\$\$;
+GRANT "$DEPLOY_ROLE" TO "$ME";
+SQL
+```
+
+The step is safe to run again: the role is created only when it is missing, and the grant changes nothing the second time. After a teardown the identity is new but the database is new as well, so the role is missing and is created.
+
+**Step 2. Schema and migrations.** The service never migrates at start-up, and its readiness probe fails until the schema is at the migration head bundled in its image. This creates schema `extraction`, its two tables and its version table. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
+
+```bash
+EXTRACTION_DATABASE_HOST="$HOST" EXTRACTION_DATABASE_NAME="$DATABASE" EXTRACTION_DATABASE_USER="$ME" \
+EXTRACTION_DATABASE_ENTRA_AUTH=true \
+  uv run alembic -c services/extraction/alembic.ini upgrade head
+```
+
+**Step 3. Grants.** The service role gets data rights on its own schema and nothing else: no `CREATE`, because only migrations change the schema, and read-only on the version table, so the service can check its revision but never change it. Sequences are included for tables that later get one. The schema and its tables are handed to the pipeline's role, so that it owns them as the spine's conventions say and its later migrations need no further grant.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
+-- Hand the schema and everything in it to the pipeline's role.
+ALTER SCHEMA extraction OWNER TO "$DEPLOY_ROLE";
+-- Every table and every sequence in the schema, whatever migrations have
+-- added since this was written. A sequence that belongs to a table column
+-- follows its table and is left out.
+DO \$\$
+DECLARE item record;
+BEGIN
+  FOR item IN
+    SELECT c.relname, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'extraction' AND c.relkind IN ('r', 'p', 'S')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i') AND c.relkind = 'S'
+      )
+    ORDER BY c.relkind DESC
+  LOOP
+    EXECUTE format(
+      'ALTER %s extraction.%I OWNER TO %I',
+      CASE WHEN item.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+      item.relname, '$DEPLOY_ROLE'
+    );
+  END LOOP;
+END
+\$\$;
+
+GRANT USAGE ON SCHEMA extraction TO "$SERVICE_ROLE";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA extraction TO "$SERVICE_ROLE";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA extraction TO "$SERVICE_ROLE";
+-- The version table is read-only for the service.
+REVOKE INSERT, UPDATE, DELETE ON extraction.alembic_version FROM "$SERVICE_ROLE";
+
+-- Tables and sequences that later migrations add, run by the pipeline's role.
+-- This needs membership of that role, granted in step 1.
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA extraction
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "$SERVICE_ROLE";
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA extraction
+  GRANT USAGE, SELECT ON SEQUENCES TO "$SERVICE_ROLE";
+SQL
+```
+
+**Step 4. Close up and check.** Leaving the shell runs the `trap`; to stay in the shell, run it now.
+
+```bash
+cleanup; trap - EXIT
+az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
+```
+
+Then the `extraction` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run. Its other access, to the chat deployment it shares with `extraction`, is the Azure role Foundry User on the Foundry project, which the `app` stack assigns; nothing is done for it here. It holds no role on storage: it reads pages from `intake` through Dapr.
+
+`workflow` gets a migration with this story too (`0006`, table `decision_told`, with SELECT and INSERT for the service role): run section 5's upgrade steps for it in the same session, or `workflow` reports "not ready" and its worker does not start.
+
+**Upgrading an environment that is already set up.** Not yet run. When `extraction` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2 alone: the migrations bring the schema to the new head, and the default privileges of step 3 already cover tables and sequences that the pipeline's role creates. Run step 3 again only when a migration added objects while you, not the pipeline's role, ran it: the step hands every table and sequence in the schema over and repeats the grants, and is safe to run again. Finish with step 4. Until the migration step has run, `extraction` reports "not ready", because its image carries a newer head than the database.
+
 ## Out-of-band log
 
 Every command that changed Azure or GitHub outside the pipeline, newest last (`terraform.md` rule 29).

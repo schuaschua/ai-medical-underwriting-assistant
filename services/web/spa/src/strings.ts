@@ -333,6 +333,8 @@ export const strings = {
       not_awaiting_decision: "The page was not waiting for that decision.",
       pages_not_terminal: "Some pages were not finished yet.",
       rule_not_seen: "A rule was asked for that had not been found first.",
+      retriever_not_available:
+        "The way of searching the manual that was asked for is not available yet.",
       stage_timeout: "The step took too long and was stopped.",
       stage_failed: "The step could not be completed.",
       redaction_failed: "The document could not be redacted.",

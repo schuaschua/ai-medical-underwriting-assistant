@@ -5,7 +5,7 @@ name = "aiunderwriter"
 version = "0.0.0"
 description = "AI Medical Underwriting Assistant POC: workspace root"
 requires-python = "==3.13.*"
-dependencies = ["classification", "contracts", "intake", "web", "workflow"]
+dependencies = ["classification", "contracts", "extraction", "intake", "retrieval", "web", "workflow"]
 
 [dependency-groups]
 dev = [
@@ -21,9 +21,11 @@ dev = [
     "ruff==0.16.10",
     # The synthetic data generator is a dev tool: `uv run python -m synthdata`.
     # It also holds the local stand-in for Azure AI Language (story 1.7),
-    # `uv run python -m synthdata.language_standin`, and the one for the
-    # Foundry chat deployment (story 1.8),
-    # `uv run python -m synthdata.foundry_standin`; no service depends on it.
+    # `uv run python -m synthdata.language_standin`, the one for the Foundry
+    # model deployments (stories 1.8 and 2.2),
+    # `uv run python -m synthdata.foundry_standin`, and the one for Document
+    # Intelligence's layout model (story 2.2),
+    # `uv run python -m synthdata.layout_standin`; no service depends on it.
     "synthdata",
 ]
 
@@ -36,7 +38,9 @@ members = ["packages/*", "services/*"]
 [tool.uv.sources]
 classification = { workspace = true }
 contracts = { workspace = true }
+extraction = { workspace = true }
 intake = { workspace = true }
+retrieval = { workspace = true }
 web = { workspace = true }
 workflow = { workspace = true }
 synthdata = { workspace = true }
@@ -70,9 +74,13 @@ mypy_path = [
     "packages/synthdata/tests/support",
     "services/classification/src",
     "services/classification/tests/support",
+    "services/extraction/src",
+    "services/extraction/tests/support",
     "services/intake/src",
     # Test doubles shared by a service's tests (also on pytest's pythonpath).
     "services/intake/tests/support",
+    "services/retrieval/src",
+    "services/retrieval/tests/support",
     "services/web/src",
     "services/workflow/src",
     "services/workflow/tests/support",
@@ -95,20 +103,31 @@ addopts = "--import-mode=importlib --strict-markers"
 pythonpath = [
     "packages/synthdata/tests/support",
     "services/classification/tests/support",
+    "services/extraction/tests/support",
     "services/intake/tests/support",
+    "services/retrieval/tests/support",
     "services/workflow/tests/support",
 ]
 markers = [
     # Needs the containers of compose.yaml: `docker compose up --detach --wait`.
-    # Where a test needs Azure AI Language or the Foundry chat deployment it
-    # runs the stand-ins of packages/synthdata, a dev dependency of this
-    # workspace (stories 1.7 and 1.8).
+    # Where a test needs Azure AI Language, the Foundry deployments or
+    # Document Intelligence it runs the stand-ins of packages/synthdata, a dev
+    # dependency of this workspace (stories 1.7, 1.8 and 2.2).
     "integration: uses the local PostgreSQL, blob emulator, scheduler emulator or a stand-in",
 ]
 
 [tool.coverage.run]
 # What `uv run pytest --cov` measures; each service adds its package here.
-source_pkgs = ["classification", "contracts", "intake", "synthdata", "web", "workflow"]
+source_pkgs = [
+    "classification",
+    "contracts",
+    "extraction",
+    "intake",
+    "retrieval",
+    "synthdata",
+    "web",
+    "workflow",
+]
 
 [tool.coverage.report]
 # coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.

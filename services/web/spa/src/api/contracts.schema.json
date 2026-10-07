@@ -811,6 +811,7 @@
         "not_awaiting_decision",
         "pages_not_terminal",
         "rule_not_seen",
+        "retriever_not_available",
         "stage_timeout",
         "stage_failed",
         "redaction_failed",
@@ -1678,6 +1679,14 @@
           "title": "Manual Page",
           "type": "integer"
         },
+        "reference_rule_ids": {
+          "items": {
+            "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+            "type": "string"
+          },
+          "title": "Reference Rule Ids",
+          "type": "array"
+        },
         "rule_id": {
           "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
           "title": "Rule Id",
@@ -1694,7 +1703,8 @@
         "chunk_set",
         "text",
         "manual_page",
-        "impairment"
+        "impairment",
+        "reference_rule_ids"
       ],
       "title": "RuleText",
       "type": "object"
@@ -1758,6 +1768,7 @@
       "description": "Request of `POST /searches`; the result is not stored.",
       "properties": {
         "query": {
+          "maxLength": 2000,
           "pattern": "\\S",
           "title": "Query",
           "type": "string"

@@ -22,6 +22,12 @@ workflow_ready_path           = "/ready"
 classification_port           = 8003
 classification_health_path    = "/health"
 classification_ready_path     = "/ready"
+retrieval_port                = 8004
+retrieval_health_path         = "/health"
+retrieval_ready_path          = "/ready"
+extraction_port               = 8005
+extraction_health_path        = "/health"
+extraction_ready_path         = "/ready"
 otel_sampling_ratio           = 1
 dapr_http_max_request_size_mb = 16
 dapr_http_port                = 3500
@@ -55,6 +61,36 @@ classifier_runs = 5
 classifier_max_concurrent_runs = 5
 model_max_concurrent_calls     = 10
 model_max_retries              = 3
+
+# Extraction (spine AD-14): one model call per page that reaches extraction,
+# on the chat deployment classification shares. Lower this if its token rate
+# limit is hit; the first real numbers come from the final Azure test session
+# (deferred-work.md).
+extraction_model_max_concurrent_calls = 5
+
+# Retrieval (spine AD-12). The ingestion job reads this blob from the `manual`
+# container, has Document Intelligence's layout model parse it, and stores one
+# chunk per rule. The API version is the generally available one the adapter
+# was written for; it and the result's shape wait for the final Azure test
+# session (deferred-work.md).
+manual_blob_name   = "underwriting-manual.pdf"
+layout_api_version = "2024-11-30"
+# The job makes one chat call per rule (about a hundred) on the deployment the
+# other services share: lower this if its token rate limit is hit.
+retrieval_model_max_concurrent_calls = 5
+# Row r3 (spine AD-11): how many chunks the vector search and the full-text
+# search each hand to the rank fusion. The manual has about a hundred rules.
+search_candidate_depth = 50
+# A search's own short budget (the ingestion job keeps the model settings
+# above): seconds for the query's embedding call, its retries, and the
+# deadline over the whole search.
+search_embedding_timeout_seconds = 3
+search_embedding_max_retries     = 1
+search_deadline_seconds          = 8
+# The job's own deadline, and the platform's limit on one run of it, which
+# must be the longer by two minutes or more.
+ingest_deadline_seconds = 1800
+ingest_timeout_seconds  = 2100
 
 # A new role assignment takes a while to reach every Azure region and service.
 role_propagation_wait = "60s"

@@ -1,10 +1,12 @@
 """What the cross-service tests share: the real services, wired together without Dapr.
 
-These tests run `workflow`, `intake` and `classification` as they really run,
+These tests run `workflow`, `intake`, `classification` and `extraction` as they really run,
 against the containers of compose.yaml, with the stand-ins of this package
 where Azure AI Language and the Foundry chat deployment would be. Where the
 Dapr sidecars would be, a transport hands a service invocation to the app of
-the service it names.
+the service it names. `retrieval`'s ingestion job runs the same way, with the
+stand-ins where Document Intelligence and the Foundry deployments would be
+(story 2.2).
 
 The helpers live with the stand-ins' tests, on pytest's `pythonpath`, and not
 under `services/`: nothing there may name the generator's package or the
@@ -14,6 +16,7 @@ answer key (spine AD-17).
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +24,7 @@ from typing import Any
 
 import httpx
 import httpx2
+import psycopg
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.client import OrchestrationState, OrchestrationStatus
 from fastapi.testclient import TestClient
@@ -29,12 +33,22 @@ from workflow_local import connect, wait_for_case_status
 from classification.adapters.http.app import create_app as create_classification
 from classification.settings import Settings as ClassificationSettings
 from contracts.models.classification import ClassificationList
+from contracts.models.extraction import FactList
 from contracts.models.intake import PageList
 from contracts.models.workflow import AuditTrail, CaseProgress
+from extraction.adapters.http.app import create_app as create_extraction
+from extraction.settings import Settings as ExtractionSettings
 from intake.adapters.http.app import create_app as create_intake
 from intake.settings import Settings as IntakeSettings
+from retrieval import ingest as ingest_job
+from retrieval.adapters.blob import upload_local_manual
+from retrieval.adapters.http.app import create_app as create_retrieval
+from retrieval.settings import Settings as RetrievalSettings
 from synthdata.foundry_standin import FoundryStandIn
+from synthdata.generate import RULE_TABLE_FILE
 from synthdata.language_standin import LanguageStandIn
+from synthdata.layout_standin import LayoutStandIn
+from synthdata.manual import MANUAL_FILE_NAME
 from web.adapters.http.app import create_app as create_web
 from web.settings import Settings as WebSettings
 from workflow.adapters.http.app import create_app as create_workflow
@@ -43,6 +57,7 @@ from workflow.settings import Settings as WorkflowSettings
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 CASES_DIR = REPOSITORY_ROOT / "data" / "cases"
 ANSWER_KEY_DIR = REPOSITORY_ROOT / "data" / "answer-key" / "cases"
+MANUAL_PDF = REPOSITORY_ROOT / "data" / "manual" / MANUAL_FILE_NAME
 PDF = {"Content-Type": "application/pdf"}
 # So that a failing step is not waited out: the same attempts, closer together.
 FAST_RETRIES = {
@@ -67,6 +82,12 @@ def answer_key(case_name: str) -> dict[str, Any]:
     """The answer key of one synthetic case: its expected pages and planted identifiers."""
     key: dict[str, Any] = json.loads((ANSWER_KEY_DIR / f"{case_name}.json").read_text())
     return key
+
+
+def rule_table() -> dict[str, dict[str, Any]]:
+    """The answer key's rule table, by `rule_id`. Only tests outside `services/` read it."""
+    table = json.loads((REPOSITORY_ROOT / "data" / RULE_TABLE_FILE).read_text())
+    return {rule["rule_id"]: rule for rule in table["rules"]}
 
 
 def query(settings: WorkflowSettings, statement: str, *parameters: object) -> list[Any]:
@@ -249,6 +270,133 @@ class LocalClassification:
             )
 
 
+@dataclass
+class LocalExtraction:
+    """`extraction` on a test's database, with the model stand-in behind its gateway (story 2.4)."""
+
+    settings: ExtractionSettings
+    model: FoundryStandIn
+    intake: LocalIntake
+    # The sidecar of every instance made, so a test can see what was read.
+    sidecars: list[ServicesBehindSidecar] = field(default_factory=list)
+
+    def app(self) -> Any:
+        """A new instance of the service, reading its pages from the real `intake`."""
+        sidecar = ServicesBehindSidecar(intake=self.intake.app())
+        self.sidecars.append(sidecar)
+        return create_extraction(
+            self.settings,
+            sidecar=sidecar,
+            model=httpx2.ASGITransport(app=self.model.app()),
+        )
+
+    def reads_of_intake(self) -> list[tuple[str, str]]:
+        """Every call the service made to `intake`, as method and path."""
+        return [
+            (method, path)
+            for sidecar in self.sidecars
+            for _, method, path in sidecar.calls
+        ]
+
+    def facts(self, case_id: str) -> FactList:
+        """`GET /cases/{case_id}/facts` on the service."""
+        with TestClient(self.app()) as client:
+            return FactList.model_validate(client.get(f"/cases/{case_id}/facts").json())
+
+
+# Every stored chunk, whole: its columns and its row version, which changes
+# whenever the row is written.
+_ALL_CHUNKS = (
+    "SELECT chunk_id, chunk_set, rule_ids, reference_rule_ids, section_id, "
+    "impairment, manual_page, text, context_line, embedding::text, content_hash, "
+    "xmin::text FROM retrieval.chunk ORDER BY chunk_id"
+)
+CHUNK_FIELDS = (
+    "chunk_id",
+    "chunk_set",
+    "rule_ids",
+    "reference_rule_ids",
+    "section_id",
+    "impairment",
+    "manual_page",
+    "text",
+    "context_line",
+    "embedding",
+    "content_hash",
+    "row_version",
+)
+
+
+@dataclass
+class LocalRetrieval:
+    """`retrieval`'s ingestion job on a test's database and manual container.
+
+    The job runs as it really runs (`python -m retrieval.ingest`), with the
+    layout stand-in where Document Intelligence would be and the model
+    stand-in where the Foundry deployments would be.
+    """
+
+    settings: RetrievalSettings
+    layout: LayoutStandIn
+    model: FoundryStandIn
+
+    def upload(self, pdf: Path = MANUAL_PDF) -> None:
+        """Put a manual PDF into this test's `manual` container."""
+        upload_local_manual(self.settings, pdf)
+
+    def ingest(self, **changes: Any) -> int:
+        """Run the job once; its exit status."""
+        return ingest_job.main(
+            self.settings.model_copy(update=changes),
+            ingest_job.Transports(
+                layout=httpx2.ASGITransport(app=self.layout.app()),
+                model=httpx2.ASGITransport(app=self.model.app()),
+            ),
+        )
+
+    def chunks(self) -> dict[str, dict[str, Any]]:
+        """Every stored chunk, by `chunk_id`."""
+        with psycopg.connect(
+            host=self.settings.database_host,
+            port=self.settings.database_port,
+            dbname=self.settings.database_name,
+            user=self.settings.database_user,
+        ) as connection:
+            rows = connection.execute(_ALL_CHUNKS).fetchall()
+        return {row[0]: dict(zip(CHUNK_FIELDS, row, strict=True)) for row in rows}
+
+    def forget_last_run(self) -> None:
+        """Remove the note of what the index was built from, so the next run parses again."""
+        with psycopg.connect(
+            host=self.settings.database_host,
+            port=self.settings.database_port,
+            dbname=self.settings.database_name,
+            user=self.settings.database_user,
+            autocommit=True,
+        ) as connection:
+            connection.execute("DELETE FROM retrieval.ingest_run")
+
+    @property
+    def model_calls(self) -> int:
+        """Chat and embedding calls the model stand-in has had."""
+        return self.model.calls + self.model.embedding_calls
+
+    @contextlib.contextmanager
+    def service(self, **changes: Any) -> Iterator[TestClient]:
+        """The `retrieval` service on this test's index (story 2.3).
+
+        The app exactly as the server builds it from its settings, but for
+        the transport that puts the model stand-in where the embedding
+        deployment would be. Its gateway and its engine are closed with it.
+        """
+        app = create_retrieval(
+            self.settings.model_copy(update=changes),
+            model_transport=httpx2.ASGITransport(app=self.model.app()),
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            yield client
+
+
 @contextlib.contextmanager
 def workflow_service(
     settings: WorkflowSettings, sidecar: httpx.AsyncBaseTransport
@@ -259,6 +407,29 @@ def workflow_service(
         raise_server_exceptions=False,
     ) as client:
         yield client
+
+
+def wait_for_extractions(
+    client: TestClient, case_id: str, timeout_seconds: float = 90.0
+) -> dict[str, Any]:
+    """Read the case's progress on `workflow` until no page is `extracting`; return it.
+
+    A page the gate or an accept sends on is extracted beside whatever else
+    the case waits for (story 2.4). A test that looks at a waiting case
+    waits for those extractions first, so that what it sees does not depend
+    on how far they have got.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    progress: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        response = client.get(f"/cases/{case_id}/progress")
+        progress = response.json() if response.status_code == 200 else {}
+        pages = progress.get("pages", [])
+        if pages and all(page["page_status"] != "extracting" for page in pages):
+            return progress
+        # Not a wait for time to pass: the other threads get their turn.
+        time.sleep(0.05)
+    raise AssertionError(f"case {case_id} still has pages in extraction: {progress}")
 
 
 def start_and_wait(
@@ -272,8 +443,9 @@ def start_and_wait(
     """Start the case, wait for its lifecycle to come to rest, and read what it left.
 
     A case whose page waits for a person keeps its lifecycle alive (story
-    1.10): it is waited for until it says so, and then ended, since nobody
-    decides its pages here. The last value is the lifecycle's own answer, of
+    1.10): it is waited for until it says so and the pages the gate sent on
+    are extracted (story 2.4), and then ended, since nobody decides its
+    pages here. The last value is the lifecycle's own answer, of
     a lifecycle that ended by itself.
     """
     with workflow_service(workflow_settings, sidecar) as client:
@@ -290,6 +462,7 @@ def start_and_wait(
             output: dict[str, Any] = {}
             if waits_for_a_human:
                 wait_for_case_status(client, case_id, "awaiting_human", 90)
+                wait_for_extractions(client, case_id)
             else:
                 state = completed(scheduler_client, case_id)
                 output = json.loads(state.serialized_output or "")

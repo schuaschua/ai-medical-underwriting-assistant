@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from synthdata_stack import (
     REPOSITORY_ROOT,
     LocalClassification,
+    LocalExtraction,
     LocalIntake,
     ServicesBehindSidecar,
     answer_key,
@@ -67,11 +68,14 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
 ) -> None:
     case_id, _ = intake.upload("case-002.pdf")
     key = answer_key("case-002")
     sidecar = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
 
     progress, trail, _ = start_and_wait(
@@ -83,12 +87,13 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
     )
 
     # Every page was classified, and the gate sent each medical page on to
-    # extraction and each other page back to the customer (story 1.9), so
-    # the case waits for a human, and its lifecycle with it (story 1.10).
+    # extraction, where it is extracted by now (story 2.4), and each other
+    # page back to the customer (story 1.9), so the case waits for a human,
+    # and its lifecycle with it (story 1.10).
     page_ids = [page.page_id for page in intake.pages(case_id).pages]
     assert len(page_ids) == 6
     assert [(page.page_id, page.page_status.value) for page in progress.pages] == [
-        (page_id, "extracting" if expected["is_medical"] else "awaiting_customer")
+        (page_id, "extracted" if expected["is_medical"] else "awaiting_customer")
         for page_id, expected in zip(page_ids, key["pages"], strict=True)
     ]
     assert progress.case_status.value == "awaiting_human"
@@ -120,10 +125,12 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         "case.started",
         "document.redacted",
     ]
-    # Then one `page.routed` event per page (story 1.9): fourteen events in all.
+    # Then one `page.routed` event per page (story 1.9), and one
+    # `facts.extracted` event per medical page (story 2.4).
     assert sorted(event.action.value for event in trail.events) == [
         "case.started",
         "document.redacted",
+        *["facts.extracted"] * 3,
         *["page.classified"] * 6,
         *["page.routed"] * 6,
     ]
@@ -141,8 +148,15 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
     assert sidecar.paths("classification") == ["/classifications"] * 6
     # Five runs of the model per page, each on the redacted reading only: no
     # planted identifier was ever sent to the model.
-    requests = classification.model.requests
+    # (The stand-in also answered `extraction` for the three medical pages:
+    # story 2.4. Those requests carry no picture and are left out here.)
+    requests = [
+        request
+        for request in classification.model.requests
+        if page_text_of(request) is not None
+    ]
     assert len(requests) == 30
+    assert classification.model.extraction_calls == 3
     sent = [page_text_of(request) or "" for request in requests]
     assert all("SYNTHETIC TEST DOCUMENT" in text for text in sent)
     assert any("[Person]" in text for text in sent)
@@ -170,12 +184,15 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
 ) -> None:
     classification.model.mode = Mode.DISAGREE
     case_id, _ = intake.upload("case-001.pdf")
     key = answer_key("case-001")
     sidecar = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
 
     progress, _, _ = start_and_wait(
@@ -216,13 +233,16 @@ def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
     mode: Mode,
     error_code: str,
 ) -> None:
     classification.model.mode = mode
     case_id, _ = intake.upload("case-001.pdf")
     sidecar = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
 
     progress, _, output = start_and_wait(
@@ -257,10 +277,13 @@ def test_story_1_8_a_case_started_with_the_doc_intelligence_contender_fails(
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
 ) -> None:
     case_id, _ = intake.upload("case-001.pdf")
     sidecar = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
 
     with workflow_service(workflow_service_settings, sidecar) as client:

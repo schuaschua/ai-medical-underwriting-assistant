@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-06-2026 14:30
-last_updated: 10-07-2026 20:40
+last_updated: 10-07-2026 23:30
 project: ai-medical-underwriting-assistant
 project_key: NOKEY
 tracking_system: file-system
@@ -53,9 +53,9 @@ development_status:
 
   epic-2: in-progress
   2-1-synthetic-underwriting-manual-and-rule-table: review
-  2-2-manual-ingested-into-pgvector-as-smart-chunks: in-progress
-  2-3-search-the-manual-for-rules: backlog
-  2-4-fact-extraction-with-checked-quotes: backlog
+  2-2-manual-ingested-into-pgvector-as-smart-chunks: review
+  2-3-search-the-manual-for-rules: review
+  2-4-fact-extraction-with-checked-quotes: in-progress
   2-5-suggested-verdict-with-cited-reasons: backlog
   2-6-rules-that-send-a-case-to-the-underwriter: backlog
   2-7-result-view-with-clickable-citations: backlog

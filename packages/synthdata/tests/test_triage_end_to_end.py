@@ -21,11 +21,13 @@ from synthdata_stack import (
     CASES_DIR,
     PDF,
     LocalClassification,
+    LocalExtraction,
     LocalIntake,
     RunningService,
     ServicesBehindSidecar,
     answer_key,
     end_lifecycle,
+    wait_for_extractions,
     web_service,
     workflow_service,
 )
@@ -75,6 +77,7 @@ def test_story_1_11_the_underwriter_accepts_and_denies_the_pages_of_the_triage_q
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
     tmp_path: Path,
 ) -> None:
     # The stand-in's runs differ on laboratory reports and identity documents
@@ -90,7 +93,9 @@ def test_story_1_11_the_underwriter_accepts_and_denies_the_pages_of_the_triage_q
     ]
     assert answer_key("case-001")["pages"][2]["page_type"] == "lab_report"
     behind_workflow = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
     eval_run_id = new_id()
     started: list[str] = []
@@ -122,13 +127,17 @@ def test_story_1_11_the_underwriter_accepts_and_denies_the_pages_of_the_triage_q
                     ).status_code
                     == 200
                 )
-                waiting = wait_for_case_status(workflow, case_id, "awaiting_human", 90)
+                wait_for_case_status(workflow, case_id, "awaiting_human", 90)
+                # Story 2.4: the two pages the gate sent on are extracted
+                # while the others wait.
+                waiting = wait_for_extractions(workflow, case_id)
                 eval_waiting = wait_for_case_status(
                     workflow, eval_case_id, "awaiting_human", 90
                 )
+                assert waiting["case_status"] == "awaiting_human"
                 assert [page["page_status"] for page in waiting["pages"]] == [
-                    "extracting",
-                    "extracting",
+                    "extracted",
+                    "extracted",
                     "awaiting_triage",
                     "awaiting_customer",
                     "awaiting_customer",
@@ -240,11 +249,13 @@ def test_story_1_11_the_underwriter_accepts_and_denies_the_pages_of_the_triage_q
     # Accepting one and denying the other empties the queue.
     assert (after.pages, after.has_more) == ([], False)
 
-    # No extraction yet (story 2.4): the accepted page stays `extracting`.
+    # The accepted page is extracted like the two the gate sent on (story
+    # 2.4); with every page final the case is completed.
+    assert progress["case_status"] == "completed"
     assert [page["page_status"] for page in progress["pages"]] == [
-        "extracting",
-        "extracting",
-        "extracting",
+        "extracted",
+        "extracted",
+        "extracted",
         "denied",
         "discarded",
         "discarded",

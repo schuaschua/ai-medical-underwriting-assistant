@@ -58,6 +58,46 @@ output "classification_database_role" {
   value       = local.classification_identity.name
 }
 
+output "extraction_container_app_name" {
+  description = "Name of the extraction Container App."
+  value       = module.extraction.name
+}
+
+output "extraction_container_app_id" {
+  description = "Resource id of the extraction Container App."
+  value       = module.extraction.resource_id
+}
+
+output "extraction_database_role" {
+  description = "Name of the PostgreSQL role the extraction service signs in as; the database bootstrap creates it (infra/bootstrap/README.md, section 8)."
+  value       = local.extraction_identity.name
+}
+
+output "retrieval_container_app_name" {
+  description = "Name of the retrieval Container App."
+  value       = module.retrieval.name
+}
+
+output "retrieval_container_app_id" {
+  description = "Resource id of the retrieval Container App."
+  value       = module.retrieval.resource_id
+}
+
+output "retrieval_database_role" {
+  description = "Name of the PostgreSQL role the retrieval service and its ingestion job sign in as; the database bootstrap creates it (infra/bootstrap/README.md)."
+  value       = local.retrieval_identity.name
+}
+
+output "retrieval_ingest_job_name" {
+  description = "Name of the Container Apps job that ingests the manual; an operator or the pipeline starts it (infra/bootstrap/README.md, section 7)."
+  value       = module.retrieval_ingest.container_app_job_name
+}
+
+output "retrieval_ingest_job_id" {
+  description = "Resource id of the ingestion job."
+  value       = module.retrieval_ingest.resource_id
+}
+
 output "image_tag" {
   description = "Image tag the services run."
   value       = var.image_tag

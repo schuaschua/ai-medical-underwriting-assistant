@@ -40,6 +40,7 @@ export type ErrorCode =
   | "not_awaiting_decision"
   | "pages_not_terminal"
   | "rule_not_seen"
+  | "retriever_not_available"
   | "stage_timeout"
   | "stage_failed"
   | "redaction_failed"
@@ -604,6 +605,7 @@ export interface RuleText {
   chunk_set: ChunkSet;
   impairment: string;
   manual_page: number;
+  reference_rule_ids: string[];
   rule_id: string;
   text: string;
 }

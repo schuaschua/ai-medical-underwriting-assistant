@@ -20,6 +20,7 @@ from synthdata_stack import (
     CASES_DIR,
     PDF,
     LocalClassification,
+    LocalExtraction,
     LocalIntake,
     RunningService,
     ServicesBehindSidecar,
@@ -46,6 +47,8 @@ UNDERWRITER = {"X-Demo-Role": "underwriter"}
 REDACTION_ACTOR = "intake:azure-ai-language"
 CLASSIFIER_ACTOR = f"classification:{LOCAL_DEPLOYMENT}"
 GATE_ACTOR = "workflow:gate"
+EXTRACTION_ACTOR = f"extraction:{LOCAL_DEPLOYMENT}"
+LIFECYCLE_ACTOR = "workflow:case-lifecycle"
 # The page status each human action leaves its page in (AD-10).
 STATUS_AFTER_DECISION = {rule.action: rule.leaves for rule in DECISION_RULES.values()}
 
@@ -69,6 +72,8 @@ def status_after(event: AuditRecord) -> PageStatus:
         return PageStatus(event.detail.route)
     if event.action is AuditAction.STAGE_FAILED:
         return PageStatus.FAILED
+    if event.action is AuditAction.FACTS_EXTRACTED:
+        return PageStatus.EXTRACTED
     return STATUS_AFTER_DECISION[event.action]
 
 
@@ -77,6 +82,7 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
+    extraction: LocalExtraction,
     tmp_path: Path,
 ) -> None:
     # The stand-in's runs differ on laboratory reports and identity documents
@@ -91,7 +97,9 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         "other",
     ]
     behind_workflow = ServicesBehindSidecar(
-        intake=intake.app(), classification=classification.app()
+        intake=intake.app(),
+        classification=classification.app(),
+        extraction=extraction.app(),
     )
     started: list[str] = []
 
@@ -169,11 +177,13 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         for event in trail.events
     ]
 
-    # Story 1.13: the start first, by the customer who asked for it. Two
-    # pages are still being extracted, so the trail has no `case.completed`.
+    # Story 1.13: the start first, by the customer who asked for it. Story
+    # 2.4: the pages that reached `extracting` are extracted, so every page
+    # is final and the trail ends with the one `case.completed`.
     assert events[0] == ("case.started", None, ActorKind.HUMAN, "customer")
     assert trail.events[0].ref == case_id
-    assert "case.completed" not in {action for action, _, _, _ in events}
+    assert events[-1] == ("case.completed", None, ActorKind.AI, LIFECYCLE_ACTOR)
+    assert [action for action, _, _, _ in events].count("case.completed") == 1
     # Then the redaction, by `intake` with Azure AI Language: counts per
     # category of what was redacted, and no value.
     assert events[1] == ("document.redacted", None, ActorKind.AI, REDACTION_ACTOR)
@@ -181,7 +191,8 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
     assert isinstance(counts, dict) and counts
     assert all(isinstance(count, int) for count in counts.values())
     # Every expected event, each once: a classification and a route per
-    # page, and the five decisions.
+    # page, the five decisions, and an extraction for each page that
+    # reached `extracting`: two by the gate and one by an accept.
     ai_page_events = [
         (action, page_id, ActorKind.AI, actor)
         for page_id in page_ids
@@ -197,7 +208,11 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         ("page.discarded", sixth, ActorKind.HUMAN, "customer"),
         ("page.denied", unsure, ActorKind.HUMAN, "underwriter"),
     ]
-    assert sorted(events[2:]) == sorted(ai_page_events + decisions)
+    extractions = [
+        ("facts.extracted", page_id, ActorKind.AI, EXTRACTION_ACTOR)
+        for page_id in (page_ids[0], page_ids[1], invoice)
+    ]
+    assert sorted(events[2:-1]) == sorted(ai_page_events + decisions + extractions)
     # The decisions are in the order they were made.
     assert [event for event in events[1:] if event[2] is ActorKind.HUMAN] == decisions
     # Causal order, page by page: its classification, its route, then what
@@ -207,10 +222,16 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         for page_id in page_ids
     }
     assert chains == {
-        page_ids[0]: ["page.classified", "page.routed"],
-        page_ids[1]: ["page.classified", "page.routed"],
+        page_ids[0]: ["page.classified", "page.routed", "facts.extracted"],
+        page_ids[1]: ["page.classified", "page.routed", "facts.extracted"],
         unsure: ["page.classified", "page.routed", "page.denied"],
-        invoice: ["page.classified", "page.routed", "page.kept", "page.accepted"],
+        invoice: [
+            "page.classified",
+            "page.routed",
+            "page.kept",
+            "page.accepted",
+            "facts.extracted",
+        ],
         fifth: ["page.classified", "page.routed", "page.discarded"],
         sixth: ["page.classified", "page.routed", "page.discarded"],
     }
@@ -232,7 +253,7 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
     # (the redaction's event), the events lead each page, by allowed changes
     # only, to the status the case's progress reports for it.
     walked = {page_id: [PageStatus.UPLOADED] for page_id in page_ids}
-    for event in trail.events[2:]:
+    for event in trail.events[2:-1]:
         assert event.page_id is not None
         history = walked[event.page_id]
         after = status_after(event)
@@ -247,12 +268,13 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         "awaiting_customer",
         "awaiting_triage",
         "extracting",
+        "extracted",
     ]
     assert [history[-1].value for history in walked.values()] == [
-        "extracting",
-        "extracting",
+        "extracted",
+        "extracted",
         "denied",
-        "extracting",
+        "extracted",
         "discarded",
         "discarded",
     ]

@@ -1,8 +1,8 @@
-"""Story 1.8: the local stand-in for the Foundry chat deployment that classifies pages.
+"""Stories 1.8 and 2.2: the local stand-in for the Foundry model deployments.
 
 Unit tests: what it answers, its modes, and that it stays a dev tool. The
-real model gateway of `classification` is what calls it here, so the request
-shape it accepts is the one the service sends.
+real model gateways of `classification` and `retrieval` are what call it
+here, so the request shapes it accepts are the ones the services send.
 """
 
 import asyncio
@@ -29,15 +29,25 @@ from contracts.enums import PageType
 from contracts.models.classification import ClassifierOutput
 from intake.adapters.pdf import read_pages
 from intake.settings import DEFAULT_REDACTION_CATEGORIES
+from retrieval.adapters.model import ModelGateway as RetrievalGateway
+from retrieval.adapters.model import build_model_client as build_retrieval_client
+from retrieval.domain.ingest import parse_context_line
+from retrieval.domain.ports import ModelUnavailable as RetrievalModelUnavailable
+from retrieval.settings import Settings as RetrievalSettings
 from synthdata.cases import CASES
 from synthdata.foundry_standin import (
     COMPLETIONS_PATH,
     DEFAULT_PORT,
+    EMBEDDING_DIMENSIONS,
+    EMBEDDINGS_PATH,
     LOCAL_DEPLOYMENT,
+    LOCAL_EMBEDDING_DEPLOYMENT,
     FoundryStandIn,
     Mode,
     answer_for,
     classify_text,
+    context_line_for,
+    embed_text,
     main,
     other_than,
     page_text_of,
@@ -274,6 +284,7 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
 ):
     services = sorted(path.name for path in (REPOSITORY_ROOT / "services").iterdir())
     assert "classification" in services
+    assert "extraction" in services
     for service in services:
         folder = REPOSITORY_ROOT / "services" / service
         if not (folder / "pyproject.toml").exists():
@@ -292,6 +303,9 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
         "mixed",
         "invalid",
         "throttled",
+        # Story 2.4: what the stand-in adds to a page's facts.
+        "quote_not_on_page",
+        "masked_value",
     ]
 
 
@@ -321,3 +335,123 @@ def test_story_1_8_the_stand_in_listens_on_loopback_only(
     assert "synthdata.foundry_standin" in dev
     # Story 1.9: the mode of the local stand-in is chosen by a variable.
     assert '--mode "${FOUNDRY_STANDIN_MODE:-ok}"' in dev
+
+
+# --- The context line and the embeddings of the ingestion job (story 2.2) ----------------
+
+RULE_PLACE = (
+    "Section: 2 Type 2 diabetes mellitus\n"
+    "Part: 2.4 Probable rating\n"
+    "Rule text:\n"
+    "Rule UW-DM-001: Type 2 diabetes mellitus (section 2.4). Threshold: HbA1c "
+    "below 7.0 %."
+)
+RETRIEVAL_SETTINGS = RetrievalSettings(
+    applicationinsights_connection_string=None,
+    model_endpoint=f"http://127.0.0.1:{DEFAULT_PORT}",
+    chat_deployment=LOCAL_DEPLOYMENT,
+    embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+)
+
+
+def on_retrieval_gateway(stand_in: FoundryStandIn, call: Any) -> Any:
+    """`retrieval`'s own gateway, with the stand-in where the deployments would be."""
+
+    async def no_wait(seconds: float) -> None:
+        return None
+
+    async def scenario() -> Any:
+        gateway = RetrievalGateway(
+            build_retrieval_client(
+                RETRIEVAL_SETTINGS, httpx2.ASGITransport(app=stand_in.app())
+            ),
+            chat_deployment=LOCAL_DEPLOYMENT,
+            embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+            sleep=no_wait,
+        )
+        try:
+            return await call(gateway)
+        finally:
+            await gateway.aclose()
+
+    return asyncio.run(scenario())
+
+
+def cosine(first: list[float], second: list[float]) -> float:
+    return sum(a * b for a, b in zip(first, second, strict=True))
+
+
+def test_story_2_2_the_stand_in_writes_a_context_line_the_job_accepts() -> None:
+    stand_in = FoundryStandIn()
+
+    answer = on_retrieval_gateway(stand_in, lambda g: g.context_line(RULE_PLACE))
+
+    # One line that says where the rule sits, in the answer the prompt asks for.
+    line = parse_context_line(answer, 300)
+    assert line == (
+        "From section 2, Type 2 diabetes mellitus, part 2.4 (Probable rating), of "
+        "the underwriting manual: one rule of that section."
+    )
+    assert stand_in.calls == 1 and stand_in.embedding_calls == 0
+    # Without a part, and without anything it knows.
+    assert "part" not in context_line_for("Section: 7 Gout\nRule text:\nRule X.")
+    assert context_line_for("no headings") == "A rule of the underwriting manual."
+    # A page to classify is still answered as before, by its own shape.
+    assert json.loads(run_page(stand_in, "Laboratory Report")[0])["page_type"] == (
+        "lab_report"
+    )
+
+
+def test_story_2_2_the_stand_ins_vectors_are_the_same_every_time_and_close_for_shared_words() -> (
+    None
+):
+    stand_in = FoundryStandIn()
+    texts = [
+        "HbA1c below 7.0 % in type 2 diabetes mellitus",
+        "type 2 diabetes mellitus with HbA1c from 7.0 to below 8.0 %",
+        "serum urate above the band in gout",
+    ]
+
+    vectors = on_retrieval_gateway(stand_in, lambda g: g.embed(texts))
+    again = on_retrieval_gateway(stand_in, lambda g: g.embed(texts))
+
+    # Deterministic, of the size of `text-embedding-3-large`, at unit length.
+    assert vectors == again == [embed_text(text) for text in texts]
+    assert {len(vector) for vector in vectors} == {EMBEDDING_DIMENSIONS} == {3072}
+    for vector in vectors:
+        assert cosine(vector, vector) == pytest.approx(1.0, abs=1e-6)
+    # Texts that share words are close; texts that share none are not.
+    assert cosine(vectors[0], vectors[1]) > 0.5 > cosine(vectors[0], vectors[2])
+    assert cosine(vectors[0], vectors[2]) < 0.2
+    # A text without a word still has a vector.
+    assert sum(embed_text("?!")) == 1.0
+    assert stand_in.embedding_requests[0]["model"] == LOCAL_EMBEDDING_DEPLOYMENT
+
+
+def test_story_2_2_the_stand_in_refuses_an_embedding_request_without_texts() -> None:
+    with TestClient(FoundryStandIn().app()) as client:
+        for body in ({"model": "m"}, {"model": "m", "input": []}, {"input": ["a"]}):
+            assert client.post(EMBEDDINGS_PATH, json=body).status_code == 400
+        one = client.post(EMBEDDINGS_PATH, json={"model": "m", "input": "one text"})
+
+    assert [item["index"] for item in one.json()["data"]] == [0]
+
+
+def test_story_2_2_in_its_failure_modes_the_job_gets_no_context_line_and_no_vector() -> (
+    None
+):
+    invalid = FoundryStandIn(Mode.INVALID)
+    throttled = FoundryStandIn(Mode.THROTTLED)
+    short = FoundryStandIn()
+    short.embedding_dimensions = 8
+
+    prose = on_retrieval_gateway(invalid, lambda g: g.context_line(RULE_PLACE))
+    with pytest.raises(RetrievalModelUnavailable):
+        on_retrieval_gateway(throttled, lambda g: g.embed(["a text"]))
+    vectors = on_retrieval_gateway(short, lambda g: g.embed(["a text"]))
+
+    # Prose where an object was asked for; every call a 429; a vector too short.
+    with pytest.raises(ValueError, match="Expecting value"):
+        json.loads(prose)
+    assert throttled.embedding_calls == 4
+    assert [len(vector) for vector in vectors] == [8]

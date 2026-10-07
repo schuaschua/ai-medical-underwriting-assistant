@@ -9,6 +9,11 @@ locals {
     workflow = "ca-${local.foundation.name_suffix}-workflow"
 
     classification = "ca-${local.foundation.name_suffix}-classification"
+    extraction     = "ca-${local.foundation.name_suffix}-extraction"
+    retrieval      = "ca-${local.foundation.name_suffix}-retrieval"
+    # The one-off job that ingests the manual (spine AD-12); `caj` is the
+    # CAF abbreviation for a Container Apps job (azure.md, project names).
+    retrieval_ingest = "caj-${local.foundation.name_suffix}-ingest"
   }
 
   # The six required tags, as the foundation stack built them.
@@ -19,10 +24,14 @@ locals {
   workflow_identity = local.foundation.runtime_identities["workflow"]
 
   classification_identity = local.foundation.runtime_identities["classification"]
+  extraction_identity     = local.foundation.runtime_identities["extraction"]
+  retrieval_identity      = local.foundation.runtime_identities["retrieval"]
 
   # The blob containers intake owns (spine AD-4): the uploaded originals, and
   # the redacted PDFs and thumbnails.
   intake_blob_containers = toset(["originals", "cases"])
+  # The blob container retrieval owns (spine AD-4): the manual PDF.
+  retrieval_manual_container = "manual"
 
   # Compute ceilings (spine, Deployment): raising one is an architecture change.
   container_cpu    = 0.5
@@ -37,7 +46,15 @@ locals {
   # The replica count itself bounds nothing: every page of a case is
   # classified at once, several model runs each.
   classification_replicas = 1
-  workload_profile        = "Consumption"
+  # extraction is held at exactly 1 replica for the same reason: its own
+  # limit on model calls (var.extraction_model_max_concurrent_calls) is then
+  # the limit for the environment, on the chat deployment it shares with
+  # classification and, later, the verdict agent (spine AD-16).
+  extraction_replicas = 1
+  # retrieval is held at exactly 1 replica for the same reason: from story 2.3
+  # on it embeds every search query on the one embedding deployment.
+  retrieval_replicas = 1
+  workload_profile   = "Consumption"
 
   # Name of the Container Apps secret that holds the Application Insights
   # connection string.
@@ -49,5 +66,46 @@ locals {
     workflow = "${local.foundation.container_registry_login_server}/workflow"
 
     classification = "${local.foundation.container_registry_login_server}/classification"
+    extraction     = "${local.foundation.container_registry_login_server}/extraction"
+    retrieval      = "${local.foundation.container_registry_login_server}/retrieval"
   }
+
+  # What the retrieval service and its ingestion job are both given: one
+  # image, one identity, one set of settings (spine AD-12). No password, no
+  # storage key and no model key: the database, Blob Storage, Document
+  # Intelligence and the Foundry deployments are reached with the service
+  # identity (azure.md rule 7). The endpoints are the real accounts'; the
+  # local stand-ins exist only on a developer machine.
+  retrieval_env = [
+    { name = "RETRIEVAL_AZURE_CLIENT_ID", value = local.retrieval_identity.client_id },
+    { name = "RETRIEVAL_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
+    { name = "RETRIEVAL_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
+    { name = "RETRIEVAL_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
+    { name = "RETRIEVAL_DATABASE_NAME", value = local.foundation.postgresql_database_name },
+    { name = "RETRIEVAL_DATABASE_USER", value = local.retrieval_identity.name },
+    { name = "RETRIEVAL_DATABASE_ENTRA_AUTH", value = "true" },
+    { name = "RETRIEVAL_BLOB_ACCOUNT_URL", value = local.foundation.storage_blob_endpoint },
+    { name = "RETRIEVAL_MANUAL_CONTAINER", value = local.retrieval_manual_container },
+    { name = "RETRIEVAL_MANUAL_BLOB_NAME", value = var.manual_blob_name },
+    { name = "RETRIEVAL_LAYOUT_ENDPOINT", value = local.foundation.document_intelligence_endpoint },
+    { name = "RETRIEVAL_LAYOUT_ENTRA_AUTH", value = "true" },
+    { name = "RETRIEVAL_LAYOUT_API_VERSION", value = var.layout_api_version },
+    { name = "RETRIEVAL_MODEL_ENDPOINT", value = local.foundation.foundry_endpoint },
+    { name = "RETRIEVAL_MODEL_ENTRA_AUTH", value = "true" },
+    # Spine AD-16: the deployment names come from the foundation stack.
+    { name = "RETRIEVAL_CHAT_DEPLOYMENT", value = local.foundation.model_deployment_names["chat"] },
+    { name = "RETRIEVAL_EMBEDDING_DEPLOYMENT", value = local.foundation.model_deployment_names["embedding"] },
+    { name = "RETRIEVAL_MODEL_MAX_CONCURRENT_CALLS", value = tostring(var.retrieval_model_max_concurrent_calls) },
+    { name = "RETRIEVAL_MODEL_MAX_RETRIES", value = tostring(var.model_max_retries) },
+    # Spine AD-11, row r3: how many chunks each side of the hybrid search
+    # hands to the rank fusion.
+    { name = "RETRIEVAL_SEARCH_CANDIDATE_DEPTH", value = tostring(var.search_candidate_depth) },
+    # A search's own short budget, apart from the ingestion job's model settings.
+    { name = "RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS", value = tostring(var.search_embedding_timeout_seconds) },
+    { name = "RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES", value = tostring(var.search_embedding_max_retries) },
+    { name = "RETRIEVAL_SEARCH_DEADLINE_SECONDS", value = tostring(var.search_deadline_seconds) },
+    # The job's own deadline: under the platform's limit on one execution
+    # (var.ingest_timeout_seconds), so that the job ends itself and says why.
+    { name = "RETRIEVAL_INGEST_DEADLINE_SECONDS", value = tostring(var.ingest_deadline_seconds) },
+  ]
 }

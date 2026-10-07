@@ -4,11 +4,14 @@
 #      in containers;
 #   2. the database migrations and the blob containers (tools/migrate-local.sh);
 #   3. the built SPA;
-#   4. the stand-ins for Azure AI Language and for the Foundry chat deployment
-#      (packages/synthdata), which redact documents and classify pages while
-#      the Azure environment is down;
-#   5. each service in dapr.yaml with its Dapr sidecar (so far: web, intake,
-#      workflow, classification).
+#   4. the stand-ins for Azure AI Language, for the Foundry model deployments
+#      and for Document Intelligence's layout model (packages/synthdata),
+#      which redact documents, classify pages, read their facts and parse
+#      the manual while the Azure environment is down;
+#   5. the ingestion of the underwriting manual into schema `retrieval`
+#      (tools/ingest-local.sh), which does nothing when it was done before;
+#   6. each service in dapr.yaml with its Dapr sidecar (so far: web, intake,
+#      workflow, classification, extraction, retrieval).
 # Stop with Ctrl+C, then `docker compose down` for the containers.
 set -euo pipefail
 
@@ -41,15 +44,19 @@ if [ ! -d "$spa/node_modules" ] || [ "$spa/package-lock.json" -nt "$spa/node_mod
 fi
 npm --prefix "$spa" run build
 
-# The stand-ins for Azure AI Language's document redaction and for the
-# Foundry chat deployment that classifies pages, on loopback. They are dev
-# tools: no service image holds them, and Azure uses the real services. Their
-# ports are the ones dapr.yaml gives intake (INTAKE_LANGUAGE_ENDPOINT) and
-# classification (CLASSIFICATION_MODEL_ENDPOINT).
+# The stand-ins for Azure AI Language's document redaction, for the Foundry
+# model deployments (the chat model that classifies pages, reads their facts
+# and writes the manual's context lines, and the embedding model) and for Document
+# Intelligence's layout model, on loopback. They are dev tools: no service
+# image holds them, and Azure uses the real services. Their ports are the ones
+# dapr.yaml gives intake (INTAKE_LANGUAGE_ENDPOINT), classification
+# (CLASSIFICATION_MODEL_ENDPOINT) and extraction (EXTRACTION_MODEL_ENDPOINT),
+# and the ones tools/ingest-local.sh gives the ingestion job.
 language_port=5100
 model_port=5101
+layout_port=5102
 # Something else on a port would be taken for the stand-in below.
-for port in "$language_port" "$model_port"; do
+for port in "$language_port" "$model_port" "$layout_port"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
     echo "Port ${port} is in use; a stand-in needs it." >&2
     exit 1
@@ -57,6 +64,7 @@ for port in "$language_port" "$model_port"; do
 done
 language_standin=""
 model_standin=""
+layout_standin=""
 dapr_run=""
 
 # Stops Dapr (and with it the services) and the stand-ins, however the script
@@ -67,7 +75,7 @@ stop_all() {
     kill "$dapr_run" 2>/dev/null || true
     wait "$dapr_run" 2>/dev/null || true
   fi
-  for standin in "$language_standin" "$model_standin"; do
+  for standin in "$language_standin" "$model_standin" "$layout_standin"; do
     if [ -n "$standin" ]; then
       kill "$standin" 2>/dev/null || true
     fi
@@ -80,10 +88,13 @@ trap 'stop_all; exit 143' TERM
 uv run python -m synthdata.language_standin --port "$language_port" &
 language_standin=$!
 # FOUNDRY_STANDIN_MODE picks what the model stand-in does (README, 'Run
-# locally'): `mixed` makes one case show all three routes of the gate.
+# locally'): `mixed` makes one case show all three routes of the gate, and
+# `quote_not_on_page` gives every page a fact whose quote cannot be verified.
 uv run python -m synthdata.foundry_standin --port "$model_port" \
   --mode "${FOUNDRY_STANDIN_MODE:-ok}" &
 model_standin=$!
+uv run python -m synthdata.layout_standin --port "$layout_port" &
+layout_standin=$!
 
 # Without the Language stand-in every case would fail at redaction, and
 # without the model's at classification: wait until each listens, and stop
@@ -105,6 +116,16 @@ wait_for_standin() {
 }
 wait_for_standin "Language" "$language_standin" "$language_port" || exit 1
 wait_for_standin "model" "$model_standin" "$model_port" || exit 1
+wait_for_standin "layout" "$layout_standin" "$layout_port" || exit 1
+
+# The manual's rules, as chunks with vectors in schema `retrieval`. The job is
+# one-off and safe to run again: once the manual is ingested a run changes
+# nothing and calls no model. A failed run leaves the index as it was, and the
+# rest of the application starts all the same (a model stand-in started in a
+# failure mode fails the first ingestion too).
+if ! ./tools/ingest-local.sh; then
+  echo "The manual was not ingested (see the line above). Run ./tools/ingest-local.sh once the cause is gone." >&2
+fi
 
 # In the background and waited for, not `exec`: a signal to this script then
 # runs the traps above, which pass it on.

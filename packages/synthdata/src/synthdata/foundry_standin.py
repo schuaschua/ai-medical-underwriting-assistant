@@ -1,21 +1,30 @@
-"""A local stand-in for the Foundry chat deployment that classifies pages (story 1.8).
+"""A local stand-in for the Foundry model deployments (stories 1.8, 2.2 and 2.4).
 
-The Azure environment is down while the stories are built, so
-`classification`'s model gateway is proven against this: an HTTP app with the
-route the gateway calls (`POST /openai/v1/chat/completions`). It reads the
-page text out of the request and answers, in the shape of a chat completion,
-with a page type and a one-line reason as the classifier's prompt asks for
-them.
+The Azure environment is down while the stories are built, so the services'
+model gateways are proven against this: an HTTP app with the routes the
+gateways call. On `POST /openai/v1/chat/completions` it answers, in the shape
+of a chat completion, what the request's structured output asks for: for
+`classification` a page type and a one-line reason, read from the page text
+in the request; for `retrieval`'s ingestion job the context line of one rule
+of the manual, built from the section and part the request names; for
+`extraction` the facts of one page, each a statement and a quote, read from
+the page text in the request. On `POST /openai/v1/embeddings` it answers with
+one vector per text.
 
 A dev tool only. It is part of `synthdata`, which no service depends on, so it
-is in no service image; and `classification` refuses a plain-HTTP model
-endpoint that is not on loopback, so it cannot stand in for the model in
-Azure.
+is in no service image; and the services refuse a plain-HTTP model endpoint
+that is not on loopback, so it cannot stand in for the models in Azure.
 
 It is not a model. It tells the page types apart by the headings the
 generator prints on the synthetic pages; it does not look at the picture.
-What the real deployment answers, and whether its repeated runs differ at
-all, is checked in Azure.
+Its context line repeats the headings it was given. Its facts are the labelled
+values and the table rows the generator prints on the medical pages: it knows
+those labels and nothing of medicine. Its vectors count words:
+each word of a text adds to one of the vector's dimensions, picked by a hash
+of the word, so two texts are close when they share words and the same text
+always gets the same vector; they know nothing of meaning. What the real
+deployments answer, and whether repeated runs differ at all, is checked in
+Azure.
 
 Run it: `uv run python -m synthdata.foundry_standin` (see README, 'Run locally').
 """
@@ -23,6 +32,8 @@ Run it: `uv run python -m synthdata.foundry_standin` (see README, 'Run locally')
 import argparse
 import hashlib
 import json
+import math
+import re
 import threading
 import time
 import uuid
@@ -35,10 +46,69 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 
 from contracts.enums import PageType
-from contracts.text import normalise
+from contracts.text import has_mask_token, normalise
 
 COMPLETIONS_PATH = "/openai/v1/chat/completions"
+EMBEDDINGS_PATH = "/openai/v1/embeddings"
 DEFAULT_PORT = 5101
+# The name of the structured output `retrieval`'s ingestion job asks for, and
+# the one field of its answer.
+CONTEXT_SCHEMA_NAME = "chunk_context"
+CONTEXT_FIELD = "context_line"
+# The size of a vector of `text-embedding-3-large`.
+EMBEDDING_DIMENSIONS = 3072
+# A local name for the embedding deployment; the real one is a setting of the
+# `app` stack.
+LOCAL_EMBEDDING_DEPLOYMENT = "local-stand-in-embedding"
+# The name of the structured output `extraction` asks for, and the one field
+# of its answer (story 2.4).
+EXTRACTION_SCHEMA_NAME = "extraction_output"
+EXTRACTION_FIELD = "facts"
+# What the stand-in adds in the `quote_not_on_page` mode: a fact no synthetic
+# page holds, so its quote is found on none of them.
+FACT_NOT_ON_THE_PAGE = {
+    "statement": "Resting heart rate 61 bpm",
+    "quote": "Resting heart rate 61 bpm",
+}
+# What it adds in the `masked_value` mode: a masked value proposed as a fact,
+# which the service must leave out.
+MASKED_VALUE_FACT = {"statement": "Name: [Person]", "quote": "[Person]"}
+# The labels the generator prints above a medical value, as the stored page
+# text has them: the label on one line, its value on the next.
+_FACT_LABELS = frozenset(
+    {
+        "height",
+        "weight",
+        "body mass index (bmi)",
+        "smoking status",
+        "alcohol",
+        "condition",
+        "current treatment",
+        "family history",
+        "latest hba1c",
+    }
+)
+# The tests of the laboratory report's table: a row is the test, its result
+# and its unit, each cell on a line of its own, in that order.
+_LAB_TESTS = frozenset(
+    {
+        "hba1c",
+        "fasting plasma glucose",
+        "total cholesterol",
+        "ldl cholesterol",
+        "hdl cholesterol",
+        "creatinine",
+        "egfr",
+    }
+)
+# The header rows of the two tables of the attending physician's statement.
+_DIAGNOSES_HEADER = ("diagnosis", "diagnosed", "current treatment")
+_BLOOD_PRESSURE_HEADER = ("date", "systolic (mmhg)", "diastolic (mmhg)")
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_WORD = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*")
+_SECTION_LINE = re.compile(r"^Section: (\d+) (.+)$", re.MULTILINE)
+_PART_LINE = re.compile(r"^Part: ([\d.]+) (.+)$", re.MULTILINE)
 # A deployment name for the local run. It is what the audit trail then names
 # as the model; the real name is a setting of the `app` stack.
 LOCAL_DEPLOYMENT = "local-stand-in"
@@ -91,6 +161,12 @@ class Mode(StrEnum):
     INVALID = "invalid"
     # Every call is answered 429 with a `Retry-After`.
     THROTTLED = "throttled"
+    # Extraction (story 2.4): beside the facts of the page, one whose quote
+    # is not on the page. Pages are classified as in `ok`.
+    QUOTE_NOT_ON_PAGE = "quote_not_on_page"
+    # Extraction: beside the facts of the page, a masked value proposed as a
+    # fact. Pages are classified as in `ok`.
+    MASKED_VALUE = "masked_value"
 
 
 def classify_text(text: str) -> PageType:
@@ -132,6 +208,164 @@ def page_text_of(body: dict[str, Any]) -> str | None:
     return texts[0]
 
 
+def rule_place_of(body: dict[str, Any]) -> str | None:
+    """The user message of a context-line request: one rule and where it is printed.
+
+    None when the request does not ask for the context line's structured
+    output with one user message of plain text.
+    """
+    try:
+        schema = body["response_format"]["json_schema"]
+        if schema["name"] != CONTEXT_SCHEMA_NAME:
+            return None
+        (user,) = (message for message in body["messages"] if message["role"] == "user")
+        content = user["content"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return content if isinstance(content, str) and content.strip() else None
+
+
+def context_line_for(rule_place: str) -> str:
+    """The context line the stand-in gives a rule: the headings it was shown, in a sentence."""
+    section = _SECTION_LINE.search(rule_place)
+    part = _PART_LINE.search(rule_place)
+    if section is None:
+        return "A rule of the underwriting manual."
+    line = f"From section {section.group(1)}, {section.group(2)}"
+    if part is not None:
+        line += f", part {part.group(1)} ({part.group(2)})"
+    return f"{line}, of the underwriting manual: one rule of that section."
+
+
+def page_to_extract_of(body: dict[str, Any]) -> str | None:
+    """The page text of an extraction request: its user message, which is plain text.
+
+    None when the request does not ask for the extraction's structured
+    output with one user message of plain text.
+    """
+    try:
+        schema = body["response_format"]["json_schema"]
+        if schema["name"] != EXTRACTION_SCHEMA_NAME:
+            return None
+        (user,) = (message for message in body["messages"] if message["role"] == "user")
+        content = user["content"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return content if isinstance(content, str) else None
+
+
+def _fact(statement: str, *quoted: str) -> dict[str, str]:
+    # The quote is the page's own words, in the page's order, joined by one
+    # space as a model would copy the cells of a row: the service's quote
+    # check must find it across the line breaks of the stored text.
+    return {"statement": statement, "quote": " ".join(quoted)}
+
+
+def facts_in(text: str) -> list[dict[str, str]]:
+    """The facts the stand-in reads from a page text, in the page's order.
+
+    A labelled value (the label on one line, its value on the next), a row
+    of the laboratory table (test, result, unit), a row of the diagnoses
+    table (diagnosis, date, treatment) and a row of the blood pressure table
+    (date, systolic, diastolic). A value that was masked by redaction is
+    left alone. A page with none of these has no facts: an invoice, a
+    payslip, a blank page.
+    """
+    lines = [line.strip() for line in text.split("\n")]
+    folded = [line.casefold() for line in lines]
+    facts: list[dict[str, str]] = []
+    index = 0
+    while index < len(lines):
+        label = folded[index]
+        if tuple(folded[index : index + 3]) == _DIAGNOSES_HEADER:
+            index += 3
+            while index + 2 < len(lines) and _ISO_DATE.fullmatch(lines[index + 1]):
+                condition, diagnosed, treatment = lines[index : index + 3]
+                facts.append(
+                    _fact(
+                        f"{condition}, diagnosed {diagnosed}, {treatment}",
+                        condition,
+                        diagnosed,
+                        treatment,
+                    )
+                )
+                index += 3
+            continue
+        if tuple(folded[index : index + 3]) == _BLOOD_PRESSURE_HEADER:
+            index += 3
+            while (
+                index + 2 < len(lines)
+                and _ISO_DATE.fullmatch(lines[index])
+                and _NUMBER.fullmatch(lines[index + 1])
+                and _NUMBER.fullmatch(lines[index + 2])
+            ):
+                taken_on, systolic, diastolic = lines[index : index + 3]
+                facts.append(
+                    _fact(
+                        f"Blood pressure {systolic}/{diastolic} mmHg on {taken_on}",
+                        taken_on,
+                        systolic,
+                        diastolic,
+                    )
+                )
+                index += 3
+            continue
+        if (
+            label in _LAB_TESTS
+            and index + 2 < len(lines)
+            and _NUMBER.fullmatch(lines[index + 1])
+        ):
+            test, value, unit = lines[index : index + 3]
+            facts.append(_fact(f"{test} {value} {unit}", test, value, unit))
+            index += 3
+            continue
+        if label in _FACT_LABELS and index + 1 < len(lines):
+            value = lines[index + 1]
+            # A value redaction masked is no fact, and neither is a label
+            # that is followed by another label.
+            if (
+                value
+                and not has_mask_token(value)
+                and value.casefold() not in (_FACT_LABELS)
+            ):
+                facts.append(_fact(f"{lines[index]}: {value}", lines[index], value))
+                index += 2
+                continue
+        index += 1
+    return facts
+
+
+def embed_text(text: str, dimensions: int = EMBEDDING_DIMENSIONS) -> list[float]:
+    """A vector for a text: its words counted into hashed dimensions, at unit length.
+
+    The same text always gets the same vector, and texts that share words
+    are close (their cosine is high). A text without a word gets a vector
+    along the first dimension, so that it still has a length.
+    """
+    vector = [0.0] * dimensions
+    for word in _WORD.findall(text.lower()):
+        digest = hashlib.sha256(word.encode()).digest()
+        vector[int.from_bytes(digest[:8]) % dimensions] += 1.0
+    length = math.sqrt(sum(value * value for value in vector))
+    if length == 0.0:
+        vector[0] = 1.0
+        return vector
+    return [round(value / length, 8) for value in vector]
+
+
+def texts_of(body: dict[str, Any]) -> list[str] | None:
+    """The texts of an embedding request; None when it carries none."""
+    given = body.get("input")
+    texts = [given] if isinstance(given, str) else given
+    if (
+        not isinstance(texts, list)
+        or not texts
+        or not all(isinstance(text, str) and text for text in texts)
+    ):
+        return None
+    return texts
+
+
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(
         {"error": {"code": code, "message": message}}, status_code=status_code
@@ -146,16 +380,82 @@ class FoundryStandIn:
         # What a throttled call is told to wait; none by default, so that a
         # test or a local run fails at once instead of waiting.
         self.retry_after_seconds = retry_after_seconds
-        # What it was asked, for tests: every request body, in order.
+        # What it was asked, for tests: every chat request body, in order,
+        # and every embedding request body.
         self.requests: list[dict[str, Any]] = []
+        self.embedding_requests: list[dict[str, Any]] = []
+        # The size of the vectors it answers with; a test makes it wrong.
+        self.embedding_dimensions = EMBEDDING_DIMENSIONS
         # How often each page was run, by a digest of its text.
         self._runs: Counter[str] = Counter()
         self._lock = threading.Lock()
 
     @property
     def calls(self) -> int:
-        """How many calls it has had, answered or not."""
+        """How many chat calls it has had, answered or not."""
         return len(self.requests)
+
+    @property
+    def embedding_calls(self) -> int:
+        """How many embedding calls it has had, answered or not."""
+        return len(self.embedding_requests)
+
+    def _throttled(self) -> Response:
+        return JSONResponse(
+            {"error": {"code": "429", "message": "Rate limit reached."}},
+            status_code=429,
+            headers={"retry-after": str(self.retry_after_seconds)},
+        )
+
+    def context_answer(self, rule_place: str) -> str:
+        """The content of the completion for one rule's context line."""
+        if self.mode is Mode.INVALID:
+            # What a model does when it ignores the format it was given.
+            return "This rule is about a medical impairment, I think."
+        return json.dumps({CONTEXT_FIELD: context_line_for(rule_place)})
+
+    def extraction_answer(self, page_text: str) -> str:
+        """The content of the completion for one page's facts (story 2.4)."""
+        if self.mode is Mode.INVALID:
+            # What a model does when it ignores the format it was given.
+            return "This page mentions a few medical findings, I think."
+        facts = facts_in(page_text)
+        if self.mode is Mode.QUOTE_NOT_ON_PAGE:
+            facts.append(dict(FACT_NOT_ON_THE_PAGE))
+        if self.mode is Mode.MASKED_VALUE:
+            facts.append(dict(MASKED_VALUE_FACT))
+        return json.dumps({EXTRACTION_FIELD: facts})
+
+    @property
+    def extraction_calls(self) -> int:
+        """How many extraction calls it has had, answered or not."""
+        return sum(page_to_extract_of(body) is not None for body in self.requests)
+
+    def embed(self, body: dict[str, Any]) -> Response:
+        """Answer one embedding request."""
+        with self._lock:
+            self.embedding_requests.append(body)
+        if self.mode is Mode.THROTTLED:
+            return self._throttled()
+        texts = texts_of(body)
+        model = body.get("model")
+        if texts is None or not isinstance(model, str) or not model:
+            return _error(400, "invalid_request", "Not an embedding request.")
+        return JSONResponse(
+            {
+                "object": "list",
+                "model": model,
+                "data": [
+                    {
+                        "object": "embedding",
+                        "index": index,
+                        "embedding": embed_text(text, self.embedding_dimensions),
+                    }
+                    for index, text in enumerate(texts)
+                ],
+                "usage": {"prompt_tokens": 0, "total_tokens": 0},
+            }
+        )
 
     def _run_number(self, text: str) -> int:
         """Which run of this page a call is, counted from 0."""
@@ -184,15 +484,29 @@ class FoundryStandIn:
         with self._lock:
             self.requests.append(body)
         if self.mode is Mode.THROTTLED:
-            return JSONResponse(
-                {"error": {"code": "429", "message": "Rate limit reached."}},
-                status_code=429,
-                headers={"retry-after": str(self.retry_after_seconds)},
-            )
-        text = page_text_of(body)
+            return self._throttled()
         model = body.get("model")
-        if text is None or not isinstance(model, str) or not model:
-            return _error(400, "invalid_request", "Not a page classification request.")
+        rule_place = rule_place_of(body)
+        to_extract = page_to_extract_of(body) if rule_place is None else None
+        text = page_text_of(body) if rule_place is None and to_extract is None else None
+        if (
+            (rule_place is None and to_extract is None and text is None)
+            or not isinstance(model, str)
+            or not model
+        ):
+            return _error(
+                400,
+                "invalid_request",
+                "Not a page classification, a context line or an extraction request.",
+            )
+        if to_extract is not None:
+            content = self.extraction_answer(to_extract)
+        else:
+            content = (
+                self.context_answer(rule_place)
+                if rule_place is not None
+                else self.answer(text or "")
+            )
         return JSONResponse(
             {
                 "id": f"chatcmpl-{uuid.uuid4().hex}",
@@ -205,7 +519,7 @@ class FoundryStandIn:
                         "finish_reason": "stop",
                         "message": {
                             "role": "assistant",
-                            "content": self.answer(text),
+                            "content": content,
                         },
                     }
                 ],
@@ -218,7 +532,7 @@ class FoundryStandIn:
         )
 
     def app(self) -> FastAPI:
-        """The HTTP app: the one route the gateway calls."""
+        """The HTTP app: the two routes the gateways call."""
         app = FastAPI(
             title="foundry-stand-in", docs_url=None, redoc_url=None, openapi_url=None
         )
@@ -226,6 +540,10 @@ class FoundryStandIn:
         @app.post(COMPLETIONS_PATH)
         def complete(body: dict[str, Any]) -> Response:
             return self.complete(body)
+
+        @app.post(EMBEDDINGS_PATH)
+        def embed(body: dict[str, Any]) -> Response:
+            return self.embed(body)
 
         return app
 

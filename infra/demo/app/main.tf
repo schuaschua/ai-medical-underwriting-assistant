@@ -178,6 +178,110 @@ resource "time_sleep" "classification_role_propagation" {
   }
 }
 
+# The extraction identity holds these roles and no others (azure.md,
+# "Runtime roles"). It reads pages from intake through Dapr, so it holds no
+# role on storage. Its PostgreSQL role is not an Azure role: the database
+# bootstrap creates it (infra/bootstrap/README.md, section 8).
+resource "azurerm_role_assignment" "extraction_acr_pull" {
+  scope                = local.foundation.container_registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = local.extraction_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "extraction_metrics_publisher" {
+  scope                = local.foundation.application_insights_id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = local.extraction_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the Foundry project, not to the account (azure.md rule 9): the
+# service calls the shared chat deployment with its own identity (spine
+# AD-16). There is no key.
+resource "azurerm_role_assignment" "extraction_foundry_user" {
+  scope                = local.foundation.foundry_project_id
+  role_definition_name = "Foundry User"
+  principal_id         = local.extraction_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# As for intake: extraction waits for all of its own role assignments, so its
+# first revision can pull its image, call the model and send telemetry.
+resource "time_sleep" "extraction_role_propagation" {
+  create_duration = var.role_propagation_wait
+
+  triggers = {
+    acr_pull_id          = azurerm_role_assignment.extraction_acr_pull.id
+    metrics_publisher_id = azurerm_role_assignment.extraction_metrics_publisher.id
+    foundry_user_id      = azurerm_role_assignment.extraction_foundry_user.id
+  }
+}
+
+# The retrieval identity holds these roles and no others (azure.md, "Runtime
+# roles"); the service and its ingestion job share it (spine AD-12). Its
+# PostgreSQL role is not an Azure role: the database bootstrap creates it
+# (infra/bootstrap/README.md). The two Azure AI Search roles the standards
+# list for it come with the story that loads the index (Epic 3).
+resource "azurerm_role_assignment" "retrieval_acr_pull" {
+  scope                = local.foundation.container_registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "retrieval_metrics_publisher" {
+  scope                = local.foundation.application_insights_id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the Foundry project, not to the account (azure.md rule 9): the
+# chat deployment writes each chunk's context line and the embedding
+# deployment its vector (spine AD-12, AD-16). There is no key.
+resource "azurerm_role_assignment" "retrieval_foundry_user" {
+  scope                = local.foundation.foundry_project_id
+  role_definition_name = "Foundry User"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# The ingestion job has Document Intelligence's layout model parse the manual,
+# with the service identity. There is no key.
+resource "azurerm_role_assignment" "retrieval_document_intelligence_user" {
+  scope                = local.foundation.document_intelligence_id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the one container, not to the account (azure.md rule 9), and
+# read-only: the job reads the manual PDF there and nothing of ours writes to
+# it in Azure (an operator uploads the manual). Document Intelligence's own
+# identity holds no role on the container: the job sends it the manual's bytes.
+resource "azurerm_role_assignment" "retrieval_manual_reader" {
+  scope                = local.foundation.storage_container_ids[local.retrieval_manual_container]
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# As for intake: retrieval and its job wait for all of these, so the first
+# revision can pull its image and send telemetry, and the first run of the
+# job can read the manual, have it parsed and call the models.
+resource "time_sleep" "retrieval_role_propagation" {
+  create_duration = var.role_propagation_wait
+
+  triggers = {
+    acr_pull_id                   = azurerm_role_assignment.retrieval_acr_pull.id
+    metrics_publisher_id          = azurerm_role_assignment.retrieval_metrics_publisher.id
+    foundry_user_id               = azurerm_role_assignment.retrieval_foundry_user.id
+    document_intelligence_user_id = azurerm_role_assignment.retrieval_document_intelligence_user.id
+    manual_reader_id              = azurerm_role_assignment.retrieval_manual_reader.id
+  }
+}
+
 # --- web ---------------------------------------------------------------------
 
 # The only service reachable from the internet (spine AD-18). There is no
@@ -671,5 +775,307 @@ module "classification" {
   # and Azure has to have spread them.
   depends_on = [
     time_sleep.classification_role_propagation,
+  ]
+}
+
+# --- extraction ------------------------------------------------------------------
+
+# Internal ingress only (spine AD-18): reachable from inside the environment,
+# and called only through Dapr service invocation (AD-3), by workflow (the
+# extract command) and, later, by web and verdict (reads). It reads each
+# page's text from intake through its own sidecar, and is held at exactly one
+# replica.
+module "extraction" {
+  source  = "Azure/avm-res-app-containerapp/azurerm"
+  version = "0.9.0"
+
+  name                                  = local.names.extraction
+  resource_group_name                   = local.foundation.resource_group_name
+  resource_group_id                     = local.foundation.resource_group_id
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+  revision_mode                         = "Single"
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.extraction_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.extraction_identity.id
+  }]
+
+  secrets = {
+    appi = {
+      name  = local.appi_secret_name
+      value = local.foundation.application_insights_connection_string
+    }
+  }
+
+  ingress = {
+    external_enabled           = false
+    allow_insecure_connections = false
+    target_port                = var.extraction_port
+    transport                  = "auto"
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+
+  # Service invocation only (AD-3). Commands carry ids, and a page's text is
+  # well under the sidecar's default request limit.
+  dapr = {
+    enabled      = true
+    app_id       = "extraction"
+    app_port     = var.extraction_port
+    app_protocol = "http"
+  }
+
+  template = {
+    min_replicas = local.extraction_replicas
+    max_replicas = local.extraction_replicas
+
+    containers = [{
+      name   = "extraction"
+      image  = "${local.image_repositories.extraction}:${var.image_tag}"
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      # No password and no model key: the database and the chat deployment
+      # are reached with the service identity (azure.md rule 7). The model
+      # endpoint is the Foundry account's and the deployment name comes from
+      # the foundation stack (spine AD-16); the local stand-in exists only on
+      # a developer machine.
+      env = [
+        { name = "EXTRACTION_HOST", value = "0.0.0.0" },
+        { name = "EXTRACTION_PORT", value = tostring(var.extraction_port) },
+        { name = "EXTRACTION_AZURE_CLIENT_ID", value = local.extraction_identity.client_id },
+        { name = "EXTRACTION_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
+        { name = "EXTRACTION_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
+        { name = "EXTRACTION_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
+        { name = "EXTRACTION_DATABASE_NAME", value = local.foundation.postgresql_database_name },
+        { name = "EXTRACTION_DATABASE_USER", value = local.extraction_identity.name },
+        { name = "EXTRACTION_DATABASE_ENTRA_AUTH", value = "true" },
+        { name = "EXTRACTION_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
+        { name = "EXTRACTION_MODEL_ENDPOINT", value = local.foundation.foundry_endpoint },
+        { name = "EXTRACTION_MODEL_ENTRA_AUTH", value = "true" },
+        { name = "EXTRACTION_CHAT_DEPLOYMENT", value = local.foundation.model_deployment_names["chat"] },
+        { name = "EXTRACTION_MODEL_MAX_CONCURRENT_CALLS", value = tostring(var.extraction_model_max_concurrent_calls) },
+        { name = "EXTRACTION_MODEL_MAX_RETRIES", value = tostring(var.model_max_retries) },
+      ]
+
+      # azure.md rule 22. Startup and liveness ask the process; readiness
+      # also asks the database, and fails unless its schema revision equals
+      # the migration head bundled in the image.
+      startup_probes = [{
+        transport               = "HTTP"
+        port                    = var.extraction_port
+        path                    = var.extraction_health_path
+        interval_seconds        = 5
+        timeout                 = 2
+        failure_count_threshold = 10
+      }]
+      readiness_probes = [{
+        transport               = "HTTP"
+        port                    = var.extraction_port
+        path                    = var.extraction_ready_path
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }]
+      liveness_probes = [{
+        transport               = "HTTP"
+        port                    = var.extraction_port
+        path                    = var.extraction_health_path
+        interval_seconds        = 30
+        timeout                 = 2
+        failure_count_threshold = 3
+      }]
+    }]
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
+  # The first revision needs every one of the identity's role assignments,
+  # and Azure has to have spread them.
+  depends_on = [
+    time_sleep.extraction_role_propagation,
+  ]
+}
+
+# --- retrieval -----------------------------------------------------------------
+
+# Internal ingress only (spine AD-18): reachable from inside the environment,
+# and called only through Dapr service invocation (AD-3). For now it has its
+# probes only; the search and the rule read come with story 2.3. It is held
+# at exactly one replica.
+module "retrieval" {
+  source  = "Azure/avm-res-app-containerapp/azurerm"
+  version = "0.9.0"
+
+  name                                  = local.names.retrieval
+  resource_group_name                   = local.foundation.resource_group_name
+  resource_group_id                     = local.foundation.resource_group_id
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+  revision_mode                         = "Single"
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.retrieval_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.retrieval_identity.id
+  }]
+
+  secrets = {
+    appi = {
+      name  = local.appi_secret_name
+      value = local.foundation.application_insights_connection_string
+    }
+  }
+
+  ingress = {
+    external_enabled           = false
+    allow_insecure_connections = false
+    target_port                = var.retrieval_port
+    transport                  = "auto"
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+
+  # Service invocation only (AD-3). A search carries a query and answers a
+  # few chunks: well under the sidecar's default request limit.
+  dapr = {
+    enabled      = true
+    app_id       = "retrieval"
+    app_port     = var.retrieval_port
+    app_protocol = "http"
+  }
+
+  template = {
+    min_replicas = local.retrieval_replicas
+    max_replicas = local.retrieval_replicas
+
+    containers = [{
+      name   = "retrieval"
+      image  = "${local.image_repositories.retrieval}:${var.image_tag}"
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      env = concat(
+        [
+          { name = "RETRIEVAL_HOST", value = "0.0.0.0" },
+          { name = "RETRIEVAL_PORT", value = tostring(var.retrieval_port) },
+        ],
+        local.retrieval_env,
+      )
+
+      # azure.md rule 22. Startup and liveness ask the process; readiness
+      # also asks the database, and fails unless its schema revision equals
+      # the migration head bundled in the image.
+      startup_probes = [{
+        transport               = "HTTP"
+        port                    = var.retrieval_port
+        path                    = var.retrieval_health_path
+        interval_seconds        = 5
+        timeout                 = 2
+        failure_count_threshold = 10
+      }]
+      readiness_probes = [{
+        transport               = "HTTP"
+        port                    = var.retrieval_port
+        path                    = var.retrieval_ready_path
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }]
+      liveness_probes = [{
+        transport               = "HTTP"
+        port                    = var.retrieval_port
+        path                    = var.retrieval_health_path
+        interval_seconds        = 30
+        timeout                 = 2
+        failure_count_threshold = 3
+      }]
+    }]
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
+  # The first revision needs every one of the identity's role assignments,
+  # and Azure has to have spread them.
+  depends_on = [
+    time_sleep.retrieval_role_propagation,
+  ]
+}
+
+# The ingestion job (spine AD-12): the same image and the same identity as the
+# service, with another command. It has no ingress and no Dapr sidecar,
+# because it calls no service of ours. It never starts by itself: an operator
+# or the pipeline starts one execution, after the manual is in its container
+# and the database is migrated (infra/bootstrap/README.md, section 7). A run
+# over an unchanged manual changes nothing and calls no model, so starting it
+# again is safe. A failed execution is not tried again by the platform: the
+# job leaves the index as it was and its log says why.
+module "retrieval_ingest" {
+  source  = "Azure/avm-res-app-job/azurerm"
+  version = "0.2.2"
+
+  name                                  = local.names.retrieval_ingest
+  resource_group_name                   = local.foundation.resource_group_name
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.retrieval_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.retrieval_identity.id
+  }]
+
+  secrets = [{
+    name  = local.appi_secret_name
+    value = local.foundation.application_insights_connection_string
+  }]
+
+  trigger_config = {
+    manual_trigger_config = {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+  replica_retry_limit        = 0
+  replica_timeout_in_seconds = var.ingest_timeout_seconds
+
+  template = {
+    container = {
+      name    = "ingest"
+      image   = "${local.image_repositories.retrieval}:${var.image_tag}"
+      cpu     = local.container_cpu
+      memory  = local.container_memory
+      command = ["python", "-m", "retrieval.ingest"]
+      env     = local.retrieval_env
+    }
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
+  depends_on = [
+    time_sleep.retrieval_role_propagation,
   ]
 }
