@@ -17,7 +17,7 @@ from contracts.models.intake import (
     WordBox,
 )
 from intake.domain.entities import PageRecord, Word
-from intake.domain.ports import CaseFiles, PageRepository
+from intake.domain.ports import CaseFiles, PageRepository, PageSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -142,3 +142,36 @@ async def read_document_file(
     if blob_name is None:
         raise DomainError(ErrorCode.NOT_REDACTED, NOT_REDACTED_MESSAGE)
     return await _read_file(files, blob_name, "document", document_id)
+
+
+async def read_page_file(
+    document_id: str,
+    page_number: int,
+    *,
+    repository: PageRepository,
+    files: CaseFiles,
+    splitter: PageSplitter,
+) -> bytes:
+    """One page of a document's redacted PDF, as a one-page PDF (story 4.2).
+
+    For the classifier that is asked one page at a time as a document. Like
+    the whole file it is `not_redacted` until redaction is done, and it is
+    cut from the redacted PDF and from nothing else (AD-21).
+    """
+    whole = await read_document_file(document_id, repository=repository, files=files)
+    try:
+        page = await splitter.one_page(whole, page_number)
+    except Exception as error:
+        # security rule 31: ids and the error's type, never its message.
+        logger.error(
+            "file not read: what=page_file id=%s page_number=%d type=%s",
+            document_id,
+            page_number,
+            type(error).__qualname__,
+        )
+        raise DomainError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, FILE_UNAVAILABLE_MESSAGE
+        ) from error
+    if page is None:
+        raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_PAGE_MESSAGE)
+    return page

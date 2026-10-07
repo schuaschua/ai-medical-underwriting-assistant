@@ -17,7 +17,14 @@ from typing import Any
 
 import httpx
 
-from classification.domain.entities import ClassificationKey, KeyRow, PageContent
+from classification.domain.entities import (
+    ClassificationKey,
+    ClassifierAnswer,
+    KeyRow,
+    ListedPage,
+    PageContent,
+    StoredBlob,
+)
 from classification.domain.ports import ModelUnavailable
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
@@ -31,6 +38,10 @@ ACTOR = f"classification:{DEPLOYMENT}"
 PAGE_TEXT = "SECRET-PAGE-TEXT Laboratory Report for [Person], HbA1c 6.1 %"
 REASON = "SECRET-REASON a table of laboratory values"
 PNG = b"\x89PNG\r\n\x1a\n" + b"synthetic-thumbnail"
+# The page as a one-page PDF (story 4.2): made up, and marked like the text.
+PAGE_FILE = b"%PDF-1.7 SECRET-PAGE-FILE one synthetic page"
+CLASSIFIER_ID = "page-types-test"
+CLASSIFIER_ACTOR = f"classification:{CLASSIFIER_ID}"
 
 
 def answer(page_type: str = "lab_report", reason: str = REASON) -> str:
@@ -126,6 +137,8 @@ class FakePages:
     gone: bool = False
     listings: list[str] = field(default_factory=list)
     reads: list[str] = field(default_factory=list)
+    # The pages asked for as a one-page PDF.
+    file_reads: list[str] = field(default_factory=list)
     trace_contexts: list[dict[str, str]] = field(default_factory=list)
 
     def add(self, case_id: str, text: str = PAGE_TEXT, image: bytes = PNG) -> str:
@@ -158,6 +171,56 @@ class FakePages:
             if page_id in pages:
                 return pages[page_id]
         return None
+
+    async def read_page_file(
+        self, case_id: str, page_id: str, trace_context: Mapping[str, str]
+    ) -> bytes | None:
+        self.file_reads.append(page_id)
+        self.trace_contexts.append(dict(trace_context))
+        if self.gone or page_id not in self.cases.get(case_id, {}):
+            return None
+        return PAGE_FILE
+
+
+@dataclass
+class StubClassifier:
+    """Stands in for the Document Intelligence classifier: answers from a script.
+
+    `answers` are given out in order, the last one again once they run out.
+    An entry that is an exception is raised instead.
+    """
+
+    answers: list[ClassifierAnswer | Exception] = field(
+        default_factory=lambda: [ClassifierAnswer("lab_report", 0.93)]
+    )
+    # With this set, every call waits for it first.
+    hold: asyncio.Event | None = None
+    documents: list[bytes] = field(default_factory=list)
+
+    async def classify(self, pdf: bytes) -> ClassifierAnswer:
+        position = len(self.documents)
+        self.documents.append(pdf)
+        if self.hold is not None:
+            await self.hold.wait()
+        given = self.answers[min(position, len(self.answers) - 1)]
+        if isinstance(given, Exception):
+            raise given
+        return given
+
+
+@dataclass
+class FakeTrainingPages:
+    """Stands in for the `classifier-training` container: its list and its blobs."""
+
+    listed: list[ListedPage] = field(default_factory=list)
+    blobs: list[StoredBlob] = field(default_factory=list)
+    url: str = "https://staiuwdemowus3.blob.core.windows.net/classifier-training"
+
+    def container_url(self) -> str:
+        return self.url
+
+    async def contents(self) -> tuple[list[ListedPage], list[StoredBlob]]:
+        return list(self.listed), list(self.blobs)
 
 
 @dataclass
@@ -220,6 +283,10 @@ _PAGES_PATH = re.compile(
 _PAGE_PATH = re.compile(
     r"/v1\.0/invoke/intake/method/pages/(?P<page_id>[0-9a-f-]{36})/(?P<what>text|thumbnail)"
 )
+_PAGE_FILE_PATH = re.compile(
+    r"/v1\.0/invoke/intake/method/documents/(?P<document_id>[0-9a-f-]{36})"
+    r"/pages/(?P<page_number>\d+)/file"
+)
 
 
 @dataclass
@@ -227,7 +294,7 @@ class IntakeSidecar:
     """Stands in for this service's Dapr sidecar, with `intake` behind it.
 
     An `httpx` transport handler: `httpx.MockTransport(sidecar.handle)`. It
-    answers the three reads as `intake` does, over HTTP and in the contracts'
+    answers the reads as `intake` does, over HTTP and in the contracts'
     shapes, so the real client module is what the test runs.
     """
 
@@ -274,6 +341,15 @@ class IntakeSidecar:
                         for number, page_id in enumerate(pages, start=1)
                     ],
                 },
+            )
+        file = _PAGE_FILE_PATH.fullmatch(request.url.path)
+        if file is not None:
+            # The fake's document id is its case id; the page by its number.
+            listed = self.pages.cases.get(file["document_id"], {})
+            if int(file["page_number"]) > len(listed):
+                return self._not_found()
+            return httpx.Response(
+                200, content=PAGE_FILE, headers={"content-type": "application/pdf"}
             )
         read = _PAGE_PATH.fullmatch(request.url.path)
         if read is None:

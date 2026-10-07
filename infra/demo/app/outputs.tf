@@ -113,6 +113,16 @@ output "retrieval_ingest_job_id" {
   value       = module.retrieval_ingest.resource_id
 }
 
+output "classification_train_job_name" {
+  description = "Name of the Container Apps job that trains the Document Intelligence classifier; an operator or the pipeline starts it (infra/bootstrap/README.md, section 10)."
+  value       = module.classification_train.container_app_job_name
+}
+
+output "classification_train_job_id" {
+  description = "Resource id of the training job."
+  value       = module.classification_train.resource_id
+}
+
 output "image_tag" {
   description = "Image tag the services run."
   value       = var.image_tag

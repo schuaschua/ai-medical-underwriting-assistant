@@ -12,7 +12,7 @@ that is not on loopback, so it cannot stand in for the service in Azure.
 
 What it finds: email addresses, phone numbers, identity numbers and policy
 numbers by their shape, and the names and addresses the generator plants in
-the synthetic cases. It is not a recogniser; what the real service finds is
+the synthetic cases and in the classifier's training pages. It is not a recogniser; what the real service finds is
 checked in Azure.
 
 Run it: `uv run python -m synthdata.language_standin` (see README, 'Run locally').
@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse, Response
 
 from synthdata.cases import CASES
 from synthdata.model import IdentifierCategory
+from synthdata.training import TRAINING_SUBJECTS
 
 JOBS_PATH = "/language/analyze-documents/jobs"
 TASK_KIND = "PiiEntityRecognition"
@@ -90,10 +91,13 @@ def planted_values() -> list[tuple[str, str]]:
     """The names and addresses of the synthetic cases, with each part of a name.
 
     Taken from the generator's case definitions, longest first, so a whole
-    name is masked as one item before its parts are looked for.
+    name is masked as one item before its parts are looked for. The people
+    of the classifier's training pages are among them (story 4.2): those
+    pages pass the same redaction as case pages before a classifier is
+    trained on them.
     """
     values: set[tuple[str, str]] = set()
-    for case in CASES:
+    for case in (*CASES, *TRAINING_SUBJECTS):
         for category, value in case.identifiers():
             values.add((CATEGORY_OF[category], value))
             if category is IdentifierCategory.PERSON_NAME:

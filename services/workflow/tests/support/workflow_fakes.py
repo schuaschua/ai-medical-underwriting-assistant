@@ -416,6 +416,7 @@ class MemoryCaseStore:
             error_code=failures[0][1]
             if failures and case.case_status is CaseStatus.FAILED
             else None,
+            classifier_contender=case.parameters.classifier_contender,
         )
 
     async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:
@@ -968,7 +969,8 @@ class FakeStages:
         )
         self._follow(self.classify_script, "That page could not be found.")
         if contender is not ClassifierContender.LLM:
-            # Story 4.2 builds the second contender; until then it is refused.
+            # As a `classification` that was given no Document Intelligence
+            # classifier (story 4.2): the contender is refused.
             raise DomainError(
                 ErrorCode.VALIDATION_FAILED, "That classifier is not available."
             )

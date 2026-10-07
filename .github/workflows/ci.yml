@@ -354,7 +354,7 @@ jobs:
             exit 1
           fi
 
-      - name: Check classification's health, its readiness and the user
+      - name: Check classification's health, its readiness, the user and the training job
         run: |
           curl --fail --silent --show-error --max-time 5 \
             --retry 10 --retry-delay 1 --retry-all-errors \
@@ -386,6 +386,25 @@ jobs:
             "from classification.prompts import CLASSIFY_PAGE, load_prompt; assert load_prompt(CLASSIFY_PAGE)"
           if docker exec "$CLASSIFICATION_CONTAINER" python -c "import synthdata" 2>/dev/null; then
             echo "::error::The classification image holds the model stand-in."
+            exit 1
+          fi
+          # Story 4.2: the image holds no training page. The pages are data
+          # in a blob container, redacted before they get there.
+          if docker run --rm "$CLASSIFICATION_IMAGE" sh -c \
+            'find / -xdev \( -name "*.pdf" -o -name "redacted-pages.json" -o -path "*classifier-training*" \) -print -quit 2>/dev/null | grep -q .'; then
+            echo "::error::The classification image holds a training page."
+            exit 1
+          fi
+          # The training job is the same image with another command. With
+          # nothing configured it must end non-zero and say so, not hang.
+          if docker run --rm "$CLASSIFICATION_IMAGE" python -m classification.train \
+            > "$RUNNER_TEMP/train.log" 2>&1; then
+            echo "::error::The training job ended with status 0 without any setting."
+            exit 1
+          fi
+          if ! grep --quiet "training failed: code=internal_error reason=not_configured" "$RUNNER_TEMP/train.log"; then
+            echo "::error::The training job did not say why it failed."
+            cat "$RUNNER_TEMP/train.log"
             exit 1
           fi
 

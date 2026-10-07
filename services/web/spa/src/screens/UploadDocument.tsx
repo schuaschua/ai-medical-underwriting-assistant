@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { uploadDocument } from "../api/client";
-import type { PageProgress } from "../api/contracts.gen";
+import type { ClassifierContender, PageProgress } from "../api/contracts.gen";
 import {
   stateOf,
   useCaseProgress,
@@ -56,13 +56,15 @@ function caseText(state: CaseState): string {
 function PageBadges({
   caseId,
   pages,
+  contender,
   onAnswered,
 }: {
   caseId: string;
   pages: readonly PageProgress[];
+  contender: ClassifierContender | null | undefined;
   onAnswered: () => void;
 }) {
-  const classifications = useClassifications(caseId, pages);
+  const classifications = useClassifications(caseId, pages, contender);
   if (pages.length === 0) {
     return null;
   }
@@ -220,6 +222,9 @@ export function UploadDocument() {
                       <PageBadges
                         caseId={item.case_id}
                         pages={caseState.pages}
+                        // The classifier the case was started with: the
+                        // prompt shows its reading of a page.
+                        contender={caseState.contender}
                         // The page's new status is the server's to say.
                         onAnswered={() => check(item.case_id)}
                       />

@@ -1,14 +1,23 @@
-"""Classify one page: what it is, how sure the model is, and why (AD-13, AD-6).
+"""Classify one page: what it is, how sure the classifier is, and why (AD-13, AD-6).
 
 The stage `workflow` commands for every page once redaction is done. The page
-is read from `intake`, so only the redacted reading is ever used. The model is
-run several times on the page; what the runs agree on is the answer, and how
-far they agree is the confidence. Nothing here routes a page: that is the
-gate's rule, in `workflow` (AD-7).
+is read from `intake`, so only the redacted reading is ever used. Two
+contenders answer the same command with the same result, and neither sees
+anything of the other's:
+
+- `llm`: the chat model is run several times on the page's text and
+  thumbnail; what the runs agree on is the answer, and how far they agree is
+  the confidence.
+- `doc-intelligence` (story 4.2): the page is sent as a one-page PDF to the
+  custom classifier of Document Intelligence; the document type it names is
+  the answer and its own confidence the confidence.
+
+Nothing here routes a page: that is the gate's rule, in `workflow` (AD-7).
 """
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -18,16 +27,23 @@ from types import MappingProxyType
 from pydantic import ValidationError
 
 from classification.domain.agreement import agree
-from classification.domain.entities import ClassificationKey, KeyRow, PageContent
+from classification.domain.entities import (
+    ClassificationKey,
+    ClassifierAnswer,
+    KeyRow,
+    PageContent,
+)
 from classification.domain.ports import (
     ClassificationRepository,
+    ClassifierNotReady,
     ModelCallFailed,
     ModelUnavailable,
+    PageClassifier,
     PageModel,
     PageReader,
 )
 from contracts.audit import AuditAction, AuditRecord
-from contracts.enums import ActorKind, ClassifierContender, StageStatus
+from contracts.enums import ActorKind, ClassifierContender, PageType, StageStatus
 from contracts.errors import NO_TRACE_ID, DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.classification import (
@@ -45,9 +61,11 @@ UNKNOWN_PAGE_MESSAGE = "That page could not be found."
 IN_PROGRESS_MESSAGE = "The page is still being classified."
 CONTENDER_NOT_AVAILABLE_MESSAGE = "That classifier is not available."
 NOT_RECORDED_MESSAGE = "The classification could not be recorded. Please try again."
+CLASSIFIER_NOT_READY_MESSAGE = "The classifier is not available right now."
 
-# The contenders this build can run. `doc-intelligence` arrives with story 4.2.
-AVAILABLE_CONTENDERS = frozenset({ClassifierContender.LLM})
+# The `reason` of the Document Intelligence contender: a fixed sentence that
+# names the classifier and the type it gave, and never anything of the page.
+CLASSIFIER_REASON = "The Document Intelligence classifier gave this page the type {}."
 
 _NO_TRACE_CONTEXT: Mapping[str, str] = MappingProxyType({})
 
@@ -72,6 +90,22 @@ class ClassifyPorts:
     repository: ClassificationRepository
     pages: PageReader
     model: PageModel
+    # The Document Intelligence classifier; None where the service was given
+    # no endpoint or no classifier id, and the contender is then not available.
+    classifier: PageClassifier | None = None
+
+
+def available_contenders(
+    ports: ClassifyPorts, options: "ClassifyOptions"
+) -> frozenset[ClassifierContender]:
+    """The contenders this instance can run: `llm` always, the other where it is configured.
+
+    Configured means the classifier and the actor that names it: a result
+    is never stored under another contender's actor.
+    """
+    if ports.classifier is None or not options.classifier_actor:
+        return frozenset({ClassifierContender.LLM})
+    return frozenset(ClassifierContender)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +114,9 @@ class ClassifyOptions:
 
     # AD-8: who classified, as `classification:<chat deployment name>`.
     actor: str
+    # The same for the Document Intelligence contender, as
+    # `classification:<classifier id>`; None where it is not configured.
+    classifier_actor: str | None = None
     runs: int = 5
     max_concurrent_runs: int = 5
     deadline_seconds: float = 180.0
@@ -96,6 +133,29 @@ class _Run:
     eval_run_id: str | None
     trace_id: str
     started: float = field(default_factory=time.monotonic)
+
+
+@dataclass(frozen=True, slots=True)
+class _Reading:
+    """What a contender made of the page, whichever contender it was."""
+
+    page_type: PageType
+    confidence: float
+    reason: str
+    # How often the classifier was asked, and how many of the answers named
+    # the type: counts for the log.
+    runs: int
+    agreeing_runs: int
+
+
+def _actor_of(contender: ClassifierContender, options: ClassifyOptions) -> str:
+    """AD-8: the actor of a classification names what classified."""
+    if contender is not ClassifierContender.DOC_INTELLIGENCE:
+        return options.actor
+    if not options.classifier_actor:
+        # Never the chat deployment's name on the classifier's result.
+        raise DomainError(ErrorCode.VALIDATION_FAILED, CONTENDER_NOT_AVAILABLE_MESSAGE)
+    return options.classifier_actor
 
 
 def _audit(run: _Run, action: AuditAction, occurred_at: datetime) -> AuditRecord:
@@ -164,17 +224,18 @@ async def classify_page(
     stored. A key row left running by a process that died is settled as
     failed, by the first repeat that comes `options.stale_margin_seconds`
     after its deadline. A page `intake` does not hold for the case is
-    `not_found`, and a contender this build cannot run is
-    `validation_failed`: neither leaves a key row, and neither is worth
-    sending again.
+    `not_found`, and a contender this instance cannot run (`doc-intelligence`
+    where no classifier is configured) is `validation_failed`: neither
+    leaves a key row, and neither is worth sending again.
 
     What a repeat of the command can mend is not stored as a failure: when
-    `intake` cannot be reached for the page (`upstream_unavailable`), or the
-    request is cancelled because the caller went away or the service is
+    `intake` cannot be reached for the page, or Document Intelligence holds
+    no classifier of the configured id yet or does not let the service in
+    (both `upstream_unavailable`), or the request is cancelled because the caller went away or the service is
     stopping, the key row is released, so the command `workflow` sends again
     classifies the page.
     """
-    if command.contender not in AVAILABLE_CONTENDERS:
+    if command.contender not in available_contenders(ports, options):
         raise DomainError(ErrorCode.VALIDATION_FAILED, CONTENDER_NOT_AVAILABLE_MESSAGE)
     key = ClassificationKey(command.case_id, command.page_id, command.contender)
     repository = ports.repository
@@ -193,7 +254,7 @@ async def classify_page(
     run = _Run(
         classification_id=classification_id,
         key=key,
-        actor=options.actor,
+        actor=_actor_of(key.contender, options),
         eval_run_id=command.eval_run_id,
         trace_id=trace_id or NO_TRACE_ID,
     )
@@ -220,6 +281,14 @@ async def classify_page(
             # command again.
             await asyncio.shield(_release(run, error.code.value, repository))
             raise
+        if isinstance(error, ClassifierNotReady):
+            # The classifier is not trained yet, or a role is not honoured
+            # yet. That passes too: nothing is stored, and the command sent
+            # again classifies the page once it is there.
+            await asyncio.shield(_release(run, error.reason, repository))
+            raise DomainError(
+                ErrorCode.UPSTREAM_UNAVAILABLE, CLASSIFIER_NOT_READY_MESSAGE
+            ) from None
         error_code, reason = _failure_of(error, deadline.expired())
     # Settled whatever happens to the request from here on: a request
     # cancelled now must not leave the key row `running`.
@@ -271,7 +340,7 @@ async def _repeat(
     run = _Run(
         classification_id=earlier.classification_id,
         key=key,
-        actor=options.actor,
+        actor=_actor_of(key.contender, options),
         eval_run_id=command.eval_run_id,
         trace_id=trace_id or NO_TRACE_ID,
     )
@@ -288,23 +357,21 @@ async def _classify(
     now: Callable[[], datetime],
 ) -> ClassificationResult:
     key = run.key
-    page = await ports.pages.read_page(key.page_id, trace_context)
-    if page is None:
-        raise PageNotReadable
-    outputs = await _run_model(
-        page, ports.model, options.runs, options.max_concurrent_runs
-    )
-    agreement = agree(outputs)
+    # Each contender has its own way to the same result (AD-13).
+    if key.contender is ClassifierContender.DOC_INTELLIGENCE:
+        reading = await _ask_classifier(key, ports, trace_context)
+    else:
+        reading = await _ask_model(key, ports, options, trace_context)
     classification = Classification(
         classification_id=run.classification_id,
         case_id=key.case_id,
         page_id=key.page_id,
         contender=key.contender,
-        page_type=agreement.page_type,
-        # AD-13: from the one mapping, never from the model.
-        is_medical=is_medical(agreement.page_type),
-        confidence=agreement.confidence,
-        reason=agreement.reason,
+        page_type=reading.page_type,
+        # AD-13: from the one mapping, never from the classifier.
+        is_medical=is_medical(reading.page_type),
+        confidence=reading.confidence,
+        reason=reading.reason,
     )
     result = done_result(run, classification, now())
     stored = ClassificationResult.model_validate_json(
@@ -328,11 +395,76 @@ async def _classify(
         key.page_id,
         run.classification_id,
         key.contender.value,
-        len(outputs),
-        agreement.agreeing_runs,
+        reading.runs,
+        reading.agreeing_runs,
         int((time.monotonic() - run.started) * 1000),
     )
     return stored
+
+
+async def _ask_model(
+    key: ClassificationKey,
+    ports: ClassifyPorts,
+    options: ClassifyOptions,
+    trace_context: Mapping[str, str],
+) -> _Reading:
+    """The `llm` contender: what the runs of the chat model agree on."""
+    page = await ports.pages.read_page(key.page_id, trace_context)
+    if page is None:
+        raise PageNotReadable
+    outputs = await _run_model(
+        page, ports.model, options.runs, options.max_concurrent_runs
+    )
+    agreement = agree(outputs)
+    return _Reading(
+        page_type=agreement.page_type,
+        confidence=agreement.confidence,
+        reason=agreement.reason,
+        runs=len(outputs),
+        agreeing_runs=agreement.agreeing_runs,
+    )
+
+
+async def _ask_classifier(
+    key: ClassificationKey, ports: ClassifyPorts, trace_context: Mapping[str, str]
+) -> _Reading:
+    """The `doc-intelligence` contender: the page as a one-page document, asked once."""
+    if ports.classifier is None:
+        # `classify_page` refused the command before it came this far.
+        raise ModelCallFailed("classifier_not_configured")
+    pdf = await ports.pages.read_page_file(key.case_id, key.page_id, trace_context)
+    if pdf is None:
+        raise PageNotReadable
+    page_type, confidence = reading_of(await ports.classifier.classify(pdf))
+    return _Reading(
+        page_type=page_type,
+        confidence=confidence,
+        reason=CLASSIFIER_REASON.format(page_type.value),
+        runs=1,
+        agreeing_runs=1,
+    )
+
+
+def reading_of(answer: ClassifierAnswer) -> tuple[PageType, float]:
+    """The page type and confidence of the classifier's answer, or `InvalidModelOutput`.
+
+    A document type that is no page type, an answer that names none, and a
+    confidence that is no number from 0 to 1 are refused, as a model's
+    answer in another shape is: nothing is guessed in their place.
+    """
+    try:
+        page_type = PageType(answer.doc_type or "")
+    except ValueError:
+        raise InvalidModelOutput from None
+    confidence = answer.confidence
+    if (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, int | float)
+        or not math.isfinite(confidence)
+        or not 0.0 <= confidence <= 1.0
+    ):
+        raise InvalidModelOutput
+    return page_type, float(confidence)
 
 
 async def _run_model(

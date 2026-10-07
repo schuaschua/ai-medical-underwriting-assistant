@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     output_dir: Path | None = None
     # Where a run keeps which case it uploaded as which case id, to resume by.
     state_dir: Path = SCRATCH / "evals"
+    # Story 4.2: where `bakeoff.training_pages` writes the redacted training
+    # pages and their list, for an operator to upload to `classifier-training`.
+    training_pages_dir: Path = SCRATCH / "classifier-training"
 
     @field_validator("web_address")
     @classmethod

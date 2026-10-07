@@ -118,6 +118,10 @@ class PageSplitter(Protocol):
         """Read a PDF page by page, in document order (AD-14)."""
         ...
 
+    async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
+        """One page of a PDF as a PDF of its own; None when it has no such page."""
+        ...
+
 
 class RedactionRepository(Protocol):
     """The key row of a redaction and what a finished one stores (AD-6)."""

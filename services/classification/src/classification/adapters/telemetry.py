@@ -66,6 +66,35 @@ def configure_telemetry(
     return True
 
 
+def shutdown_telemetry() -> None:
+    """Send what is still held and stop the exporters.
+
+    For the training job, whose process ends right after its one run: the
+    exporters send in batches, and what a run's last seconds produced would
+    otherwise end with the process. A failure here is logged by its type and
+    changes nothing about how the job ended.
+    """
+    from opentelemetry import metrics
+    from opentelemetry._logs import get_logger_provider
+
+    providers = (
+        trace.get_tracer_provider(),
+        metrics.get_meter_provider(),
+        get_logger_provider(),
+    )
+    for provider in providers:
+        for step in ("force_flush", "shutdown"):
+            method = getattr(provider, step, None)
+            if method is None:
+                continue
+            try:
+                method()
+            except Exception as error:  # noqa: BLE001 - whatever went wrong, the job's own outcome stands
+                logging.getLogger(__name__).warning(
+                    "telemetry %s failed: type=%s", step, type(error).__qualname__
+                )
+
+
 def instrument_app(app: FastAPI, tracer_provider: TracerProvider | None = None) -> None:
     """Trace the app's requests, except the probes'.
 

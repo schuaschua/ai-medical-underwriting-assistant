@@ -70,22 +70,17 @@ def test_story_1_5_a_pdf_is_stored_and_the_case_recorded(
     assert document.original_blob_name in store.blobs
 
 
-def test_story_1_5_a_pdf_over_ten_megabytes_is_413_and_nothing_is_stored(
+def test_story_1_5_a_pdf_over_ten_megabytes_is_413_and_one_of_exactly_ten_is_accepted(
     client: TestClient, store: MemoryOriginalStore, repository: MemoryCaseRepository
 ) -> None:
     too_large = b"%PDF-1.7\n" + b"x" * MAX_UPLOAD_BYTES
+    at_limit = b"%PDF-" + b"x" * (MAX_UPLOAD_BYTES - 5)
 
     response = client.post("/cases", content=too_large, headers=PDF)
 
     assert response.status_code == 413
     assert error_of(response.json())[0] == "file_too_large"
     assert_nothing_stored(store, repository)
-
-
-def test_story_1_5_a_pdf_of_exactly_ten_megabytes_is_accepted(
-    client: TestClient, store: MemoryOriginalStore
-) -> None:
-    at_limit = b"%PDF-" + b"x" * (MAX_UPLOAD_BYTES - 5)
 
     response = client.post("/cases", content=at_limit, headers=PDF)
 
@@ -198,8 +193,9 @@ def test_story_1_5_no_route_returns_a_document_file(
     app = create_app(settings, dependencies=dependencies)
 
     # The whole route table: two probes, the upload, and (story 1.7) the
-    # redaction command with the reads of what it stores. The one file route
-    # answers with the redacted PDF; nothing reads an original (AD-21).
+    # redaction command with the reads of what it stores. The two file routes
+    # answer with the redacted PDF, whole or one page of it (story 4.2);
+    # nothing reads an original (AD-21).
     assert routes_of(app) == {
         ("GET", "/health"),
         ("HEAD", "/health"),
@@ -212,6 +208,7 @@ def test_story_1_5_no_route_returns_a_document_file(
         ("GET", "/pages/{page_id}/boxes"),
         ("GET", "/pages/{page_id}/thumbnail"),
         ("GET", "/documents/{document_id}/file"),
+        ("GET", "/documents/{document_id}/pages/{page_number}/file"),
     }
 
 

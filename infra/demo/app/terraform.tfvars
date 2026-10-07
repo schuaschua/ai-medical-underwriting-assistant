@@ -86,6 +86,18 @@ verdict_model_max_concurrent_calls = 5
 verdict_step_limit                 = 30
 verdict_confidence_floor           = 0.70
 
+# The second classifier contender (spine AD-13, story 4.2): a custom
+# classification model of Document Intelligence, built once by the training
+# job under this id and asked one page at a time. The API version is the
+# generally available one the adapter was written for; it, the build request
+# and the answer's shape wait for the final Azure test session
+# (deferred-work.md). The job's own deadline, and the platform's limit on one
+# run of it, which must be the longer by two minutes or more.
+classifier_api_version    = "2024-11-30"
+classifier_id             = "page-types-v1"
+training_deadline_seconds = 1800
+training_timeout_seconds  = 2100
+
 # Retrieval (spine AD-12). The ingestion job reads this blob from the `manual`
 # container, has Document Intelligence's layout model parse it, and stores one
 # chunk per rule. The API version is the generally available one the adapter

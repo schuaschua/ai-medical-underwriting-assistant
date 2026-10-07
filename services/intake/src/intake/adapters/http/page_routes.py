@@ -1,6 +1,6 @@
 """The routes of redaction and of what it stores (spine, Operations; AD-21, AD-14).
 
-`POST /cases/{case_id}/redaction` is `workflow`'s command. The five reads
+`POST /cases/{case_id}/redaction` is `workflow`'s command. The six reads
 answer from the redacted PDF and what was made from it: until redaction is
 done the page list is empty and the file is `not_redacted`. No route here
 returns an original.
@@ -29,6 +29,7 @@ from intake.domain.pages import (
     list_pages,
     read_document_file,
     read_page_boxes,
+    read_page_file,
     read_page_text,
     read_page_thumbnail,
 )
@@ -37,6 +38,8 @@ from intake.domain.redaction import redact_document
 # An id that is not a UUIDv7 is refused before anything is looked up.
 IdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 OffsetQuery = Annotated[int | None, Query(ge=0)]
+# 1-based; a number that cannot be a page's is refused before anything is read.
+PageNumberPath = Annotated[int, Path(ge=1, le=100_000)]
 
 
 def build_page_router(dependencies: Dependencies) -> APIRouter:
@@ -48,6 +51,7 @@ def build_page_router(dependencies: Dependencies) -> APIRouter:
     boxes = get_operation("read_page_boxes")
     thumbnail = get_operation("read_page_thumbnail")
     file = get_operation("read_document_file")
+    page_file = get_operation("read_page_file")
     repository = dependencies.pages
     files = dependencies.redaction.files
 
@@ -102,5 +106,18 @@ def build_page_router(dependencies: Dependencies) -> APIRouter:
             document_id, repository=repository, files=files
         )
         return Response(content, media_type=file.response_media_type)
+
+    @router.get(page_file.path)
+    async def read_page_file_route(
+        document_id: IdPath, page_number: PageNumberPath
+    ) -> Response:
+        content = await read_page_file(
+            document_id,
+            page_number,
+            repository=repository,
+            files=files,
+            splitter=dependencies.redaction.splitter,
+        )
+        return Response(content, media_type=page_file.response_media_type)
 
     return router

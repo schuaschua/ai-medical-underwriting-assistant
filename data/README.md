@@ -206,9 +206,12 @@ page upside down; and a mixed file.
 type; `pages.json` lists them with their layout. They are drawn from five invented people
 (`training.py`) who are in no case, with other organisations, figures and recipes. Between
 them they have the edge kinds too: a handwritten note, two blank pages, a page drawn turned
-and pages turned by the PDF's flag. The folder is not part of the answer key: the training job
-reads it. The generator fails when a training page has the text of a page of any case (white
-space aside) or the same picture byte for byte, or when two people of the cases and the
+and pages turned by the PDF's flag. The folder is not part of the answer key. These files
+are unredacted and never go into the `classifier-training` container as they are: a tool
+takes each through the pipeline first (`uv run python -m bakeoff.training_pages`, see
+`evals/README.md`), and the training job trains on the redacted copies it wrote, which it
+tells by their list. The generator fails when a training page has the text of a page of any
+case (white space aside) or the same picture byte for byte, or when two people of the cases and the
 training set share a name or an identifier. A blank page has neither text nor picture, so
 both sets have one. The page layouts, and so the headings and field labels, are the same as
 in the cases: that is what makes a page its type.

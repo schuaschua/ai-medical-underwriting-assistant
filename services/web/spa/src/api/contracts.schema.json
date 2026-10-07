@@ -393,6 +393,17 @@
         "case_status": {
           "$ref": "#/$defs/CaseStatus"
         },
+        "classifier_contender": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassifierContender"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "error_code": {
           "anyOf": [
             {

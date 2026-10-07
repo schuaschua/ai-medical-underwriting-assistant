@@ -130,7 +130,10 @@ jobs:
             .
 
       - name: Build and push the classification image
-        # The `app` stack runs this image too. As for intake, its migrations
+        # The `app` stack runs this image twice: as the classification
+        # service and, with another command, as the job that trains the
+        # Document Intelligence classifier, which no deploy starts
+        # (infra/bootstrap/README.md, section 10). As for intake, its migrations
         # are not run here yet: an operator runs them as described in
         # infra/bootstrap/README.md, section 6, and classification reports
         # "not ready" until that is done.

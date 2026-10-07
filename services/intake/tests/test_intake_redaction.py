@@ -8,6 +8,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 from intake_fakes import (
@@ -249,6 +250,47 @@ def test_story_1_7_after_redaction_pages_text_boxes_thumbnail_and_file_are_serve
     # A page with no words has an empty text and no boxes.
     assert client.get(f"/pages/{second}/text").json()["text"] == ""
     assert client.get(f"/pages/{second}/boxes").json()["boxes"] == []
+
+
+def test_story_4_2_one_page_of_the_redacted_file_is_served_as_a_one_page_pdf(
+    client: TestClient, case_pdf: bytes, language: FakeLanguage
+) -> None:
+    # The redacted file is a real PDF here: the synthetic case, whose second
+    # page is the physician's statement.
+    language.redacted = case_pdf
+    case_id, document_id = upload(client, case_pdf)
+    path = f"/documents/{document_id}/pages/2/file"
+
+    before = client.get(path)
+
+    assert before.status_code == 409
+    assert error_code(before.json()) == "not_redacted"
+    assert b"%PDF" not in before.content
+
+    redact(client, case_id)
+    served = client.get(path)
+
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "application/pdf"
+    with (
+        pymupdf.open(stream=case_pdf, filetype="pdf") as whole,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        pymupdf.open(stream=served.content, filetype="pdf") as single,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+    ):
+        assert single.page_count == 1 < whole.page_count
+        # That page and no other: its text, as the whole file has it.
+        assert single[0].get_text() == whole[1].get_text()
+        assert single[0].get_text() != whole[0].get_text()
+        beyond = whole.page_count + 1
+    # A page the file does not have, a document nobody holds, a number that
+    # is no page number.
+    for unknown in (
+        f"/documents/{document_id}/pages/{beyond}/file",
+        f"/documents/{new_id()}/pages/1/file",
+    ):
+        response = client.get(unknown)
+        assert response.status_code == 404, unknown
+        assert error_code(response.json()) == "not_found"
+    assert client.get(f"/documents/{document_id}/pages/0/file").status_code == 422
 
 
 # --- Failure -----------------------------------------------------------------------

@@ -104,7 +104,13 @@ language_standin=$!
 uv run python -m synthdata.foundry_standin --port "$model_port" \
   --mode "${FOUNDRY_STANDIN_MODE:-ok}" &
 model_standin=$!
-uv run python -m synthdata.layout_standin --port "$layout_port" &
+# The layout stand-in also answers for Document Intelligence's custom
+# classifier (story 4.2), which tools/train-local.sh trains once the
+# application runs. CLASSIFIER_STANDIN_MODE picks what it does with a page
+# (README, 'Run locally'): `unsure` sends every page of a case started with
+# `doc-intelligence` to triage.
+uv run python -m synthdata.layout_standin --port "$layout_port" \
+  --classifier-mode "${CLASSIFIER_STANDIN_MODE:-ok}" &
 layout_standin=$!
 # SEARCH_STANDIN_MODE picks what the search stand-in does (README, 'Run
 # locally'): `unavailable` and `slow` show a search with r5 or r6 failing.

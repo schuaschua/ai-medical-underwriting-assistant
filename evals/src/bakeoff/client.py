@@ -169,6 +169,13 @@ class WebClient:
             _Call("GET", f"/api/pages/{page_id}/text", DemoRole.UNDERWRITER), PageText
         )
 
+    async def document_file(self, document_id: str) -> bytes:
+        """The redacted PDF of a document, the only file `web` serves (AD-21)."""
+        response = await self._send(
+            _Call("GET", f"/api/documents/{document_id}/file", DemoRole.UNDERWRITER)
+        )
+        return response.content
+
     async def search(self, search: SearchRequest) -> SearchResponse:
         """One eval search: `retrieval`'s search with the row the request names."""
         return await self._ask(

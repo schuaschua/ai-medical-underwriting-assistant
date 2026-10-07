@@ -6,6 +6,7 @@ in-memory stand-ins and the gateway stub. No database, no model, no network.
 
 import ast
 import asyncio
+import dataclasses
 import json
 import logging
 from datetime import datetime, timedelta
@@ -200,22 +201,22 @@ def test_story_1_8_three_runs_against_two_give_the_majority_type_at_confidence_0
     }
 
 
-@pytest.mark.parametrize("page_type", [PageType.LAB_REPORT, PageType.INVOICE])
 def test_story_1_8_medical_or_not_comes_from_the_one_mapping_never_from_the_model(
     ports: ClassifyPorts,
     options: ClassifyOptions,
     pages: FakePages,
     model: StubModel,
     case_id: str,
-    page_type: PageType,
 ) -> None:
-    page_id = pages.add(case_id)
-    model.answers = [answer(page_type.value)]
+    # A medical page type and one that is not.
+    for page_type in (PageType.LAB_REPORT, PageType.INVOICE):
+        page_id = pages.add(case_id)
+        model.answers = [answer(page_type.value)]
 
-    result = run(command(case_id, page_id), ports, options)
+        result = run(command(case_id, page_id), ports, options)
 
-    assert result.classification is not None
-    assert result.classification.is_medical is (page_type in MEDICAL_PAGE_TYPES)
+        assert result.classification is not None
+        assert result.classification.is_medical is (page_type in MEDICAL_PAGE_TYPES)
     # The model is never asked: an answer that says so itself is not valid.
     assert "is_medical" not in ClassifierOutput.model_fields
 
@@ -290,50 +291,47 @@ def test_story_1_8_commands_that_arrive_together_classify_the_page_once(
 # --- Failures: stored, and never passed on ------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [
+def test_story_1_8_an_answer_that_fails_validation_fails_the_stage_and_is_never_passed_on(
+    ports: ClassifyPorts,
+    options: ClassifyOptions,
+    pages: FakePages,
+    repository: MemoryRepository,
+    case_id: str,
+) -> None:
+    bad_answers = [
         # An unknown page type.
         json.dumps({"page_type": "utility_bill", "reason": "a bill"}),
         # Text around the object.
         'Here is my answer: {"page_type": "lab_report", "reason": "a table"}',
         # Not the object that was asked for.
         json.dumps({"page_type": "lab_report", "reason": "r", "is_medical": False}),
-    ],
-    ids=["unknown-page-type", "text-before", "says-medical-itself"],
-)
-def test_story_1_8_an_answer_that_fails_validation_fails_the_stage_and_is_never_passed_on(
-    ports: ClassifyPorts,
-    options: ClassifyOptions,
-    pages: FakePages,
-    model: StubModel,
-    repository: MemoryRepository,
-    case_id: str,
-    bad: str,
-) -> None:
-    page_id = pages.add(case_id)
-    # Four good runs and one bad one: the bad one is not out-voted.
-    model.answers = [answer(), answer(), bad, answer(), answer()]
+    ]
+    for bad in bad_answers:
+        page_id = pages.add(case_id)
+        # Four good runs and one bad one: the bad one is not out-voted.
+        model = StubModel([answer(), answer(), bad, answer(), answer()])
 
-    result = run(command(case_id, page_id), ports, options)
+        result = run(
+            command(case_id, page_id), dataclasses.replace(ports, model=model), options
+        )
 
-    assert (result.status, result.error_code) == (
-        StageStatus.FAILED,
-        ErrorCode.INVALID_MODEL_OUTPUT,
-    )
-    assert result.classification is None
-    # A `stage.failed` record for the page, by the same actor.
-    assert (result.audit.action.value, result.audit.page_id, result.audit.actor) == (
-        "stage.failed",
-        page_id,
-        ACTOR,
-    )
-    assert result.audit.ref == result.classification_id
-    # Nothing is stored as a classification, and the read lists none.
-    assert repository.stored == {}
-    listed = asyncio.run(list_classifications(case_id, repository=repository))
-    assert listed.classifications == []
-    assert repository.result_of(key_of(command(case_id, page_id))) == result
+        assert (result.status, result.error_code) == (
+            StageStatus.FAILED,
+            ErrorCode.INVALID_MODEL_OUTPUT,
+        )
+        assert result.classification is None
+        # A `stage.failed` record for the page, by the same actor.
+        assert (
+            result.audit.action.value,
+            result.audit.page_id,
+            result.audit.actor,
+        ) == ("stage.failed", page_id, ACTOR)
+        assert result.audit.ref == result.classification_id
+        # Nothing is stored as a classification, and the read lists none.
+        assert repository.stored == {}
+        listed = asyncio.run(list_classifications(case_id, repository=repository))
+        assert listed.classifications == []
+        assert repository.result_of(key_of(command(case_id, page_id))) == result
 
 
 def test_story_1_8_a_model_that_is_unavailable_fails_the_stage_as_model_unavailable(

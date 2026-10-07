@@ -163,6 +163,10 @@ class CaseProgress(ContractModel):
     pages: list[PageProgress]
     # Set when a stage failed: the code of the case's first `stage.failed` event.
     error_code: ErrorCode | None = None
+    # The classifier contender the case was started with (story 4.2). A page
+    # may hold a classification of each contender: a reader that shows one
+    # shows this contender's, the one the gate routed on.
+    classifier_contender: ClassifierContender | None = None
 
 
 class AuditTrail(ContractModel):

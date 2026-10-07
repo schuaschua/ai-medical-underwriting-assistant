@@ -202,7 +202,7 @@ def classification_of(classification_id: str, key: ClassificationKey) -> Classif
     )
 
 
-def test_story_1_8_begins_that_arrive_together_insert_one_row(
+def test_story_1_8_a_key_row_is_inserted_once_and_its_first_result_stands_per_contender(
     migrated_database: Settings,
 ) -> None:
     key = ClassificationKey(new_id(), new_id(), ClassifierContender.LLM)
@@ -217,32 +217,40 @@ def test_story_1_8_begins_that_arrive_together_insert_one_row(
     # The unique key settles the race: one inserted it, five found it there.
     assert sorted(inserted) == [False] * 5 + [True]
     assert len(rows(migrated_database)) == 1
-
-
-def test_story_1_8_a_result_is_stored_once_and_the_first_one_stands(
-    migrated_database: Settings,
-) -> None:
-    key = ClassificationKey(new_id(), new_id(), ClassifierContender.LLM)
-    classification_id = new_id()
-    classification = classification_of(classification_id, key)
     with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(classification_id, key, NOW))
+        winner = runner.run(repository.find(key))
+    assert winner is not None
+    classification_id = winner.classification_id
 
+    classification = classification_of(classification_id, key)
+    # Story 4.2: the same page under the other contender is a row of its own.
+    other_key = ClassificationKey(
+        key.case_id, key.page_id, ClassifierContender.DOC_INTELLIGENCE
+    )
+    other_id = new_id()
+    with a_repository(migrated_database) as (repository, runner):
         first = runner.run(repository.finish(classification_id, "{}", classification))
         # A second end for the same row, as from a call that was superseded.
         second = runner.run(repository.finish(classification_id, '{"late": 1}', None))
         found = runner.run(repository.find(key))
+        other_inserted = runner.run(repository.begin(other_id, other_key, NOW)) is None
+        runner.run(
+            repository.finish(other_id, "{}", classification_of(other_id, other_key))
+        )
 
     assert (first, second) == ("{}", "{}")
     assert found is not None
     assert (found.result_json, found.running) == ("{}", False)
+    assert other_inserted
+    # Two stored results for the one page, one per contender.
     assert rows(migrated_database) == [
-        (key.case_id, key.page_id, "llm", "done", "invoice", False, 0.6)
+        (key.case_id, key.page_id, "llm", "done", "invoice", False, 0.6),
+        (key.case_id, key.page_id, "doc-intelligence", "done", "invoice", False, 0.6),
     ]
     assert query(
         migrated_database,
         "SELECT finished_at IS NOT NULL FROM classification.classification",
-    ) == [(True,)]
+    ) == [(True,), (True,)]
 
 
 # --- The service, on its database ---------------------------------------------------------------
@@ -304,25 +312,19 @@ def test_story_1_8_a_classified_page_is_stored_and_listed_by_the_real_service(
     )
     assert all(PAGE_TEXT not in row[0] for row in stored)
 
-
-def test_story_1_8_a_repeat_is_answered_from_the_database_without_a_model_call(
-    migrated_database: Settings,
-) -> None:
-    sidecar, deployment = IntakeSidecar(), Deployment()
-    case_id = new_id()
-    page_id = sidecar.pages.add(case_id)
-
+    # A repeat is answered from the database, without a model call or a
+    # read: by another instance of the service, as after a restart.
+    calls, reads = deployment.calls, len(sidecar.requests)
     with service(migrated_database, sidecar, deployment) as client:
-        first = client.post("/classifications", json=command_for(case_id, page_id))
-        calls, reads = deployment.calls, len(sidecar.requests)
-    # Another instance of the service, as after a restart.
-    with service(migrated_database, sidecar, deployment) as client:
-        again = client.post("/classifications", json=command_for(case_id, page_id))
+        again = client.post(
+            "/classifications",
+            json=command_for(case_id, first, eval_run_id=eval_run_id),
+        )
 
     assert again.status_code == 200
-    assert again.json() == first.json()
+    assert again.json() == responses[0].json()
     assert (deployment.calls, len(sidecar.requests)) == (calls, reads)
-    assert len(rows(migrated_database)) == 1
+    assert len(rows(migrated_database)) == 2
 
 
 def test_story_1_8_runs_that_differ_are_stored_with_their_agreement_rate(

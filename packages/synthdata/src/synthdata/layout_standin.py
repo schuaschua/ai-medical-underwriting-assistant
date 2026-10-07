@@ -19,6 +19,11 @@ along their line, not measured. It knows nothing of the manual: what the real
 service makes of the manual's pages is checked in Azure. Start it with
 `--no-roles` to see the result without any role.
 
+As a process it also serves the routes of the classifier stand-in
+(`synthdata.classifier_standin`, story 4.2): in Azure one Document
+Intelligence account answers both, so locally one port does. A build reads
+its training pages from the blob emulator of compose.yaml.
+
 Run it: `uv run python -m synthdata.layout_standin` (see README, 'Run locally').
 """
 
@@ -35,8 +40,13 @@ from typing import Any
 
 import pymupdf
 import uvicorn
+from azure.storage.blob import BlobServiceClient
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+
+from synthdata.classifier_standin import ClassifierStandIn, blob_container_reader
+from synthdata.classifier_standin import Mode as ClassifierMode
+from synthdata.language_standin import EMULATOR
 
 MODELS_PATH = "/documentintelligence/documentModels"
 LAYOUT_MODEL = "prebuilt-layout"
@@ -416,10 +426,25 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="leave the role out of every paragraph",
     )
+    parser.add_argument(
+        "--classifier-mode",
+        type=ClassifierMode,
+        choices=list(ClassifierMode),
+        default=ClassifierMode.OK,
+        help="what the classifier routes do with every call (default: ok)",
+    )
     args = parser.parse_args(argv)
     stand_in = LayoutStandIn(args.mode, roles=not args.no_roles)
+    app = stand_in.app()
+    # The classifier routes, on the same port. A build reads the training
+    # pages from the blob emulator's built-in account, which is no secret;
+    # building the client makes no network call.
+    ClassifierStandIn(
+        blob_container_reader(BlobServiceClient.from_connection_string(EMULATOR)),
+        mode=args.classifier_mode,
+    ).add_routes(app)
     # Loopback only: it is never reachable from another machine.
-    uvicorn.run(stand_in.app(), host="127.0.0.1", port=args.port, server_header=False)
+    uvicorn.run(app, host="127.0.0.1", port=args.port, server_header=False)
 
 
 if __name__ == "__main__":

@@ -703,19 +703,29 @@ describe("1.10 the customer's prompt for a page", () => {
     let broken = true;
     const server = fakeServer((call) => {
       if (call.path === PROGRESS_PATH) {
-        return json(
-          200,
-          caseProgress(CASE, "awaiting_human", "done", [
+        // Story 4.2: the progress names the classifier the case was
+        // started with.
+        return json(200, {
+          ...caseProgress(CASE, "awaiting_human", "done", [
             pageProgress(1, "awaiting_customer"),
           ]),
-        );
+          classifier_contender: "doc-intelligence",
+        });
       }
       if (call.path === CLASSIFICATIONS_PATH) {
+        // Both classifiers read the page, and the other one's reading is
+        // listed first: the prompt shows the case's own.
         return broken
           ? json(502, errorBody("upstream_unavailable", "Not available."))
           : json(200, {
               case_id: CASE,
-              classifications: [classification(CASE, 1, "invoice", 0.955)],
+              classifications: [
+                classification(CASE, 1, "other", 1),
+                {
+                  ...classification(CASE, 1, "invoice", 0.955),
+                  contender: "doc-intelligence",
+                },
+              ],
             });
       }
       return undefined;

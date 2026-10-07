@@ -25,11 +25,14 @@ from typing import Any
 import httpx
 import httpx2
 import psycopg
+from azure.storage.blob import BlobServiceClient
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.client import OrchestrationState, OrchestrationStatus
 from fastapi.testclient import TestClient
 from workflow_local import connect, wait_for_case_status
 
+from classification import train as training_job
+from classification.adapters.blob import upload_local_training_pages
 from classification.adapters.http.app import create_app as create_classification
 from classification.settings import Settings as ClassificationSettings
 from contracts.models.classification import ClassificationList
@@ -47,9 +50,11 @@ from retrieval.adapters.db import SqlChunkRepository
 from retrieval.adapters.db import build_database as build_retrieval_database
 from retrieval.adapters.http.app import create_app as create_retrieval
 from retrieval.settings import Settings as RetrievalSettings
+from synthdata.classifier_standin import ClassifierStandIn, blob_container_reader
 from synthdata.foundry_standin import FoundryStandIn
 from synthdata.generate import RULE_TABLE_FILE
-from synthdata.language_standin import LanguageStandIn
+from synthdata.language_standin import EMULATOR, LanguageStandIn
+from synthdata.layout_standin import DEFAULT_PORT as DOCUMENT_INTELLIGENCE_PORT
 from synthdata.layout_standin import LayoutStandIn
 from synthdata.manual import MANUAL_FILE_NAME
 from synthdata.search_standin import SearchStandIn
@@ -65,6 +70,8 @@ CASES_DIR = REPOSITORY_ROOT / "data" / "cases"
 ANSWER_KEY_DIR = REPOSITORY_ROOT / "data" / "answer-key" / "cases"
 MANUAL_PDF = REPOSITORY_ROOT / "data" / "manual" / MANUAL_FILE_NAME
 PDF = {"Content-Type": "application/pdf"}
+# The id of the classifier the tests train and ask (story 4.2).
+CLASSIFIER_ID = "page-types-test"
 # Where the stand-in for Azure AI Search is said to be (`synthdata.search_standin`).
 SEARCH_ENDPOINT = "http://127.0.0.1:5103"
 # So that a failing step is not waited out: the same attempts, closer together.
@@ -247,13 +254,50 @@ class LocalIntake:
 
 @dataclass
 class LocalClassification:
-    """`classification` on a test's database, with the model stand-in behind its gateway."""
+    """`classification` on a test's database, with the model stand-in behind its gateway.
+
+    `classifier` is the stand-in for Document Intelligence's custom
+    classifier (story 4.2). While it is None the service is told of no
+    classifier, as before the second contender was built; a test that asks
+    for one (`with_classifier`) gets the `doc-intelligence` contender and
+    the training job on the test's own training container.
+    """
 
     settings: ClassificationSettings
     model: FoundryStandIn
     intake: LocalIntake
+    classifier: ClassifierStandIn | None = None
     # The sidecar of every instance made, so a test can see what was read.
     sidecars: list[ServicesBehindSidecar] = field(default_factory=list)
+
+    def with_classifier(self) -> ClassifierStandIn:
+        """Put the classifier stand-in behind the service and its job; return it.
+
+        A build reads the training pages from the blob emulator, as the
+        stand-in's own process does.
+        """
+        self.classifier = ClassifierStandIn(
+            blob_container_reader(BlobServiceClient.from_connection_string(EMULATOR))
+        )
+        self.settings = self.settings.model_copy(
+            update={
+                # Where the stand-in listens when it runs as a process. The
+                # tests hand the app a transport to it and never use the network.
+                "doc_intelligence_endpoint": (
+                    f"http://127.0.0.1:{DOCUMENT_INTELLIGENCE_PORT}"
+                ),
+                "doc_intelligence_classifier_id": CLASSIFIER_ID,
+                # A running analysis or build is looked at again at once.
+                "doc_intelligence_poll_seconds": 0.01,
+                "training_poll_seconds": 0.01,
+            }
+        )
+        return self.classifier
+
+    def _classifier_transport(self) -> httpx2.AsyncBaseTransport | None:
+        if self.classifier is None:
+            return None
+        return httpx2.ASGITransport(app=self.classifier.app())
 
     def app(self) -> Any:
         """A new instance of the service, reading its pages from the real `intake`."""
@@ -263,7 +307,16 @@ class LocalClassification:
             self.settings,
             sidecar=sidecar,
             model=httpx2.ASGITransport(app=self.model.app()),
+            classifier=self._classifier_transport(),
         )
+
+    def upload_training_pages(self, folder: Path) -> int:
+        """Put a folder of prepared pages into this test's training container, as an operator does."""
+        return upload_local_training_pages(self.settings, folder)
+
+    def train(self) -> int:
+        """Run the training job once (`python -m classification.train`); its exit status."""
+        return training_job.main(self.settings, self._classifier_transport())
 
     def reads_of_intake(self) -> list[tuple[str, str]]:
         """Every call the service made to `intake`, as method and path."""

@@ -35,6 +35,47 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("4.2 a page classified by both classifiers", () => {
+  it("takes the classification of the classifier the case was started with", async () => {
+    // Both classifiers read page 1, the other one first in the list; only
+    // the chat model read page 2.
+    fakeServer((call) =>
+      call.path.endsWith("/classifications")
+        ? listed(
+            CASE,
+            classification(CASE, 1, "invoice", 1),
+            {
+              ...classification(CASE, 1, "other", 0.55),
+              contender: "doc-intelligence",
+            },
+            classification(CASE, 2, "invoice", 1),
+          )
+        : undefined,
+    );
+    const pages = waitingPages(1, 2);
+    const { result, rerender } = renderHook(
+      ({ contender }: { contender: "llm" | "doc-intelligence" }) =>
+        useClassifications(CASE, pages, contender),
+      { initialProps: { contender: "doc-intelligence" } },
+    );
+    const first = pageProgress(1, "x").page_id;
+    const second = pageProgress(2, "x").page_id;
+
+    await waitFor(() => expect(result.current[first]).toBeDefined());
+    expect(result.current[first]).toMatchObject({
+      contender: "doc-intelligence",
+      page_type: "other",
+      confidence: 0.55,
+    });
+    // Nothing of the other classifier's reading is shown in its place.
+    expect(result.current[second]).toBeUndefined();
+
+    rerender({ contender: "llm" });
+    await waitFor(() => expect(result.current[first]?.contender).toBe("llm"));
+    expect(result.current[second]?.page_type).toBe("invoice");
+  });
+});
+
 describe("1.10 the classifications of a case", () => {
   it("reads again for a waiting page the list held nothing for", async () => {
     let known = false;

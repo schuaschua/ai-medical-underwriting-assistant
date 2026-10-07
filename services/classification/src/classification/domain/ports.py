@@ -4,7 +4,14 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
-from classification.domain.entities import ClassificationKey, KeyRow, PageContent
+from classification.domain.entities import (
+    ClassificationKey,
+    ClassifierAnswer,
+    KeyRow,
+    ListedPage,
+    PageContent,
+    StoredBlob,
+)
 from contracts.models.classification import Classification
 
 
@@ -38,6 +45,33 @@ class PageModel(Protocol):
         ...
 
 
+class ClassifierNotReady(Exception):
+    """Document Intelligence has no classifier of the configured id, or does not let the service in.
+
+    Both pass: the classifier is trained, a new role assignment is honoured.
+    The same command sent again then classifies the page, so nothing is
+    stored for this one. `reason` is a short code for the log.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class PageClassifier(Protocol):
+    """The Document Intelligence custom classifier, asked what one document is (AD-13)."""
+
+    async def classify(self, pdf: bytes) -> ClassifierAnswer:
+        """Have the classifier read a one-page PDF; return what it answered.
+
+        The answer is not judged here. Raises `ModelUnavailable` when the
+        service could not be had, `ClassifierNotReady` when it holds no such
+        classifier or does not let the service in, and `ModelCallFailed`
+        when it refused the call otherwise or its analysis failed.
+        """
+        ...
+
+
 class PageReader(Protocol):
     """The reads of `intake` (AD-3): only what redaction left is ever read."""
 
@@ -51,6 +85,12 @@ class PageReader(Protocol):
         self, page_id: str, trace_context: Mapping[str, str]
     ) -> PageContent | None:
         """The page's text and thumbnail; None if `intake` does not hold the page."""
+        ...
+
+    async def read_page_file(
+        self, case_id: str, page_id: str, trace_context: Mapping[str, str]
+    ) -> bytes | None:
+        """The page as a one-page PDF; None if `intake` does not hold the page."""
         ...
 
 
@@ -93,4 +133,52 @@ class ClassificationRepository(Protocol):
 
     async def of_case(self, case_id: str) -> list[Classification]:
         """The case's stored classifications, oldest first; failed ones have none."""
+        ...
+
+
+# --- Training the Document Intelligence classifier (story 4.2) ------------------
+
+
+class TrainingFailed(Exception):
+    """The training job could not read its pages or have the classifier built.
+
+    `reason` is a short code for the log, never a message of a service.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class TrainingPages(Protocol):
+    """The `classifier-training` container, which `classification` owns (AD-4)."""
+
+    def container_url(self) -> str:
+        """The container's address, which Document Intelligence reads with its own identity."""
+        ...
+
+    async def contents(self) -> tuple[list[ListedPage], list[StoredBlob]]:
+        """The list of prepared pages, and every blob the container holds beside it.
+
+        The list is empty when the container has none. A blob the list
+        names comes with the MD5 of its content.
+        """
+        ...
+
+
+class ClassifierBuilder(Protocol):
+    """Document Intelligence, asked to build the classifier of the configured id."""
+
+    async def exists(self) -> bool:
+        """Whether the classifier is there already."""
+        ...
+
+    async def build(self, container_url: str, prefixes: Mapping[str, str]) -> None:
+        """Build the classifier from the container and wait until it is built.
+
+        `prefixes` names, for each document type, the folder of the
+        container that holds its pages. A build of this classifier that is
+        under way already is waited for, not started again. Raises
+        `TrainingFailed` when the build is refused, fails or cannot be followed.
+        """
         ...

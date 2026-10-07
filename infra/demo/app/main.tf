@@ -166,15 +166,53 @@ resource "azurerm_role_assignment" "classification_foundry_user" {
   principal_type       = "ServicePrincipal"
 }
 
-# As for intake: classification waits for all of its own role assignments, so
-# its first revision can pull its image, call the model and send telemetry.
+# The second classifier contender (spine AD-13, story 4.2): the service asks
+# a custom classification model of Document Intelligence about a page, and
+# its training job has that model built, both with the service identity.
+# There is no key.
+resource "azurerm_role_assignment" "classification_document_intelligence_user" {
+  scope                = local.foundation.document_intelligence_id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = local.classification_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the one container, not to the account (azure.md rule 9): the
+# training job lists the labelled, redacted training pages there. The role is
+# the one azure.md names for the container classification owns (spine AD-4);
+# in Azure an operator uploads the pages and the job only reads.
+resource "azurerm_role_assignment" "classification_training_contributor" {
+  scope                = local.foundation.storage_container_ids[local.classification_training_container]
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = local.classification_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Document Intelligence builds the classifier from that container itself,
+# with its own identity, which the foundation stack gives it: read-only, and
+# scoped to the one container. The build request names the container and
+# carries no key and no signed address.
+resource "azurerm_role_assignment" "document_intelligence_training_reader" {
+  scope                = local.foundation.storage_container_ids[local.classification_training_container]
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = local.foundation.document_intelligence_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# As for intake: classification and its training job wait for all of these,
+# so the first revision can pull its image, call the model and the classifier
+# and send telemetry, and the first run of the job can list the training
+# pages and have Document Intelligence read them.
 resource "time_sleep" "classification_role_propagation" {
   create_duration = var.role_propagation_wait
 
   triggers = {
-    acr_pull_id          = azurerm_role_assignment.classification_acr_pull.id
-    metrics_publisher_id = azurerm_role_assignment.classification_metrics_publisher.id
-    foundry_user_id      = azurerm_role_assignment.classification_foundry_user.id
+    acr_pull_id                   = azurerm_role_assignment.classification_acr_pull.id
+    metrics_publisher_id          = azurerm_role_assignment.classification_metrics_publisher.id
+    foundry_user_id               = azurerm_role_assignment.classification_foundry_user.id
+    document_intelligence_user_id = azurerm_role_assignment.classification_document_intelligence_user.id
+    training_contributor_id       = azurerm_role_assignment.classification_training_contributor.id
+    training_reader_id            = azurerm_role_assignment.document_intelligence_training_reader.id
   }
 }
 
@@ -799,30 +837,9 @@ module "classification" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      # No password and no model key: the database and the chat deployment
-      # are reached with the service identity (azure.md rule 7). The model
-      # endpoint is the Foundry account's and the deployment name comes from
-      # the foundation stack (spine AD-16); the local stand-in exists only on
-      # a developer machine.
-      env = [
-        { name = "CLASSIFICATION_HOST", value = "0.0.0.0" },
-        { name = "CLASSIFICATION_PORT", value = tostring(var.classification_port) },
-        { name = "CLASSIFICATION_AZURE_CLIENT_ID", value = local.classification_identity.client_id },
-        { name = "CLASSIFICATION_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
-        { name = "CLASSIFICATION_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
-        { name = "CLASSIFICATION_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
-        { name = "CLASSIFICATION_DATABASE_NAME", value = local.foundation.postgresql_database_name },
-        { name = "CLASSIFICATION_DATABASE_USER", value = local.classification_identity.name },
-        { name = "CLASSIFICATION_DATABASE_ENTRA_AUTH", value = "true" },
-        { name = "CLASSIFICATION_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
-        { name = "CLASSIFICATION_MODEL_ENDPOINT", value = local.foundation.foundry_endpoint },
-        { name = "CLASSIFICATION_MODEL_ENTRA_AUTH", value = "true" },
-        { name = "CLASSIFICATION_CHAT_DEPLOYMENT", value = local.foundation.model_deployment_names["chat"] },
-        { name = "CLASSIFICATION_CLASSIFIER_RUNS", value = tostring(var.classifier_runs) },
-        { name = "CLASSIFICATION_CLASSIFIER_MAX_CONCURRENT_RUNS", value = tostring(var.classifier_max_concurrent_runs) },
-        { name = "CLASSIFICATION_MODEL_MAX_CONCURRENT_CALLS", value = tostring(var.model_max_concurrent_calls) },
-        { name = "CLASSIFICATION_MODEL_MAX_RETRIES", value = tostring(var.model_max_retries) },
-      ]
+      # One set of settings for the service and its training job
+      # (local.classification_env).
+      env = local.classification_env
 
       # azure.md rule 22. Startup and liveness ask the process; readiness
       # also asks the database, and fails unless its schema revision equals
@@ -860,6 +877,66 @@ module "classification" {
 
   # The first revision needs every one of the identity's role assignments,
   # and Azure has to have spread them.
+  depends_on = [
+    time_sleep.classification_role_propagation,
+  ]
+}
+
+# The training job (spine AD-13, story 4.2): the same image and the same
+# identity as the service, with another command. It has no ingress and no Dapr
+# sidecar, because it calls no service of ours. It never starts by itself and
+# no deploy starts it: an operator or the pipeline starts one execution, after
+# the redacted training pages are in their container
+# (infra/bootstrap/README.md, section 10). It is idempotent: once the
+# classifier of var.classifier_id exists, a run trains nothing. A failed
+# execution is not tried again by the platform: its log says why.
+module "classification_train" {
+  source  = "Azure/avm-res-app-job/azurerm"
+  version = "0.2.2"
+
+  name                                  = local.names.classification_train
+  resource_group_name                   = local.foundation.resource_group_name
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.classification_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.classification_identity.id
+  }]
+
+  secrets = [{
+    name  = local.appi_secret_name
+    value = local.foundation.application_insights_connection_string
+  }]
+
+  trigger_config = {
+    manual_trigger_config = {
+      parallelism              = 1
+      replica_completion_count = 1
+    }
+  }
+  replica_retry_limit        = 0
+  replica_timeout_in_seconds = var.training_timeout_seconds
+
+  template = {
+    container = {
+      name    = "train"
+      image   = "${local.image_repositories.classification}:${var.image_tag}"
+      cpu     = local.container_cpu
+      memory  = local.container_memory
+      command = ["python", "-m", "classification.train"]
+      env     = local.classification_env
+    }
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
   depends_on = [
     time_sleep.classification_role_propagation,
   ]

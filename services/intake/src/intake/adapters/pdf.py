@@ -1,7 +1,8 @@
 """PDF adapter: the one reading of each page of a redacted PDF (AD-14).
 
 The page text, a box for every word of it and a thumbnail, all from the same
-file. It is only ever given the redacted PDF (AD-21).
+file; and one page of that file as a PDF of its own (story 4.2). It is only
+ever given the redacted PDF (AD-21).
 """
 
 import asyncio
@@ -102,6 +103,25 @@ def read_pages(
         ]
 
 
+def cut_page(pdf: bytes, page_number: int) -> bytes | None:
+    """One page of a PDF as a one-page PDF; None when the file has no such page.
+
+    The page is copied as it is: its text layer, its pictures and its
+    rotation. Nothing is drawn again, so what redaction masked stays masked
+    and nothing it removed comes back.
+    """
+    with pymupdf.open(stream=pdf, filetype="pdf") as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        if not 1 <= page_number <= document.page_count:
+            return None
+        with pymupdf.open() as single:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+            single.insert_pdf(
+                document, from_page=page_number - 1, to_page=page_number - 1
+            )
+            # Unused objects are dropped: the other pages' content does not
+            # travel with the one page.
+            return bytes(single.tobytes(garbage=3, deflate=True))
+
+
 class PdfPageSplitter:
     def __init__(
         self,
@@ -115,3 +135,7 @@ class PdfPageSplitter:
         with adapter_span(tracer, "intake.pdf.split_pages"):
             # Rendering is CPU work: off the event loop.
             return await asyncio.to_thread(read_pages, pdf, *self._limits)
+
+    async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
+        with adapter_span(tracer, "intake.pdf.cut_page"):
+            return await asyncio.to_thread(cut_page, pdf, page_number)

@@ -35,6 +35,9 @@ from synthdata_stack import (
 )
 from workflow_local import as_service
 
+from classification.adapters.blob import (
+    build_blob_service as build_classification_blobs,
+)
 from classification.adapters.migrations import (
     alembic_config as classification_alembic_config,
 )
@@ -227,8 +230,8 @@ def model_stand_in() -> FoundryStandIn:
 @pytest.fixture
 def classification_settings(
     migrated_database: IntakeSettings,
-) -> ClassificationSettings:
-    """`classification`'s settings for the same database, with its migrations applied."""
+) -> Iterator[ClassificationSettings]:
+    """`classification`'s settings for the same database, migrated, with a training container of the test's own."""
     settings = ClassificationSettings(
         applicationinsights_connection_string=None,
         database_name=migrated_database.database_name,
@@ -238,9 +241,19 @@ def classification_settings(
         chat_deployment=LOCAL_DEPLOYMENT,
         # A throttled call is sent again at once.
         model_retry_seconds=0.01,
+        # Story 4.2: where the training job finds its pages. The container
+        # is made only by a test that uploads pages into it.
+        blob_connection_string=SecretStr(EMULATOR),
+        training_container=f"classifier-training-test-{secrets.token_hex(6)}",
     )
     command.upgrade(classification_alembic_config(settings), "head")
-    return settings
+    try:
+        yield settings
+    finally:
+        with contextlib.suppress(ResourceNotFoundError):
+            build_classification_blobs(settings).delete_container(
+                settings.training_container
+            )
 
 
 @pytest.fixture

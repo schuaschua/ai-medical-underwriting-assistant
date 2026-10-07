@@ -613,6 +613,62 @@ headings it is shown, and on `POST /openai/v1/embeddings` vectors that count wor
 text always gets the same vector and texts that share words are close. They know nothing of meaning.
 `./tools/ingest-local.sh` uses the stand-ins `./tools/dev.sh` started, or starts its own.
 
+**A second classifier: Document Intelligence (story 4.2).** `classification` can run two
+contenders behind the one classify command: `llm` (the chat model, as above) and `doc-intelligence`,
+a custom classification model of Azure AI Document Intelligence. A case is started with one of them
+(`classifier_contender` in the start options, `llm` when it says nothing) and the gate routes on
+that contender's result only. Both store the same fields. For `doc-intelligence` the page is sent as
+a one-page PDF, which `intake` cuts from the redacted file for `classification` alone
+(`GET /documents/<document_id>/pages/<page_number>/file`); the confidence is the service's own for
+the document type it names, and the reason is one fixed sentence. A document type that is no page
+type, or an answer without one, is a failed result (`invalid_model_output`). The contender is
+available where the service is given `CLASSIFICATION_DOC_INTELLIGENCE_ENDPOINT` and
+`CLASSIFICATION_DOC_INTELLIGENCE_CLASSIFIER_ID`; without both a command that names it is refused
+(422 `validation_failed`) and `llm` works as before. When a page has a result of each contender, the
+triage queue and the customer's prompt show the one the case was started with (the case's progress
+names it, `classifier_contender`).
+
+The classifier is trained once, by a job on the service's own package,
+`python -m classification.train`, from the `classifier-training` container. The pages it is trained
+on pass the same redaction as case pages first, through the pipeline itself. Locally, with
+`./tools/dev.sh` running:
+
+```sh
+uv run python -m bakeoff.training_pages   # every page of data/classifier-training/ through web, redacted, into .work/classifier-training/
+./tools/train-local.sh                    # that folder into the emulator's container, then the job
+```
+
+The first command uploads each of the 46 training pages as a case of an eval run, started with
+`stop_after` `gate` (so it is redacted as any case page, in neither of the underwriter's lists, and
+never extracted), fetches the redacted file `web` serves and writes it under its page type, with one
+list, `redacted-pages.json`, that names every page with its label and its case. A page whose case
+fails stops it, naming the page; start it again with `--eval-run-id <the id it logged>` and no page
+is uploaded twice, but for the one whose case failed, which is uploaded again as a new case. The
+list also names the MD5 of every redacted file. The job then trains only when the container holds
+exactly the list and the listed pages, each once and with the listed content: a blob the list does
+not name, a listed page that is missing, or a page with other content (the unredacted sources have
+the same file names) refuses the training, as does a page type with fewer than five pages or a page
+outside its type's folder. It ends with `training done: classifier_id=... trained=yes
+pages=46 page_types=6`, or `training failed: code=... reason=...` and status 1. Run again it trains
+nothing (`trained=no`). To start a case with the classifier:
+
+```sh
+curl -s -X POST http://localhost:8000/api/cases/<case_id>/start \
+  -H 'X-Demo-Role: underwriter' -H 'content-type: application/json' \
+  -d '{"classifier_contender": "doc-intelligence"}'
+```
+
+Locally the classifier is a stand-in, served by the Document Intelligence stand-in on port 5102
+(`packages/synthdata`, `classifier_standin.py`). It learns nothing: a build counts the PDFs under
+each type's folder and fails under five, and a page is then told apart by the heading the generator
+prints, as the chat stand-in tells it, at a confidence of 0.97. It keeps the classifier in memory, so
+run `./tools/train-local.sh` after every start of the application; until then a classify command
+with `doc-intelligence` answers 502 `upstream_unavailable` and stores nothing, so the case fails
+once `workflow` has sent it as often as it does. `CLASSIFIER_STANDIN_MODE=unsure ./tools/dev.sh` answers
+every page at 0.55 (all to triage); `unknown_type`, `no_document`, `fail`, `throttled` and `hang`
+show the failures. What the real service answers is checked in the Azure session
+(`_bmad-output/implementation-artifacts/deferred-work.md`).
+
 **Search the manual for rules (story 2.3).** `retrieval` has two reads, and neither stores anything.
 With `./tools/dev.sh` running:
 
@@ -971,7 +1027,7 @@ docker run --rm -p 8000:8000 aiuw-web:dev
 
 docker build -f services/intake/Dockerfile -t aiuw-intake:dev .
 docker build -f services/workflow/Dockerfile -t aiuw-workflow:dev .
-docker build -f services/classification/Dockerfile -t aiuw-classification:dev .
+docker build -f services/classification/Dockerfile -t aiuw-classification:dev .   # the service, and the job: python -m classification.train
 docker build -f services/extraction/Dockerfile -t aiuw-extraction:dev .
 docker build -f services/verdict/Dockerfile -t aiuw-verdict:dev .
 docker build -f services/retrieval/Dockerfile -t aiuw-retrieval:dev .   # the service, and the job: python -m retrieval.ingest

@@ -60,6 +60,15 @@ SPINE_TABLE: list[tuple[str, str, str, set[str], tuple[str, ...]]] = [
 APPROVED_ADDITIONS: list[tuple[str, str, str, set[str], tuple[str, ...]]] = [
     # Story 1.13: the underwriter's case list (owner, 2026-10-07).
     ("GET", "workflow", "/cases", {"web"}, ()),
+    # Story 4.2: one redacted page as a one-page PDF, for the Document
+    # Intelligence classifier (spec 4.2; deferred-work.md).
+    (
+        "GET",
+        "intake",
+        "/documents/{document_id}/pages/{page_number}/file",
+        {"classification"},
+        (),
+    ),
 ]
 REGISTERED = SPINE_TABLE + APPROVED_ADDITIONS
 
@@ -149,6 +158,14 @@ EXPECTED_MODELS: dict[str, tuple[str, str, str, Model, Model, Model]] = {
         "GET",
         "intake",
         "/documents/{document_id}/file",
+        None,
+        None,
+        None,
+    ),
+    "read_page_file": (
+        "GET",
+        "intake",
+        "/documents/{document_id}/pages/{page_number}/file",
         None,
         None,
         None,
@@ -320,7 +337,7 @@ def test_story_1_1_registry_lists_every_spine_operation_exactly_once() -> None:
         (method, owner, path) for method, owner, path, _, _ in REGISTERED
     }
     assert len(SPINE_TABLE) == 23
-    assert len(OPERATIONS) == len(REGISTERED) == 24
+    assert len(OPERATIONS) == len(REGISTERED) == 25
 
 
 def test_story_1_1_registry_callers_and_keys_match_the_spine() -> None:

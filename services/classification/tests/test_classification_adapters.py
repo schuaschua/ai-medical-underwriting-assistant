@@ -20,6 +20,7 @@ import httpx2
 import pytest
 from classification_fakes import (
     DEPLOYMENT,
+    PAGE_FILE,
     PAGE_TEXT,
     PNG,
     TRACEPARENT,
@@ -27,8 +28,9 @@ from classification_fakes import (
     answer,
     completion,
 )
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
+from classification.adapters.blob import upload_local_training_pages
 from classification.adapters.dapr import (
     IntakeClient,
     build_http_client,
@@ -58,20 +60,35 @@ PAGE = PageContent(text=PAGE_TEXT, image=PNG)
 # --- Settings ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_story_1_8_settings_that_would_reach_the_model_unsafely_are_refused() -> None:
+    unsafe: list[dict[str, Any]] = [
         # Plain HTTP is the stand-in: on loopback only, and never with a token.
         {"model_endpoint": "http://example.com:5101"},
         # The real deployment is reached with the identity.
         {"model_endpoint": "https://aif-aiuw-demo-wus3.cognitiveservices.azure.com/"},
-    ],
-)
-def test_story_1_8_settings_that_would_reach_the_model_unsafely_are_refused(
-    values: dict[str, Any],
-) -> None:
-    with pytest.raises(ValidationError):
-        Settings(**values)
+        # Story 4.2: the same two rules for Document Intelligence.
+        {"doc_intelligence_endpoint": "http://example.com:5102"},
+        {
+            "doc_intelligence_endpoint": "https://di-aiuw-demo-wus3.cognitiveservices.azure.com"
+        },
+        # The storage account's address, which is handed to Document
+        # Intelligence: over TLS, and never one that carries a signature.
+        {"blob_account_url": "http://staiuwdemowus3.blob.core.windows.net"},
+        {"blob_account_url": "https://staiuwdemowus3.blob.core.windows.net/?sig=x"},
+    ]
+    for values in unsafe:
+        with pytest.raises(ValidationError):
+            Settings(**values)
+    # The upload that empties the training container first works on this
+    # machine's emulator only, whatever account a connection string names.
+    elsewhere = Settings(
+        blob_connection_string=SecretStr(
+            "DefaultEndpointsProtocol=https;AccountName=staiuwdemowus3;"
+            "AccountKey=c3ludGhldGlj;EndpointSuffix=core.windows.net"
+        )
+    )
+    with pytest.raises(ValueError, match="only to the blob emulator"):
+        upload_local_training_pages(elsewhere, SERVICE_DIR)
 
 
 def test_story_1_8_the_actor_of_a_classification_names_the_service_and_the_deployment(
@@ -200,7 +217,7 @@ def test_story_1_8_one_run_is_one_chat_completion_on_the_shared_deployment(
     assert waits == []
 
 
-def test_story_1_8_a_429_or_5xx_is_retried_honouring_retry_after(
+def test_story_1_8_a_429_or_5xx_is_retried_honouring_retry_after_and_three_retries_are_the_limit(
     settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
     deployment = Deployment(statuses=[429, 503, 500], headers={"retry-after": "7"})
@@ -216,10 +233,7 @@ def test_story_1_8_a_429_or_5xx_is_retried_honouring_retry_after(
     assert "attempt=1 code=status_429" in caplog.text
     assert "attempt=3 code=status_500" in caplog.text
 
-
-def test_story_1_8_after_three_retries_the_model_is_unavailable(
-    settings: Settings, caplog: pytest.LogCaptureFixture
-) -> None:
+    # After three retries the model is unavailable.
     deployment = Deployment(statuses=[429] * 20)
     gateway, waits = gateway_for(deployment, settings, retry_seconds=2.0)
 
@@ -353,26 +367,39 @@ def test_story_1_8_a_page_is_read_from_intake_through_the_sidecar_by_app_id() ->
     first, second = sidecar.pages.add(case_id), sidecar.pages.add(case_id, "two")
     context = {"traceparent": TRACEPARENT}
 
-    async def work(client: IntakeClient) -> tuple[Any, Any]:
+    async def work(client: IntakeClient) -> tuple[Any, Any, Any, Any]:
         return (
             await client.page_ids_of_case(case_id, context),
             await client.read_page(first, context),
+            await client.read_page_file(case_id, second, context),
+            await client.read_page_file(case_id, new_id(), context),
         )
 
-    page_ids, page = on_reader(reader(sidecar.handle), work)
+    page_ids, page, file, no_file = on_reader(reader(sidecar.handle), work)
 
     assert page_ids == [first, second]
     # One page: its text and its thumbnail, and nothing else of the case.
     assert page == PageContent(text=PAGE_TEXT, image=PNG)
+    # Story 4.2: the page as a one-page PDF, by its document and its number
+    # in the case's page list; none for a page the case does not have.
+    assert (file, no_file) == (PAGE_FILE, None)
     # AD-3: the sidecar on loopback, `intake` by its Dapr app id, the paths
     # from the contracts. Reads only, and no hostname of another service.
     assert [(request.method, request.url.path) for request in sidecar.requests] == [
         ("GET", f"/v1.0/invoke/intake/method/cases/{case_id}/pages"),
         ("GET", f"/v1.0/invoke/intake/method/pages/{first}/text"),
         ("GET", f"/v1.0/invoke/intake/method/pages/{first}/thumbnail"),
+        ("GET", f"/v1.0/invoke/intake/method/cases/{case_id}/pages"),
+        ("GET", f"/v1.0/invoke/intake/method/documents/{case_id}/pages/2/file"),
+        ("GET", f"/v1.0/invoke/intake/method/cases/{case_id}/pages"),
     ]
     assert sidecar.requests[0].url.host == "127.0.0.1"
-    for name in ("list_pages", "read_page_text", "read_page_thumbnail"):
+    for name in (
+        "list_pages",
+        "read_page_text",
+        "read_page_thumbnail",
+        "read_page_file",
+    ):
         operation = get_operation(name)
         assert Service.CLASSIFICATION in operation.callers
         assert invoke_path(operation.owner, "/x") == "/v1.0/invoke/intake/method/x"

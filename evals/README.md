@@ -56,6 +56,28 @@ uv run python -m bakeoff --eval-run-id <the id it printed>
 
 Which case was uploaded as which case id is kept in `.work/evals/<eval_run_id>.json`.
 
+## Prepare the classifier's training pages (story 4.2)
+
+A second command of this package, beside the runner. The Document Intelligence classifier is trained
+on pages that passed the same redaction as case pages, and only the pipeline redacts. So each page of
+`data/classifier-training/` is uploaded through `web` as a case of an eval run, started with
+`stop_after` `gate`, and the redacted file `web` serves is fetched and written under its page type:
+
+```sh
+uv run python -m bakeoff.training_pages                                   # the local start
+uv run python -m bakeoff.training_pages --web-address https://<web's address>   # the deployed environment
+```
+
+It writes `.work/classifier-training/<page_type>/<file>.pdf` and one list beside them,
+`redacted-pages.json`, which names every page with its label, its case id, its document id and the
+MD5 of the redacted file. The list is written last, when every page is there; the training job
+trains only on a container that holds exactly the listed files with that content. A page whose case
+fails stops the command (exit status 1), naming the page; `--eval-run-id <the id it logged>`
+resumes without uploading a page twice, but for the page whose case failed, which is uploaded again
+as a new case. PDFs an earlier run left in the folder are removed. It never writes into `data/`. An operator uploads the folder to the `classifier-training` container
+(`infra/bootstrap/README.md`, section 10); locally `./tools/train-local.sh` does it. The pages run
+through the gate, so the chat model classifies each of them too: 46 pages, five runs each.
+
 ## Run it against the deployed environment
 
 In the final Azure test session only (the environment is down while coding), with every service

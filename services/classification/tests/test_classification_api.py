@@ -118,9 +118,10 @@ def test_story_1_8_a_command_while_the_first_is_running_is_409_in_progress(
     assert model.calls == 0
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
+def test_story_1_8_a_malformed_command_is_422_without_echoing_the_input(
+    client: TestClient, model: StubModel
+) -> None:
+    bodies: list[dict[str, object]] = [
         {"case_id": "not-an-id", "page_id": "x", "contender": "llm"},
         # A command carries ids only (AD-6): content is refused.
         {
@@ -129,17 +130,14 @@ def test_story_1_8_a_command_while_the_first_is_running_is_409_in_progress(
             "contender": "llm",
             "text": PAGE_TEXT,
         },
-    ],
-)
-def test_story_1_8_a_malformed_command_is_422_without_echoing_the_input(
-    client: TestClient, model: StubModel, body: dict[str, object]
-) -> None:
-    response = client.post("/classifications", json=body)
+    ]
+    for body in bodies:
+        response = client.post("/classifications", json=body)
 
-    assert response.status_code == 422
-    assert error_code(response) is ErrorCode.VALIDATION_FAILED
-    assert "SECRET" not in response.text
-    assert "not-an-id" not in response.text
+        assert response.status_code == 422
+        assert error_code(response) is ErrorCode.VALIDATION_FAILED
+        assert "SECRET" not in response.text
+        assert "not-an-id" not in response.text
     assert model.calls == 0
 
 

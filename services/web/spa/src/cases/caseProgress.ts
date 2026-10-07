@@ -2,7 +2,11 @@
 // progress by polling (AD-19); it never works a status out for itself.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getProgress, startCase } from "../api/client";
-import type { CaseStatus, PageProgress } from "../api/contracts.gen";
+import type {
+  CaseStatus,
+  ClassifierContender,
+  PageProgress,
+} from "../api/contracts.gen";
 import { backoffMs, MAX_BACKOFF_MS } from "../polling/backoff";
 
 /** How often the progress of each case is read again. */
@@ -18,12 +22,15 @@ export type CaseState =
   /**
    * `redactionFailed`: the server said the redaction stage failed. `pages`:
    * the case's pages as the server last listed them, each with its status.
+   * `contender`: the classifier the case was started with, once the server
+   * has said it.
    */
   | {
       kind: "started";
       status: CaseStatus;
       redactionFailed?: boolean;
       pages: readonly PageProgress[];
+      contender?: ClassifierContender | null;
     }
   /** The document was received, but its case is not started. */
   | { kind: "not_started"; error: unknown }
@@ -128,6 +135,7 @@ export function useCaseProgress(caseIds: readonly string[]): {
             kind: "started",
             status: started.case_status,
             pages: [],
+            contender: started.classifier_contender,
           });
         },
         (error: unknown) => set(caseId, { kind: "not_started", error }),
@@ -175,6 +183,7 @@ export function useCaseProgress(caseIds: readonly string[]): {
                 status: progress.case_status,
                 redactionFailed: progress.redaction_status === "failed",
                 pages: progress.pages,
+                contender: progress.classifier_contender,
               });
             }
           },

@@ -915,6 +915,103 @@ Then the `verdict` app's latest revision becomes ready within a minute or so, an
 
 **Upgrading an environment that is already set up.** Not yet run. When `verdict` ships a new migration and the database was bootstrapped before, do not repeat the whole section. Run step 0, then step 2 alone, with `VERDICT_DATABASE_SERVICE_ROLE` set as there: the migrations bring the schema to the new head and grant the service role its rights on anything they add. Run step 3 again when a migration added a table, sequence or function while you, not the pipeline's role, ran it; the step takes whatever the schema holds and is safe to run again. Finish with step 4. Until the migration step has run, `verdict` reports "not ready", because its image carries a newer head than the database.
 
+## 10. The classifier's training pages and the training job
+
+Added by story 4.2. Not yet run: the environment was down while the story was built, so these steps are written from section 7, and are on the list for the final test session (`_bmad-output/implementation-artifacts/deferred-work.md`). Add each run to the log below.
+
+`classification` can classify with a second contender, `doc-intelligence`: a custom classification model of the Document Intelligence account, which a one-off job on the `classification` image and identity has the service build. The job calls no service of ours and redacts nothing. The pages it trains on are redacted before, by the pipeline itself, and an operator puts them into the blob container `classifier-training`, which `classification` owns. Do these steps once, after sections 4 to 6 (a case must run as far as the gate: `intake`, `workflow` and `classification` ready), and again after every teardown: the container and the classifier go with the environment. Until step 3 has run, a classify command with `doc-intelligence` stores nothing and answers `upstream_unavailable`, so a case started with it fails once `workflow`'s retries run out; cases started with `llm`, which is the default, are not affected.
+
+**Step 1. Prepare the redacted training pages.** From the repository root, against the deployed `web`. Each of the 46 pages of `data/classifier-training/` is uploaded as a case of an eval run (so it is in neither of the underwriter's lists), redacted by Azure AI Language like any case page, classified by the chat model at the gate (five runs each) and stopped there. The redacted file `web` serves is written to `.work/classifier-training/`, with one list, `redacted-pages.json`.
+
+```bash
+WEB="$(terraform -chdir=infra/demo/app output -raw web_url)"            # web's public address
+uv run python -m bakeoff.training_pages --web-address "$WEB"
+ls .work/classifier-training                                           # six folders and redacted-pages.json
+```
+
+A page whose case fails stops the command, naming the page; start it again with `--eval-run-id <the id it logged>`: no page is uploaded twice, but for the one whose case failed, which is uploaded again as a new case (a failed case stays failed). The command removes PDFs an earlier run left in the folder. Look at a few of the written PDFs before going on: names, addresses and numbers must be masked. **Never upload `data/classifier-training/` itself: those pages are unredacted, and they have the same file names as the prepared ones.** The job refuses them (the list names the MD5 of every redacted file, and no list vouches for the unredacted ones), but they would still be in the container.
+
+**Step 2. Upload the folder.** The `foundation` stack owns the container. As for the manual (section 7, step 5), the upload signs in with your own Azure sign-in, and you hold a data role on the container for the upload only.
+
+```bash
+set -euo pipefail
+ME="$(az ad signed-in-user show --query id -o tsv)"
+ACCOUNT="$(terraform -chdir=infra/demo/foundation output -raw storage_account_name)"
+TRAINING_SCOPE="$(terraform -chdir=infra/demo/foundation output -json storage_container_ids | jq -r '."classifier-training"')"
+
+remove_upload_role() {
+  # Always: your own write access to the container ends with this step.
+  az role assignment delete --assignee "$ME" --role "Storage Blob Data Contributor" \
+    --scope "$TRAINING_SCOPE" || true
+}
+trap remove_upload_role EXIT
+
+az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Storage Blob Data Contributor" --scope "$TRAINING_SCOPE"
+
+# A new role assignment takes a minute or two to be honoured: wait until the
+# container can be listed with it, for five minutes at most.
+for attempt in $(seq 1 30); do
+  if az storage blob list --auth-mode login --account-name "$ACCOUNT" \
+    --container-name classifier-training --num-results 1 --output none 2>/dev/null; then
+    break
+  fi
+  if [ "$attempt" -eq 30 ]; then
+    echo "The role on the classifier-training container is still not honoured." >&2
+    exit 1
+  fi
+  sleep 10
+done
+
+# Empty the container first: it must hold this folder and nothing else.
+az storage blob delete-batch --auth-mode login --account-name "$ACCOUNT" \
+  --source classifier-training
+az storage blob upload-batch --auth-mode login --account-name "$ACCOUNT" \
+  --destination classifier-training --source .work/classifier-training --overwrite
+
+remove_upload_role; trap - EXIT
+az role assignment list --assignee "$ME" --scope "$TRAINING_SCOPE" -o table   # no Storage Blob Data Contributor of yours
+```
+
+The container must hold these 47 files and nothing else, each with the content the list names: anything the list does not name, a listed page that is missing, or a page with other content stops the job.
+
+**Step 3. Start the training job and read its result.** The job is the Container Apps job `caj-aiuw-demo-wus3-train` (`terraform -chdir=infra/demo/app output -raw classification_train_job_name`). It never starts by itself, and no deploy starts it.
+
+```bash
+JOB="$(terraform -chdir=infra/demo/app output -raw classification_train_job_name)"
+EXECUTION="$(az containerapp job start -g rg-aiuw-demo-wus3 -n "$JOB" --query name -o tsv)"
+az containerapp job execution show -g rg-aiuw-demo-wus3 -n "$JOB" --job-execution-name "$EXECUTION" \
+  --query properties.status -o tsv        # Running, then Succeeded or Failed
+az containerapp job logs show -g rg-aiuw-demo-wus3 -n "$JOB" --execution "$EXECUTION" --container train
+```
+
+A run that succeeds ends with `training done: classifier_id=page-types-v1 trained=yes pages=46 page_types=6`. Starting it again is safe: once the classifier of that id exists it ends with `trained=no` and asks for nothing to be built. A run that fails ends with `training failed: code=<error code> reason=<what exactly>` and status 1:
+
+| Reason | What it means |
+| --- | --- |
+| `not_configured missing=...` | The job was not given the endpoint, the classifier id or the storage account. |
+| `too_few_pages subject=<page type> pages=<n>` | A page type has fewer than five pages in the container. |
+| `page_without_label subject=<blob>` | A blob, PDF or not, that `redacted-pages.json` does not name, or no such list: the pages were not prepared by step 1, or the container was not emptied first. |
+| `page_missing subject=<blob>`, `page_listed_twice subject=<blob>` | A page the list names is not in the container, or the list names it twice. |
+| `page_content_differs subject=<blob>` | The blob is not the redacted file the list vouches for: most likely the unredacted page of the same name. Empty the container and upload the prepared folder again. |
+| `page_outside_its_folder subject=<blob>` | A PDF that is not in the folder of its page type. |
+| `training_container_missing`, `page_list_malformed` | The container is not there, or the list is not the one step 1 writes. |
+| `classifier_build_status_<code>` | Document Intelligence refused the build request: 403 while a role is not yet honoured, 400 if it does not take the request as written. A 409 (the classifier is being built already) is not a failure: the job waits for it. |
+| `classifier_build_failed_<service code>` | The build was accepted and failed; the service's own code says why (for example that it cannot read the container). |
+| `deadline` | The build took longer than `training_deadline_seconds`. Starting the job again finds the classifier if the build ended meanwhile. |
+
+It needs three role assignments of the `app` stack: Cognitive Services User on the Document Intelligence account and Storage Blob Data Contributor on the container for the `classification` identity, and Storage Blob Data Reader on the container for Document Intelligence's own identity, which reads the pages. The build request names the container's address and a folder per page type, and carries no key and no signed address. A classifier is built once and never changed. To train again on other pages: empty `.work/classifier-training/` and run step 1 again (a new eval run), empty the container and upload the folder as in step 2, give `classifier_id` in `infra/demo/app/terraform.tfvars` a new value, apply, and start the job.
+
+**Step 4. Check with one case.** Upload a case as the customer, then start it with the classifier as the underwriter, and read its classifications:
+
+```bash
+curl -s -X POST "$WEB/api/cases/<case_id>/start" -H 'X-Demo-Role: underwriter' \
+  -H 'content-type: application/json' -d '{"classifier_contender": "doc-intelligence"}'
+curl -s "$WEB/api/cases/<case_id>/classifications" -H 'X-Demo-Role: underwriter'
+```
+
+Every page has a result with `"contender": "doc-intelligence"`, the service's confidence and the fixed reason; a page whose result failed says why in the case's audit trail.
+
 ## Out-of-band log
 
 Every command that changed Azure or GitHub outside the pipeline, newest last (`terraform.md` rule 29).

@@ -38,3 +38,37 @@ class PageContent:
     text: str
     # PNG: the page's thumbnail.
     image: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifierAnswer:
+    """What the Document Intelligence classifier answered for one document (story 4.2).
+
+    As the service gave it: the document type it named, which the domain
+    holds against the contracts' page types, and its own confidence in it.
+    None where the answer named none.
+    """
+
+    doc_type: str | None
+    confidence: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class ListedPage:
+    """One entry of the list of prepared training pages: a page the pipeline redacted."""
+
+    # The blob's name in the `classifier-training` container.
+    file: str
+    page_type: str
+    # The hex MD5 of the redacted file as the preparing tool wrote it.
+    md5: str
+
+
+@dataclass(frozen=True, slots=True)
+class StoredBlob:
+    """One blob the `classifier-training` container holds, beside the list itself."""
+
+    name: str
+    # The hex MD5 of its content; None for a blob the list does not name,
+    # whose content nobody needs to know.
+    md5: str | None

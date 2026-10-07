@@ -111,6 +111,8 @@ class _Case:
     case_id: str
     pages: list[dict[str, Any]]
     started_with: dict[str, Any] | None = None
+    # Once a case was answered as failed it stays failed, as a real one does.
+    failed: bool = False
 
 
 def _refusal(code: ErrorCode, status: int | None = None) -> httpx.Response:
@@ -184,6 +186,8 @@ class FakeWeb:
             return self._search(json.loads(request.content))
         if parts[0] == "pages" and route[2] == "text":
             return self._text(parts[1])
+        if parts[0] == "documents" and route[2] == "file":
+            return self._file(parts[1])
         case = self.cases.get(parts[1]) if parts[0] == "cases" else None
         if case is None:
             return _refusal(ErrorCode.NOT_FOUND)
@@ -245,7 +249,8 @@ class FakeWeb:
         return httpx.Response(200, json={})
 
     def _status(self, case: _Case) -> str:
-        if case.case_key in self.failing:
+        if case.failed or case.case_key in self.failing:
+            case.failed = True
             return "failed"
         if case.case_key in self.hanging:
             return "running"
@@ -318,6 +323,17 @@ class FakeWeb:
         return httpx.Response(
             200,
             json={"case_id": case.case_id, "verdict_runs": runs, "has_more": False},
+        )
+
+    def _file(self, document_id: str) -> httpx.Response:
+        """The redacted file of a document; here a document has its case's id."""
+        case = self.cases.get(document_id)
+        if case is None:
+            return _refusal(ErrorCode.NOT_FOUND)
+        return httpx.Response(
+            200,
+            content=f"%PDF-1.7 redacted {case.case_key}".encode(),
+            headers={"content-type": "application/pdf"},
         )
 
     def _text(self, page_id: str) -> httpx.Response:

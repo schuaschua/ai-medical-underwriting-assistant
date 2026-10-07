@@ -1,7 +1,8 @@
 """The one module that calls other services: HTTP through the Dapr sidecar (spine AD-3).
 
 `classification` reads a page from `intake`, one page at a time: its text and
-its thumbnail. `intake` is addressed by its Dapr app id; this service holds no
+its thumbnail for the `llm` contender, and the page as a one-page PDF for the
+`doc-intelligence` contender (story 4.2). `intake` is addressed by its Dapr app id; this service holds no
 other service's hostname. No Dapr SDK is used. Nothing read here is logged.
 """
 
@@ -120,6 +121,44 @@ class IntakeClient:
         if media_type != image_operation.response_media_type or not response.content:
             raise self._invalid_body(image_operation, page_id, response)
         return PageContent(text=text.text, image=response.content)
+
+    async def read_page_file(
+        self, case_id: str, page_id: str, trace_context: Mapping[str, str]
+    ) -> bytes | None:
+        """The page as a one-page PDF, cut by `intake` from the redacted file (story 4.2).
+
+        `intake` serves it by document and page number, which the case's
+        page list gives. None for a page `intake` does not hold. No blob is
+        read here: the file comes through the sidecar like every other read.
+        """
+        listing = get_operation("list_pages")
+        response = await self._get(
+            listing, listing.path.format(case_id=case_id), case_id, trace_context
+        )
+        if response is None:
+            return None
+        try:
+            pages = PageList.model_validate_json(response.content)
+        except ValidationError:
+            raise self._invalid_body(listing, case_id, response) from None
+        page = next((page for page in pages.pages if page.page_id == page_id), None)
+        if page is None or page.case_id != case_id:
+            return None
+        operation = get_operation("read_page_file")
+        response = await self._get(
+            operation,
+            operation.path.format(
+                document_id=page.document_id, page_number=page.page_number
+            ),
+            page_id,
+            trace_context,
+        )
+        if response is None:
+            return None
+        media_type = response.headers.get("content-type", "").split(";")[0].strip()
+        if media_type != operation.response_media_type or not response.content:
+            raise self._invalid_body(operation, page_id, response)
+        return response.content
 
     async def _get(
         self,

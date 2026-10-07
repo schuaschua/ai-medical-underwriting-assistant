@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
+from intake.adapters.pdf import cut_page
 from intake.domain.entities import (
     Case,
     Document,
@@ -231,6 +232,8 @@ class FakeLanguage:
     # "reject": refused at submit. "fail": the job fails. "hang": it never ends.
     # "unreadable": the result file is not JSON. "no_files": it names no output.
     behaviour: str = "ok"
+    # The redacted PDF the job writes.
+    redacted: bytes = PDF_BYTES
     fail_cancel: bool = False
     # The cancel never answers.
     hang_cancel: bool = False
@@ -262,7 +265,7 @@ class FakeLanguage:
             redacted_blob_name=f"{case_id}/{job_id}/out/original.pdf",
             result_blob_name=f"{case_id}/{job_id}/out/original.result.json",
         )
-        self.files.blobs[output.redacted_blob_name] = PDF_BYTES
+        self.files.blobs[output.redacted_blob_name] = self.redacted
         self.files.blobs[output.result_blob_name] = (
             b"not json" if self.behaviour == "unreadable" else result_file(*self.found)
         )
@@ -289,6 +292,10 @@ class FakeSplitter:
         if self.fail:
             raise StoreDown
         return self.pages
+
+    async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
+        # The real cut: a test that asks for a page gives the fake a real PDF.
+        return cut_page(pdf, page_number)
 
 
 @dataclass

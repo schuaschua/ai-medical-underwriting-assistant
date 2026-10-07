@@ -104,6 +104,16 @@ apps:
       # deployment name is what the audit trail then names as the model.
       CLASSIFICATION_MODEL_ENDPOINT: "http://127.0.0.1:5101"
       CLASSIFICATION_CHAT_DEPLOYMENT: "local-stand-in"
+      # AD-13, story 4.2: the second contender, `doc-intelligence`. Document
+      # Intelligence's custom classifier is the stand-in that tools/dev.sh
+      # starts with the layout stand-in (packages/synthdata), on the one
+      # port both share. It keeps its classifier in memory: train it with
+      # tools/train-local.sh after every start; until then a command with
+      # `doc-intelligence` answers `upstream_unavailable` and stores nothing. Cases start with `llm`
+      # unless told otherwise. Without these two variables the contender is
+      # refused as not available.
+      CLASSIFICATION_DOC_INTELLIGENCE_ENDPOINT: "http://127.0.0.1:5102"
+      CLASSIFICATION_DOC_INTELLIGENCE_CLASSIFIER_ID: "page-types-local"
   - appID: extraction
     appDirPath: ./services/extraction
     appProtocol: http

@@ -127,6 +127,19 @@ OPERATIONS: tuple[Operation, ...] = (
         response_model=None,
         response_media_type=PDF,
     ),
+    # Story 4.2: one page of the redacted PDF as a document of its own, for
+    # the Document Intelligence classifier, which is asked one page at a
+    # time. `classification` is its one caller.
+    Operation(
+        name="read_page_file",
+        callers=(Service.CLASSIFICATION,),
+        owner=Service.INTAKE,
+        method=HttpMethod.GET,
+        path="/documents/{document_id}/pages/{page_number}/file",
+        request_model=None,
+        response_model=None,
+        response_media_type=PDF,
+    ),
     # workflow
     Operation(
         name="start_case",

@@ -2,7 +2,8 @@
 title: 'Story 4.2: Document Intelligence classifier trained and available'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'a4de0a7a2b9c4c02f502f61be8f88bdb91d090c9'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -69,14 +70,14 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `packages/contracts/`, `services/intake/` -- the one-page PDF read
-- [ ] `services/classification/` -- the classifier client, the contender's path to the same result, availability and settings, the training job as a second entry point of the image
-- [ ] `packages/synthdata/` -- the stand-in's classifier routes (build from a container, status, analyze by the generator's headings), with failure modes
-- [ ] `evals/` -- the tool that prepares the redacted training pages through `web`
-- [ ] `services/web/spa/`, `services/workflow/` if needed -- the customer's prompt shows the case's own contender's result
-- [ ] `infra/demo/app/`, `dapr.yaml`, `tools/` -- the roles, the job, the settings; the local start can train and classify against the stand-ins
-- [ ] Tests, inside the budgets: classify with the new contender, both contenders on one page, an unknown type, not configured, the job (train, again, too few pages), the one-page read; one cross-service test of a case started with `doc-intelligence`
-- [ ] `README.md`, `infra/bootstrap/README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- the seeding steps; the Azure checks; the choices for the owner
+- [x] `packages/contracts/`, `services/intake/` -- the one-page PDF read
+- [x] `services/classification/` -- the classifier client, the contender's path to the same result, availability and settings, the training job as a second entry point of the image
+- [x] `packages/synthdata/` -- the stand-in's classifier routes (build from a container, status, analyze by the generator's headings), with failure modes
+- [x] `evals/` -- the tool that prepares the redacted training pages through `web`
+- [x] `services/web/spa/`, `services/workflow/` if needed -- the customer's prompt shows the case's own contender's result
+- [x] `infra/demo/app/`, `dapr.yaml`, `tools/` -- the roles, the job, the settings; the local start can train and classify against the stand-ins
+- [x] Tests, inside the budgets: classify with the new contender, both contenders on one page, an unknown type, not configured, the job (train, again, too few pages), the one-page read; one cross-service test of a case started with `doc-intelligence`
+- [x] `README.md`, `infra/bootstrap/README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- the seeding steps; the Azure checks; the choices for the owner
 
 **Acceptance Criteria:**
 - Given the training set, when its pages are prepared and the training job runs, then the pages have passed the same redaction as case pages, are in the `classifier-training` container, and a custom classification model is trained from them.
@@ -89,6 +90,34 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 1 (2026-10-08): blind hunter (B), edge-case hunter (E), verification-gap (V). No intent gap, no bad spec.
+
+| # | Finding | Verdict | Route | Evidence |
+| --- | --- | --- | --- | --- |
+| B2, E1, E17 | The job takes a page as prepared by its file name alone | high | patch | The unredacted sources in `data/classifier-training/` have the same names as the prepared pages; uploaded over a prepared container, every one is "listed" and the classifier is trained on unredacted pages. |
+| B3, E2 | A blob that is no PDF under a page type's folder is neither labelled nor refused | medium | patch | The listing filters on `.pdf`, while the service learns from whatever the folder holds. |
+| B4 | A listed page missing from the container, or listed twice, is not noticed | low | patch | A partial upload with five pages a type trains and ends 0; the same check as the two above. |
+| B1, E3 | A training page whose case failed can never be resumed | medium | patch | The tool keeps the case id, finds progress and fails at once again; the READMEs say to start again with the same run id. |
+| B5, E15, V2 | The test that begins racing for one key insert one row was weakened in a merge | medium | patch | Filed evidence: the first `begin` now runs alone, so a select-then-insert would pass. |
+| B7, E9 | A build that is already under way ends the job with `classifier_build_status_409` | low | patch | A resent build request, or a second run before the first build ended. |
+| B8 | A classify call answered "no such classifier" or "not allowed" is stored as a failed result for good | medium | patch | Locally that is every `doc-intelligence` case after a restart until the classifier is trained again; the stage's rule is that what a repeat can mend is not stored as failed. |
+| B10, E7, E8 | The local upload empties the container of whatever account the connection string names; the account address is not checked | medium | patch | Guarded only by "a connection string is set"; the endpoints' own check is not applied to the blob address. |
+| B11, E11 | A `doc-intelligence` result falls back to the chat deployment's actor | low | patch | `_actor_of` when no classifier actor is set; the audit trail would name the wrong model. |
+| B12 | A read in flight when the contender becomes known keeps the other contender's classification | low | patch | The guard compares the case only. |
+| B13, E6 | PDFs of an earlier run stay in the tool's output folder | low | patch | Uploaded with the folder, they stop the job with `page_without_label`. |
+| B14, E4, E5 | An unused name, an `OSError` as a traceback, a page's bad answer told as "the run was refused" | low | patch | Direct corrections in `training_pages.py`. |
+| B15, B16 | A stale sentence in the story 1.10 entry of `deferred-work.md`; Azure checks this diff creates and the list lacks | low | patch | Direct corrections. Sprint status beside spec status is false: it moves at the end of the review. |
+| B9 | `classification` holds write access to the training container though the job only reads | low | defer | True, and `azure.md` lists exactly this role for it; changing the standard's list is the owner's. |
+| B6, E16 | Budgets; parametrised cases folded into loops | low | reject | `classification` went from 44 to 42; the other overs predate the story. Folding is what the owner's rule asks. |
+| B17 | The local path proves less than it seems | low | reject | True of every stand-in and recorded; the real figures come from Azure. |
+| E10 | A repeat of a stored command on an instance without the classifier is refused, not replayed | low | reject | One deployment has one configuration. |
+| E12, E13 | A damaged redacted file, or a page not yet redacted, is told as a passing fault | low | reject | Classification runs after redaction on files `intake` itself stored. |
+| E14 | The stand-in on two builds at once | low | reject | A dev tool called by one job. |
+| V1 | The SPA's wiring of the case's contender into the prompt has no test | medium | patch | Filed evidence: deleting the line fails nothing. |
+| V3 | The refusal of an unlisted PDF is tested on a fake container only | medium | patch | Filed evidence; the privacy guard of the job. |
+| V4 | An analysis that names no document is not tested through the client | low | patch | Filed evidence; blank pages are the likely case in Azure. |
+| V5 | The new CI checks and the local scripts have never been run | low | reject | Recorded by the story; the local stack is run once when the stories are done. |
 
 ## Design Notes
 

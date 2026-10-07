@@ -15,6 +15,9 @@ locals {
     # The one-off job that ingests the manual (spine AD-12); `caj` is the
     # CAF abbreviation for a Container Apps job (azure.md, project names).
     retrieval_ingest = "caj-${local.foundation.name_suffix}-ingest"
+    # The one-off job that trains the Document Intelligence classifier
+    # (spine AD-13, story 4.2).
+    classification_train = "caj-${local.foundation.name_suffix}-train"
   }
 
   # The six required tags, as the foundation stack built them.
@@ -34,6 +37,9 @@ locals {
   intake_blob_containers = toset(["originals", "cases"])
   # The blob container retrieval owns (spine AD-4): the manual PDF.
   retrieval_manual_container = "manual"
+  # The blob container classification owns (spine AD-4): the labelled,
+  # redacted pages a classifier is trained on.
+  classification_training_container = "classifier-training"
 
   # Compute ceilings (spine, Deployment): raising one is an architecture change.
   container_cpu    = 0.5
@@ -76,6 +82,51 @@ locals {
     retrieval      = "${local.foundation.container_registry_login_server}/retrieval"
     verdict        = "${local.foundation.container_registry_login_server}/verdict"
   }
+
+  # What the classification service and its training job are both given: one
+  # image, one identity, one set of settings (spine AD-13). No password, no
+  # storage key and no model key: the database, the chat deployment, Document
+  # Intelligence and Blob Storage are reached with the service identity
+  # (azure.md rule 7). The model endpoint is the Foundry account's and the
+  # deployment name comes from the foundation stack (spine AD-16); the local
+  # stand-ins exist only on a developer machine.
+  classification_env = [
+    { name = "CLASSIFICATION_HOST", value = "0.0.0.0" },
+    { name = "CLASSIFICATION_PORT", value = tostring(var.classification_port) },
+    { name = "CLASSIFICATION_AZURE_CLIENT_ID", value = local.classification_identity.client_id },
+    { name = "CLASSIFICATION_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
+    { name = "CLASSIFICATION_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
+    { name = "CLASSIFICATION_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
+    { name = "CLASSIFICATION_DATABASE_NAME", value = local.foundation.postgresql_database_name },
+    { name = "CLASSIFICATION_DATABASE_USER", value = local.classification_identity.name },
+    { name = "CLASSIFICATION_DATABASE_ENTRA_AUTH", value = "true" },
+    { name = "CLASSIFICATION_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
+    { name = "CLASSIFICATION_MODEL_ENDPOINT", value = local.foundation.foundry_endpoint },
+    { name = "CLASSIFICATION_MODEL_ENTRA_AUTH", value = "true" },
+    { name = "CLASSIFICATION_CHAT_DEPLOYMENT", value = local.foundation.model_deployment_names["chat"] },
+    { name = "CLASSIFICATION_CLASSIFIER_RUNS", value = tostring(var.classifier_runs) },
+    { name = "CLASSIFICATION_CLASSIFIER_MAX_CONCURRENT_RUNS", value = tostring(var.classifier_max_concurrent_runs) },
+    { name = "CLASSIFICATION_MODEL_MAX_CONCURRENT_CALLS", value = tostring(var.model_max_concurrent_calls) },
+    { name = "CLASSIFICATION_MODEL_MAX_RETRIES", value = tostring(var.model_max_retries) },
+    # Spine AD-13, story 4.2: the second contender, a custom classification
+    # model of the Document Intelligence account of the foundation stack,
+    # reached with the service identity (there is no key). With the endpoint
+    # and the classifier id set the service takes commands that name
+    # `doc-intelligence`; until the training job has built the classifier of
+    # that id, such a command stores nothing and answers
+    # `upstream_unavailable`, and is sent again.
+    { name = "CLASSIFICATION_DOC_INTELLIGENCE_ENDPOINT", value = local.foundation.document_intelligence_endpoint },
+    { name = "CLASSIFICATION_DOC_INTELLIGENCE_ENTRA_AUTH", value = "true" },
+    { name = "CLASSIFICATION_DOC_INTELLIGENCE_API_VERSION", value = var.classifier_api_version },
+    { name = "CLASSIFICATION_DOC_INTELLIGENCE_CLASSIFIER_ID", value = var.classifier_id },
+    # The training job: the container of the labelled, redacted training
+    # pages, and the job's own deadline, under the platform's limit on one
+    # execution (var.training_timeout_seconds), so that the job ends itself
+    # and says why.
+    { name = "CLASSIFICATION_BLOB_ACCOUNT_URL", value = local.foundation.storage_blob_endpoint },
+    { name = "CLASSIFICATION_TRAINING_CONTAINER", value = local.classification_training_container },
+    { name = "CLASSIFICATION_TRAINING_DEADLINE_SECONDS", value = tostring(var.training_deadline_seconds) },
+  ]
 
   # What the retrieval service and its ingestion job are both given: one
   # image, one identity, one set of settings (spine AD-12). No password, no

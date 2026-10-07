@@ -154,6 +154,46 @@ variable "layout_api_version" {
   type        = string
 }
 
+variable "classifier_api_version" {
+  description = "API version of Document Intelligence's custom classification model, which the classification service asks and its training job builds (spine AD-13)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}(-preview)?$", var.classifier_api_version))
+    error_message = "classifier_api_version must be a date such as 2024-11-30, with -preview where it is one."
+  }
+}
+
+variable "classifier_id" {
+  description = "Id of the Document Intelligence classifier the training job builds and the `doc-intelligence` contender asks. The audit trail names it as the actor. A classifier is built once: a retrained one needs a new id."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9._~-]{1,63}$", var.classifier_id))
+    error_message = "classifier_id must be 2 to 64 letters, digits, dots, underscores, tildes or dashes, starting with a letter or digit."
+  }
+}
+
+variable "training_deadline_seconds" {
+  description = "The training job's own deadline: after this long it ends itself with `stage_timeout` and says so."
+  type        = number
+
+  validation {
+    condition     = var.training_deadline_seconds == floor(var.training_deadline_seconds) && var.training_deadline_seconds >= 60
+    error_message = "training_deadline_seconds must be a whole number of at least 60."
+  }
+}
+
+variable "training_timeout_seconds" {
+  description = "How long one execution of the training job may run before the platform ends it. Longer than the job's own deadline (training_deadline_seconds), so that the job ends itself first and says why."
+  type        = number
+
+  validation {
+    condition     = var.training_timeout_seconds == floor(var.training_timeout_seconds) && var.training_timeout_seconds >= var.training_deadline_seconds + 120
+    error_message = "training_timeout_seconds must be a whole number at least 120 above training_deadline_seconds."
+  }
+}
+
 variable "retrieval_model_max_concurrent_calls" {
   description = "The most calls to the chat and embedding deployments the retrieval service, or its ingestion job, has under way at once. The chat deployment is shared with the other services: lower it if the token rate limit is hit."
   type        = number

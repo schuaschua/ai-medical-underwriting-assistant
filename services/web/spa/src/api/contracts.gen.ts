@@ -58,6 +58,7 @@ export type AuditAction =
  */
 export type RetrieverConfig = "r1" | "r2" | "r3" | "r4" | "r5" | "r6";
 export type CaseStatus = "running" | "awaiting_human" | "completed" | "failed";
+export type ClassifierContender = "llm" | "doc-intelligence";
 export type PageStatus =
   | "uploaded"
   | "classified"
@@ -72,7 +73,6 @@ export type PageStatus =
  * Status of one stage result (AD-6).
  */
 export type StageStatus = "running" | "done" | "failed";
-export type ClassifierContender = "llm" | "doc-intelligence";
 /**
  * Where a case may be told to stop early (AD-17: the classifier bake-off).
  */
@@ -349,6 +349,7 @@ export interface CaseSummary {
 export interface CaseProgress {
   case_id: string;
   case_status: CaseStatus;
+  classifier_contender?: ClassifierContender | null;
   error_code?: ErrorCode | null;
   pages: PageProgress[];
   redaction_status: StageStatus;

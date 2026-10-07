@@ -1121,6 +1121,7 @@ class SqlCaseStore:
                     select(
                         case_status_table.c.case_status,
                         case_status_table.c.redaction_status,
+                        case_status_table.c.classifier_contender,
                     ).where(case_status_table.c.case_id == case_id)
                 )
                 case = found.first()
@@ -1178,6 +1179,9 @@ class SqlCaseStore:
                     error_code=ErrorCode(failures[0].error_code)
                     if failures and case.case_status == CaseStatus.FAILED.value
                     else None,
+                    # The contender the case was started with, so that a
+                    # reader shows that contender's classification of a page.
+                    classifier_contender=ClassifierContender(case.classifier_contender),
                 )
 
     async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:

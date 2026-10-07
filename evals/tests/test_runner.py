@@ -290,7 +290,7 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
     # The run is started again with its id: the hanging case has finished
     # meanwhile, no case is uploaded or started a second time, and the
     # finished case is read and scored. The case whose start got no answer
-    # is started now, for the first time.
+    # is started now, for the first time. The case that failed stays failed.
     web.hanging = set()
     web.failing = set()
     web.refused_starts = set()
@@ -298,6 +298,9 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
     # Story 3.5: one finished case holds no run of `r1` at all, and `r3`'s
     # run of another ended as failed.
     web.missing_runs = {("case-904", "r1")}
+    # And `r1` now gets the hanging case wrong, where `case-901`, which
+    # stays failed and so unscored, showed a wrong verdict before.
+    web.verdicts["case-902"] = {**web.verdicts["case-902"], "r1": ("decline", None)}
     web.failed_runs = {("case-902", "r3")}
     uploads, starts = list(web.uploads), list(web.starts)
     again = make_run(
@@ -308,16 +311,19 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
     assert web.starts == [*starts, "case-904"] and len(starts) == 3
     starts = list(web.starts)
     assert again.retrieval.run.eval_run_id == board.run.eval_run_id
-    assert [case.case_key for case in again.retrieval.unscored_cases] == ["case-903"]
+    assert [case.case_key for case in again.retrieval.unscored_cases] == [
+        "case-901",
+        "case-903",
+    ]
     resumed = {row.retriever_config.value: row for row in again.retrieval.rows}
-    # `r1` has all three beside the case that was not scored: a wrong
-    # verdict (`case-901`), a right one (`case-902`) and a run that is
-    # missing (`case-904`), counted apart from the wrong one. `r3` is right
-    # on `case-901` and `case-904`, and its run of `case-902` failed.
+    # Beside the two cases that were not scored, `r1` has a wrong verdict
+    # (`case-902`) and a run that is missing (`case-904`), counted apart
+    # from the wrong one. `r3` is right on `case-904`, and its run of
+    # `case-902` failed.
     assert [
         (resumed[row].right_runs, resumed[row].failed_runs, resumed[row].cases)
         for row in ("r1", "r3")
-    ] == [(1, 1, 4), (2, 1, 4)]
+    ] == [(0, 1, 4), (1, 1, 4)]
     assert again.retrieval.winner == "r3"
 
     # A case is started once: the run cannot be resumed with other rows, or

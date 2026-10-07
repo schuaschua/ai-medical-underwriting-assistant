@@ -328,6 +328,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
             }
         ],
         "error_code": None,
+        "classifier_contender": "doc-intelligence",
     },
     "AuditTrail": {
         "case_id": CASE,
