@@ -59,6 +59,8 @@ terraform -chdir=infra/demo/foundation plan -out=tfplan
 terraform -chdir=infra/demo/foundation apply tfplan
 ```
 
+Instead of exporting the two optional variables each time, an operator can keep them in a local file `infra/demo/foundation/owner.auto.tfvars`, which Terraform loads by itself and git ignores (`*.auto.tfvars`). On this machine that file already holds the owner's alert address and object id.
+
 Both optional variables default to an empty list. Set the same values on every plan and apply, including a teardown: a run without them plans to remove the extra administrator and the email receivers. The pull-request workflow does not set them, so its plan shows that difference while they are in use.
 
 Expected, not yet observed: the first plan, and the first plan after a teardown, show `1 to import` (the resource group) and the rest `to add`; an apply probably takes 15 to 20 minutes, with PostgreSQL and the Container Apps environment the slow ones.

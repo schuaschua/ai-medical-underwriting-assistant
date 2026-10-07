@@ -244,3 +244,14 @@ variable "model_deployments" {
     capacity      = number
   }))
 }
+
+variable "originals_retention_days" {
+  description = "Days an uploaded original PDF is kept in the originals container before Azure deletes it."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.originals_retention_days >= 1 && floor(var.originals_retention_days) == var.originals_retention_days
+    error_message = "originals_retention_days must be a whole number of days, at least 1."
+  }
+}

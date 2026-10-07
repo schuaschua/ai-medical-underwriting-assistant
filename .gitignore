@@ -35,3 +35,6 @@ services/web/spa/coverage/
 # Dapr CLI run logs
 .dapr/
 tfdestroy
+
+# Local values an operator supplies at bring-up (alert address, own object id); never committed
+*.auto.tfvars

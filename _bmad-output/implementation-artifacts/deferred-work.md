@@ -19,7 +19,7 @@
   summary: Draw the rotated edge page with truly rotated content, not only the PDF rotation flag.
   evidence: `render.py` draws upright and calls `set_rotation(90)`, so text extraction is unchanged. Pick up in story 4.1.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
-  summary: Decide whether synthetic pages keep a visible "SYNTHETIC TEST DOCUMENT" footer in their text layer.
+  summary: DECIDED 2026-10-07 (owner): keep the footer. Decide whether synthetic pages keep a visible "SYNTHETIC TEST DOCUMENT" footer in their text layer.
   evidence: The footer is on every non-blank page and could cue a classifier or model in a way no real document would. Owner's call (Darrel).
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-4-first-synthetic-case-documents.md`
   summary: Extend the answer key with occurrence counts per page, strings that may legitimately be redacted, and expected clinical facts.
@@ -49,7 +49,7 @@
   summary: Make an upload safe to retry (an idempotency key from the browser, or deduplication) so a timeout does not create a second case.
   evidence: `POST /cases` creates a new case on every call and the stored hash is unused. Done in story 1.6.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
-  summary: Find and remove originals that no document row references, and decide how long originals are kept.
+  summary: PARTLY DONE 2026-10-07: the owner keeps originals 30 days and a storage lifecycle rule deletes them after that (not yet applied); document rows are not removed with them. Find and remove originals that no document row references, and decide how long originals are kept.
   evidence: A crash between the blob write and the insert leaves an unreferenced original; nothing sweeps the container and no retention rule exists. Owner decision on retention.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
   summary: Add the migration step to the deploy, run the database bootstrap for `intake`, and prove a real upload over 4 MB through Dapr in the deployed environment, including a call to a service scaled to zero.
@@ -70,7 +70,7 @@
   summary: Confirm the recording rules and the status transition table that later stories inherit.
   evidence: Chosen here without a stage to test them against: a failed page stage fails the whole case; a failed case takes no further result; a page number is the position in `page_ids`; a page reaches `extracted` only from `extracting`, which the gate or a decision must set first (`workflow/domain/transitions.py`). A case whose orchestration cannot go on is marked failed by the orchestration; if that last activity also fails on every retry, the case stays `running` until a repeat start finds the dead orchestration. Pick up in stories 1.7 to 1.9.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
-  summary: Hold the services at one replica for the demo, and find out whether a Dapr call wakes a service scaled to zero.
+  summary: DECIDED 2026-10-07 (owner): one replica each for the demo (`min_replicas = 1`); the wake-from-zero question no longer matters for the demo. Hold the services at one replica for the demo, and find out whether a Dapr call wakes a service scaled to zero.
   evidence: Observed 2026-10-07: after 8 idle minutes `web` was at zero replicas and the next request took 30 s; `intake` had not scaled down, so the Dapr wake question is still open. `min_replicas` exists as a variable. Owner decision for the demo.
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
   summary: Run the deploy workflow itself from `main`, and the CI and infrastructure pull-request workflows.

@@ -486,3 +486,27 @@ resource "azurerm_monitor_diagnostic_setting" "ai_accounts" {
     }
   }
 }
+
+# Original PDFs are the only place the redacted identifiers exist (AD-21).
+# The owner keeps them for 30 days (decision of 2026-10-07); Azure deletes
+# each one that many days after it was written. A lifecycle policy is a child
+# of the storage account and takes no tags.
+resource "azurerm_storage_management_policy" "originals_retention" {
+  storage_account_id = module.storage_account.resource_id
+
+  rule {
+    name    = "delete-originals-after-retention"
+    enabled = true
+
+    filters {
+      prefix_match = ["originals/"]
+      blob_types   = ["blockBlob"]
+    }
+
+    actions {
+      base_blob {
+        delete_after_days_since_creation_greater_than = var.originals_retention_days
+      }
+    }
+  }
+}
