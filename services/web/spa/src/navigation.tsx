@@ -2,6 +2,8 @@
 // here; navigation and routing both read this one table.
 import type { ReactElement } from "react";
 import type { DemoRole } from "./api/contracts.gen";
+import { AUDIT_PATH } from "./audit/auditPath";
+import { AuditTrail } from "./screens/AuditTrail";
 import { CustomerHome } from "./screens/CustomerHome";
 import { TriageQueue } from "./screens/TriageQueue";
 import { UnderwriterHome } from "./screens/UnderwriterHome";
@@ -42,6 +44,12 @@ export const SCREENS: Record<DemoRole, readonly Screen[]> = {
       path: `${HOME_PATHS.underwriter}/triage`,
       label: strings.navigation.triage,
       element: <TriageQueue />,
+    },
+    {
+      // AD-9: for the underwriter only; the customer has no such screen.
+      path: AUDIT_PATH,
+      label: strings.navigation.audit,
+      element: <AuditTrail />,
     },
   ],
 };

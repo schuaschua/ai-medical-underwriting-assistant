@@ -183,6 +183,7 @@ def test_story_1_8_a_page_is_classified_with_type_medical_confidence_reason_and_
         "detail": None,
         "trace_id": TRACE_ID,
         "eval_run_id": eval_run_id,
+        "error_code": None,
     }
     # The model was run five times on the one page, as `intake` holds it:
     # its text and its picture, and nothing else.

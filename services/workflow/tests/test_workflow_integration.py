@@ -659,7 +659,7 @@ def test_story_1_6_when_the_audit_insert_fails_the_status_change_is_rolled_back(
     assert len(audit_rows(service_settings, case_id)) == 1
 
 
-def test_story_1_6_every_status_change_has_exactly_one_event_and_events_are_in_time_order(
+def test_story_1_6_every_status_change_has_exactly_one_event_and_events_are_in_recorded_order(
     migrated_database: Settings, service_settings: Settings
 ) -> None:
     def at(minute: int) -> datetime:
@@ -686,10 +686,11 @@ def test_story_1_6_every_status_change_has_exactly_one_event_and_events_are_in_t
         trail = runner.run(read_audit_trail(case_id, store=store))
         progress = runner.run(read_progress(case_id, store=store))
 
-    # One event per recorded result, each exactly once, oldest first.
-    assert trail.events == [result.audit for result in results]
-    times = [event.occurred_at for event in trail.events]
-    assert times == sorted(times)
+    # One event per recorded result, each exactly once, in the order they
+    # were recorded (story 1.12), whatever time each names.
+    recorded = [results[0], results[2], results[1], results[3]]
+    assert trail.events == [result.audit for result in recorded]
+    assert trail.has_more is False
     # Every status the case and its pages now have is reported by one event:
     # the redaction (pages tracked), and the last stage each page went through.
     assert {page.page_id: page.page_status.value for page in progress.pages} == {

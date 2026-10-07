@@ -85,7 +85,9 @@ class FakeSidecar:
                     "pages": [],
                 },
             )
-        return httpx.Response(200, json={"case_id": case_id, "events": []})
+        return httpx.Response(
+            200, json={"case_id": case_id, "events": [], "has_more": False}
+        )
 
 
 def error(code: ErrorCode, message: str, status: int | None = None) -> httpx.Response:
@@ -584,6 +586,100 @@ def test_story_1_6_the_audit_trail_is_read_from_workflow_by_the_underwriter_only
     assert str(sidecar.requests[-1].url) == (
         f"{INVOKE}/workflow/method/cases/{case_id}/audit"
     )
+
+
+def test_story_1_12_the_trail_passes_through_with_its_error_code_and_its_more_flag(
+    client: TestClient, sidecar: FakeSidecar
+) -> None:
+    case_id, page_id = new_id(), new_id()
+    client.post(f"/api/cases/{case_id}/start", headers=CUSTOMER)
+
+    def event(action: str, actor: str, **changes: object) -> dict[str, object]:
+        return {
+            "actor_kind": "ai",
+            "actor": actor,
+            "action": action,
+            "occurred_at": "2026-10-07T09:00:00Z",
+            "case_id": case_id,
+            "page_id": page_id,
+            "ref": new_id(),
+            "detail": None,
+            "trace_id": TRACE_ID,
+            "eval_run_id": None,
+            "error_code": None,
+            **changes,
+        }
+
+    answered = {
+        "case_id": case_id,
+        "events": [
+            event(
+                "document.redacted",
+                "intake:azure-ai-language",
+                page_id=None,
+                detail={"Person": 2, "PhoneNumber": 1},
+            ),
+            # Named an earlier time than the event before it: `web` keeps
+            # the order `workflow` answered in.
+            event(
+                "page.routed",
+                "workflow:gate",
+                occurred_at="2026-10-07T08:59:00Z",
+                detail={"route": "awaiting_triage", "threshold": 0.9},
+            ),
+            event(
+                "stage.failed",
+                "classification:chat-main",
+                error_code="model_unavailable",
+            ),
+        ],
+        "has_more": True,
+    }
+    sidecar.answers["GET audit"] = httpx.Response(200, json=answered)
+
+    response = client.get(f"/api/cases/{case_id}/audit", headers=UNDERWRITER)
+
+    assert response.status_code == 200
+    assert response.json() == answered
+    trail = AuditTrail.model_validate(response.json())
+    assert trail.has_more is True
+    assert [event.error_code for event in trail.events] == [
+        None,
+        None,
+        ErrorCode.MODEL_UNAVAILABLE,
+    ]
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_story_1_12_the_trail_of_an_unknown_case_is_404_and_a_malformed_id_is_refused(
+    client: TestClient, sidecar: FakeSidecar
+) -> None:
+    unknown = client.get(f"/api/cases/{new_id()}/audit", headers=UNDERWRITER)
+    calls = len(sidecar.requests)
+    malformed = client.get("/api/cases/not-a-case-id/audit", headers=UNDERWRITER)
+
+    assert unknown.status_code == 404
+    assert error_of(unknown)[0] == "not_found"
+    assert malformed.status_code == 422
+    assert error_of(malformed)[0] == "validation_failed"
+    # The malformed id never reached `workflow`.
+    assert len(sidecar.requests) == calls
+
+
+def test_story_1_12_a_trail_that_is_not_the_contracts_shape_is_not_passed_on(
+    client: TestClient, sidecar: FakeSidecar
+) -> None:
+    case_id = new_id()
+    client.post(f"/api/cases/{case_id}/start", headers=CUSTOMER)
+    # As an older `workflow` would answer: without the flag.
+    sidecar.answers["GET audit"] = httpx.Response(
+        200, json={"case_id": case_id, "events": []}
+    )
+
+    response = client.get(f"/api/cases/{case_id}/audit", headers=UNDERWRITER)
+
+    assert response.status_code == 502
+    assert error_of(response)[0] == "upstream_unavailable"
 
 
 def test_story_1_6_progress_and_audit_of_an_unknown_case_are_404(

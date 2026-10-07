@@ -3,6 +3,7 @@
 import { getRole } from "../role/roleStore";
 import { strings } from "../strings";
 import type {
+  AuditTrail,
   CaseProgress,
   CaseStarted,
   CaseStatus,
@@ -437,4 +438,42 @@ export async function getThumbnail(address: string): Promise<Blob> {
     throw new ApiError(200, null, "The answer was not a picture.", null);
   }
   return picture;
+}
+
+/** Whether a value has what an event of the audit trail is shown with. */
+function isAuditEvent(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const event = value as Record<string, unknown>;
+  return (
+    isText(event.action) &&
+    isText(event.actor) &&
+    isText(event.actor_kind) &&
+    isText(event.occurred_at) &&
+    isText(event.ref) &&
+    (event.page_id === null || isText(event.page_id)) &&
+    (event.detail === null || typeof event.detail === "object") &&
+    // The code is there for a failed step only: missing or null otherwise.
+    (event.error_code == null || isText(event.error_code))
+  );
+}
+
+/**
+ * Read a case's audit trail: its events in the order the server recorded
+ * them, and whether the case has more than are listed. Only the underwriter
+ * role may. 404 `not_found` if the case was never started.
+ */
+export async function getAuditTrail(caseId: string): Promise<AuditTrail> {
+  const trail = await request<unknown>("GET", casePath(caseId, "audit"));
+  const record = trail as Record<string, unknown>;
+  if (
+    record.case_id !== caseId ||
+    !Array.isArray(record.events) ||
+    !record.events.every(isAuditEvent) ||
+    typeof record.has_more !== "boolean"
+  ) {
+    throw new ApiError(200, null, "The answer was not an audit trail.", null);
+  }
+  return trail as AuditTrail;
 }

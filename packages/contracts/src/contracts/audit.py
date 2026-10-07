@@ -14,6 +14,7 @@ from contracts.base import (
     UtcDatetime,
 )
 from contracts.enums import ActorKind, DemoRole, PageStatus, Service
+from contracts.errors import ErrorCode
 from contracts.ids import CaseId, EvalRunId, PageId, Uuid7Str
 
 
@@ -89,6 +90,10 @@ class AuditRecord(ContractModel):
     detail: dict[NonEmptyStr, Count] | RouteDetail | None
     trace_id: TraceId
     eval_run_id: EvalRunId | None
+    # For `stage.failed`: the code of the failure, from the error catalogue.
+    # `workflow` sets it on the trail it answers, from what it stored with
+    # the event; a stage's own record may leave it out. Null for any other action.
+    error_code: ErrorCode | None = None
 
     @model_validator(mode="after")
     def _actor_matches_kind(self) -> Self:
@@ -118,6 +123,12 @@ class AuditRecord(ContractModel):
                 "detail is the redaction counts for document.redacted, "
                 "the route for page.routed, else null"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _only_a_failed_stage_has_an_error_code(self) -> Self:
+        if self.error_code is not None and self.action is not AuditAction.STAGE_FAILED:
+            raise ValueError("error_code is set for stage.failed only")
         return self
 
     @model_validator(mode="after")

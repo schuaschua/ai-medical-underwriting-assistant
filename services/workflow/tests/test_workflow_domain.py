@@ -2,9 +2,11 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 from workflow_fakes import (
     FakeEngine,
     MemoryCaseStore,
@@ -30,14 +32,17 @@ from contracts.ids import new_id
 from contracts.models._stage import StageResult
 from contracts.models.workflow import CaseStarted, StartCaseRequest
 from workflow.domain.cases import (
+    DEFAULT_AUDIT_TRAIL_LIMIT,
     confirm_started,
     fail_case,
     read_audit_trail,
     read_progress,
+    record_route,
     record_stage_result,
     start_case,
 )
 from workflow.domain.entities import StartParameters
+from workflow.domain.gate import Route
 from workflow.domain.lifecycle import new_case, resolve_start_parameters
 from workflow.domain.ports import EngineState
 from workflow.domain.recording import (
@@ -57,6 +62,7 @@ from workflow.domain.transitions import (
     page_statuses_before,
     redaction_statuses_before,
 )
+from workflow.settings import Settings
 
 DEFAULTS = StartParameters(
     classifier_contender=ClassifierContender.LLM,
@@ -390,7 +396,7 @@ def test_story_1_6_a_result_for_an_unknown_case_or_page_is_not_found(
     assert store.events == []
 
 
-def test_story_1_6_events_are_read_in_time_order_whatever_order_they_arrived_in(
+def test_story_1_12_events_are_read_in_the_order_they_were_recorded_whatever_their_clocks_say(
     case_id: str, store: MemoryCaseStore, engine: FakeEngine, fixed_now: datetime
 ) -> None:
     start(case_id, store, engine)
@@ -398,7 +404,8 @@ def test_story_1_6_events_are_read_in_time_order_whatever_order_they_arrived_in(
     redacted = redaction_done(case_id, [first, second])
     later = datetime(2026, 10, 6, 12, 5, tzinfo=redacted.audit.occurred_at.tzinfo)
     earlier = datetime(2026, 10, 6, 12, 2, tzinfo=redacted.audit.occurred_at.tzinfo)
-    # Two pages are classified side by side; the later result is recorded first.
+    # Two pages are classified side by side. The result recorded first names
+    # the later time: another service's clock set it.
     late = classification_done(case_id, second, occurred_at=later)
     early = classification_done(case_id, first, occurred_at=earlier)
     for result in (redacted, late, early):
@@ -406,9 +413,79 @@ def test_story_1_6_events_are_read_in_time_order_whatever_order_they_arrived_in(
 
     trail = asyncio.run(read_audit_trail(case_id, store=store))
 
-    assert [event.page_id for event in trail.events] == [None, first, second]
-    times = [event.occurred_at for event in trail.events]
-    assert times == sorted(times)
+    # The order `workflow` recorded them in, and each still shows its own time.
+    assert [event.page_id for event in trail.events] == [None, second, first]
+    assert [event.occurred_at for event in trail.events[1:]] == [later, earlier]
+    assert trail.has_more is False
+
+
+def test_story_1_12_a_route_recorded_after_its_classification_is_listed_after_it(
+    case_id: str, store: MemoryCaseStore, engine: FakeEngine, fixed_now: datetime
+) -> None:
+    start(case_id, store, engine)
+    page_id = new_id()
+    assert record(redaction_done(case_id, [page_id]), store, fixed_now) is True
+    # The classifier's clock runs ahead of `workflow`'s: its event names a
+    # time after the one the gate's route will name.
+    ahead = fixed_now + timedelta(minutes=5)
+    classified = classification_done(case_id, page_id, occurred_at=ahead)
+    asyncio.run(record_stage_result(classified, store=store, now=lambda: fixed_now))
+    asyncio.run(
+        record_route(
+            case_id,
+            page_id,
+            classified.classification_id,
+            Route.EXTRACTION,
+            0.9,
+            store=store,
+            now=lambda: fixed_now,
+        )
+    )
+
+    trail = asyncio.run(read_audit_trail(case_id, store=store))
+
+    assert [event.action.value for event in trail.events] == [
+        "document.redacted",
+        "page.classified",
+        "page.routed",
+    ]
+    assert trail.events[2].occurred_at < trail.events[1].occurred_at
+
+
+def test_story_1_12_a_failed_stage_event_carries_its_error_code_and_no_other_event_does(
+    case_id: str, store: MemoryCaseStore, engine: FakeEngine
+) -> None:
+    start(case_id, store, engine)
+    page_id = new_id()
+    asyncio.run(record_stage_result(redaction_done(case_id, [page_id]), store=store))
+    failed = classification_failed(case_id, page_id, "model_unavailable")
+    asyncio.run(record_stage_result(failed, store=store))
+
+    trail = asyncio.run(read_audit_trail(case_id, store=store))
+
+    assert [(event.action.value, event.error_code) for event in trail.events] == [
+        ("document.redacted", None),
+        ("stage.failed", ErrorCode.MODEL_UNAVAILABLE),
+    ]
+
+
+def test_story_1_12_the_trail_lists_the_first_events_up_to_the_limit_and_says_more_exist(
+    case_id: str, store: MemoryCaseStore, engine: FakeEngine
+) -> None:
+    start(case_id, store, engine)
+    page_ids = [new_id() for _ in range(3)]
+    asyncio.run(record_stage_result(redaction_done(case_id, page_ids), store=store))
+    for page_id in page_ids:
+        asyncio.run(
+            record_stage_result(classification_done(case_id, page_id), store=store)
+        )
+
+    whole = asyncio.run(read_audit_trail(case_id, store=store, limit=4))
+    bounded = asyncio.run(read_audit_trail(case_id, store=store, limit=3))
+
+    assert (len(whole.events), whole.has_more) == (4, False)
+    assert bounded.events == whole.events[:3]
+    assert bounded.has_more is True
 
 
 def test_story_1_6_progress_and_audit_of_an_unknown_case_are_not_found(
@@ -658,3 +735,52 @@ def test_story_1_6_a_repeat_start_reports_the_case_as_it_is_now(
         f"case started: case_id={case_id} orchestration={existing.value} "
         f"case_status={status.value}"
     ) in caplog.text
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_story_1_12_a_trail_limit_under_one_is_refused_before_anything_is_read(
+    case_id: str, store: MemoryCaseStore, engine: FakeEngine, limit: int
+) -> None:
+    start(case_id, store, engine)
+    # A store that would fail if it were asked.
+    store.fail = True
+
+    with pytest.raises(ValueError, match="at least 1"):
+        asyncio.run(read_audit_trail(case_id, store=store, limit=limit))
+
+
+def test_story_1_12_the_trail_limit_is_a_setting_with_a_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings().audit_trail_limit == DEFAULT_AUDIT_TRAIL_LIMIT == 500
+
+    monkeypatch.setenv("WORKFLOW_AUDIT_TRAIL_LIMIT", "25")
+
+    assert Settings().audit_trail_limit == 25
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "5001", "many"])
+def test_story_1_12_a_trail_limit_out_of_bounds_is_refused(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("WORKFLOW_AUDIT_TRAIL_LIMIT", value)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_story_1_12_the_stand_in_store_builds_its_events_with_the_contracts_validation(
+    case_id: str, store: MemoryCaseStore, engine: FakeEngine
+) -> None:
+    start(case_id, store, engine)
+    page_id = new_id()
+    asyncio.run(record_stage_result(redaction_done(case_id, [page_id]), store=store))
+    # A recording no rule makes: an error code on an event that is no failure.
+    recorded_at, recording = store.events[0]
+    store.events[0] = (
+        recorded_at,
+        replace(recording, error_code=ErrorCode.STAGE_FAILED),
+    )
+
+    with pytest.raises(ValidationError, match="stage.failed only"):
+        asyncio.run(read_audit_trail(case_id, store=store))

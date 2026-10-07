@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from dataclasses import replace
 
 import pytest
 from fastapi.routing import APIRoute
@@ -10,11 +11,12 @@ from workflow_fakes import (
     FakeEngine,
     MemoryCaseStore,
     MemorySchemaRevision,
+    classification_done,
     redaction_done,
     redaction_failed,
 )
 
-from contracts.errors import ErrorBody
+from contracts.errors import ErrorBody, ErrorCode
 from contracts.ids import new_id
 from contracts.models.workflow import AuditTrail, CaseProgress, CaseStarted
 from workflow.adapters.http.app import create_app
@@ -241,14 +243,50 @@ def test_story_1_6_audit_lists_the_recorded_events(
     assert client.get(f"/cases/{case_id}/audit").json() == {
         "case_id": case_id,
         "events": [],
+        "has_more": False,
     }
     result = redaction_failed(case_id)
     asyncio.run(record_stage_result(result, store=store))
 
     trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
 
-    assert trail.events == [result.audit]
+    # Story 1.12: the event is the stage's record, with the failure's code.
+    assert trail.events == [
+        result.audit.model_copy(update={"error_code": ErrorCode.REDACTION_FAILED})
+    ]
     assert trail.events[0].action.value == "stage.failed"
+    assert trail.has_more is False
+
+
+def test_story_1_12_the_audit_route_lists_the_first_events_up_to_its_limit(
+    settings: Settings, dependencies: Dependencies, case_id: str, store: MemoryCaseStore
+) -> None:
+    app = create_app(settings, dependencies=replace(dependencies, audit_trail_limit=2))
+    page_ids = [new_id(), new_id()]
+    with TestClient(app) as limited:
+        limited.post(f"/cases/{case_id}/start")
+        redacted = redaction_done(case_id, page_ids)
+        asyncio.run(record_stage_result(redacted, store=store))
+        first = classification_done(case_id, page_ids[0])
+        asyncio.run(record_stage_result(first, store=store))
+
+        exact = AuditTrail.model_validate(limited.get(f"/cases/{case_id}/audit").json())
+        asyncio.run(
+            record_stage_result(classification_done(case_id, page_ids[1]), store=store)
+        )
+        bounded = AuditTrail.model_validate(
+            limited.get(f"/cases/{case_id}/audit").json()
+        )
+
+    # Exactly as many as the limit: nothing more exists.
+    assert (len(exact.events), exact.has_more) == (2, False)
+    # One more than the limit: the first two, and a note that more exist.
+    assert [event.action.value for event in bounded.events] == [
+        "document.redacted",
+        "page.classified",
+    ]
+    assert bounded.events[1].page_id == page_ids[0]
+    assert bounded.has_more is True
 
 
 def test_story_1_6_progress_and_audit_of_an_unknown_case_are_404(

@@ -388,7 +388,7 @@ def test_story_1_10_discard_and_keep_leave_the_trail_the_acceptance_criterion_na
 
     assert store.pages[first].page_status is PageStatus.DISCARDED
     assert store.pages[second].page_status is PageStatus.AWAITING_TRIAGE
-    trail = asyncio.run(store.audit_trail(case_id))
+    trail = asyncio.run(store.audit_trail(case_id, 100))
     assert trail is not None
     decided = [
         (event.action.value, event.actor, event.actor_kind.value, event.page_id)

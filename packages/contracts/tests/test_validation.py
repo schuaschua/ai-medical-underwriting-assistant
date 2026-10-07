@@ -35,6 +35,7 @@ from contracts.models.verdict import (
 )
 from contracts.models.web import PageDecisionRequest
 from contracts.models.workflow import (
+    AuditTrail,
     CaseProgress,
     CaseStarted,
     DecisionRequest,
@@ -1007,3 +1008,72 @@ def test_story_1_1_models_are_immutable() -> None:
 
     with pytest.raises(ValidationError):
         request.decision = "discard"  # type: ignore[assignment]  # proving the model is frozen
+
+
+# --- story 1.12: the error code of a failed stage, and the bounded trail
+
+
+def test_story_1_12_a_stage_failed_record_may_carry_its_error_code() -> None:
+    failed = AuditRecord.model_validate(
+        audit(action="stage.failed", error_code="model_unavailable")
+    )
+
+    assert failed.error_code is ErrorCode.MODEL_UNAVAILABLE
+    assert failed.model_dump(mode="json")["error_code"] == "model_unavailable"
+    # A stage's own record may leave it out: `workflow` sets it on the trail.
+    without = AuditRecord.model_validate(audit(action="stage.failed"))
+    assert without.error_code is None
+    assert without.model_dump(mode="json")["error_code"] is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"action": "page.classified"},
+        {"action": "page.kept", "actor_kind": "human", "actor": "customer"},
+        {"action": "document.redacted", "page_id": None, "detail": {"Person": 1}},
+    ],
+    ids=["classified", "kept", "redacted"],
+)
+def test_story_1_12_only_a_stage_failed_record_has_an_error_code(
+    changes: dict[str, Any],
+) -> None:
+    assert AuditRecord.model_validate(audit(**changes)).error_code is None
+    with pytest.raises(ValidationError, match="stage.failed only"):
+        AuditRecord.model_validate(audit(**changes, error_code="stage_failed"))
+
+
+def test_story_1_12_an_error_code_outside_the_catalogue_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        AuditRecord.model_validate(
+            audit(action="stage.failed", error_code="something_else")
+        )
+
+
+def test_story_1_12_a_failed_result_and_its_audit_record_name_the_same_code() -> None:
+    failed = classification_result(
+        status="failed",
+        error_code="stage_timeout",
+        audit=audit(action="stage.failed", error_code="stage_timeout"),
+        classification=None,
+    )
+
+    assert (
+        ClassificationResult.model_validate(failed).audit.error_code
+        is ErrorCode.STAGE_TIMEOUT
+    )
+    with pytest.raises(ValidationError, match="must be the result's"):
+        ClassificationResult.model_validate(
+            {
+                **failed,
+                "audit": audit(action="stage.failed", error_code="model_unavailable"),
+            }
+        )
+
+
+def test_story_1_12_the_audit_trail_says_whether_more_events_exist() -> None:
+    trail = {"case_id": CASE, "events": [audit()], "has_more": True}
+
+    assert AuditTrail.model_validate(trail).has_more is True
+    with pytest.raises(ValidationError):
+        AuditTrail.model_validate({"case_id": CASE, "events": [audit()]})

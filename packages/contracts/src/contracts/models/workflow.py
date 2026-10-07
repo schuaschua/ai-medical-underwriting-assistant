@@ -122,10 +122,17 @@ class CaseProgress(ContractModel):
 
 
 class AuditTrail(ContractModel):
-    """Response of `GET /cases/{case_id}/audit`: events in time order."""
+    """Response of `GET /cases/{case_id}/audit`: the case's events, oldest first.
+
+    The order is the one `workflow` recorded the events in, so a cause never
+    comes after its effect, whatever the clocks of the services that set
+    `occurred_at` say. The answer is bounded: it holds the first events, and
+    `has_more` says that the case has more than are listed.
+    """
 
     case_id: CaseId
     events: list[AuditRecord]
+    has_more: bool
 
 
 class PageQueueQuery(ContractModel):

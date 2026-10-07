@@ -34,6 +34,7 @@ def audit(action: str, **changes: Any) -> dict[str, Any]:
         "detail": None,
         "trace_id": TRACE,
         "eval_run_id": None,
+        "error_code": None,
     }
     record.update(changes)
     return record
@@ -258,7 +259,13 @@ SAMPLES: dict[str, dict[str, Any]] = {
     },
     "AuditTrail": {
         "case_id": CASE,
-        "events": [REDACTION_AUDIT, audit("page.classified"), ROUTE_AUDIT],
+        "events": [
+            REDACTION_AUDIT,
+            audit("page.classified"),
+            ROUTE_AUDIT,
+            audit("stage.failed", error_code="model_unavailable"),
+        ],
+        "has_more": False,
     },
     "PageQueueQuery": {"status": "awaiting_triage"},
     "QueuedPage": QUEUED_PAGE,

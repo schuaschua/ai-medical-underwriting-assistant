@@ -188,6 +188,17 @@
           ],
           "title": "Detail"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "eval_run_id": {
           "anyOf": [
             {
@@ -245,7 +256,7 @@
     },
     "AuditTrail": {
       "additionalProperties": false,
-      "description": "Response of `GET /cases/{case_id}/audit`: events in time order.",
+      "description": "Response of `GET /cases/{case_id}/audit`: the case's events, oldest first.\n\nThe order is the one `workflow` recorded the events in, so a cause never\ncomes after its effect, whatever the clocks of the services that set\n`occurred_at` say. The answer is bounded: it holds the first events, and\n`has_more` says that the case has more than are listed.",
       "properties": {
         "case_id": {
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -258,11 +269,16 @@
           },
           "title": "Events",
           "type": "array"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
         }
       },
       "required": [
         "case_id",
-        "events"
+        "events",
+        "has_more"
       ],
       "title": "AuditTrail",
       "type": "object"

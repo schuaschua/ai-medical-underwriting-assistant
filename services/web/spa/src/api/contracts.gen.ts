@@ -18,7 +18,6 @@ export type AuditAction =
   | "facts.extracted"
   | "verdict.suggested"
   | "stage.failed";
-export type CaseStatus = "running" | "awaiting_human" | "completed" | "failed";
 /**
  * Every `error.code` a service may return.
  */
@@ -46,6 +45,7 @@ export type ErrorCode =
   | "model_unavailable"
   | "upstream_unavailable"
   | "internal_error";
+export type CaseStatus = "running" | "awaiting_human" | "completed" | "failed";
 export type PageStatus =
   | "uploaded"
   | "classified"
@@ -241,6 +241,7 @@ export interface AuditRecord {
       }
     | RouteDetail
     | null;
+  error_code?: ErrorCode | null;
   eval_run_id: string | null;
   occurred_at: string;
   page_id: string | null;
@@ -255,11 +256,17 @@ export interface RouteDetail {
   threshold: number;
 }
 /**
- * Response of `GET /cases/{case_id}/audit`: events in time order.
+ * Response of `GET /cases/{case_id}/audit`: the case's events, oldest first.
+ *
+ * The order is the one `workflow` recorded the events in, so a cause never
+ * comes after its effect, whatever the clocks of the services that set
+ * `occurred_at` say. The answer is bounded: it holds the first events, and
+ * `has_more` says that the case has more than are listed.
  */
 export interface AuditTrail {
   case_id: string;
   events: AuditRecord[];
+  has_more: boolean;
 }
 /**
  * Response of `POST /cases`; the request body is the PDF itself.

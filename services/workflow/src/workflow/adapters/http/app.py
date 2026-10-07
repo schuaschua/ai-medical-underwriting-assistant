@@ -156,6 +156,7 @@ def create_app(
             head_revision=bundled_head(),
             defaults=default_parameters(settings),
             page_queue_limit=settings.page_queue_limit,
+            audit_trail_limit=settings.audit_trail_limit,
         )
     wired = dependencies
 

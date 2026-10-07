@@ -137,7 +137,8 @@ export function thumbnail(): Response {
 }
 
 const THUMBNAIL_ROUTE = /^\/api\/pages\/[^/]+\/thumbnail$/;
-const CASE_ROUTE = /^\/api\/cases\/([^/]+)\/(start|progress|classifications)$/;
+const CASE_ROUTE =
+  /^\/api\/cases\/([^/]+)\/(start|progress|classifications|audit)$/;
 const DECISION_ROUTE = /^\/api\/cases\/([^/]+)\/pages\/([^/]+)\/decisions$/;
 
 const NO_TRACE_ID = "0".repeat(32);
@@ -228,6 +229,20 @@ export function fakeServer(
       }
       if (caseId !== undefined && resource === "classifications") {
         return json(200, { case_id: caseId, classifications: [] });
+      }
+      if (caseId !== undefined && resource === "audit") {
+        if (call.role !== "underwriter") {
+          return json(
+            403,
+            errorBody(
+              "role_not_allowed",
+              "This action is not open to your role.",
+            ),
+          );
+        }
+        return started.has(caseId)
+          ? json(200, { case_id: caseId, events: [], has_more: false })
+          : json(404, errorBody("not_found", "That case could not be found."));
       }
       if (call.path === "/api/triage") {
         return call.role === "underwriter"

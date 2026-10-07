@@ -14,11 +14,13 @@ from psycopg import errors as pg_errors
 from pydantic import BaseModel
 from sqlalchemy import (
     URL,
+    BigInteger,
     CheckConstraint,
     Column,
     DateTime,
     Engine,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -177,6 +179,11 @@ audit_event_table = Table(
     Column("eval_run_id", Uuid(as_uuid=False), nullable=True),
     # When `workflow` wrote the event.
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    # The order the events were written in: numbered by the database at the
+    # insert, never by this module. A case's events are inserted one after
+    # the other under the lock on its row, so within a case the number is
+    # the order of writing, whatever any clock says.
+    Column("audit_event_seq", BigInteger, Identity(always=True), nullable=False),
     UniqueConstraint(
         "case_id",
         "page_id",
@@ -185,7 +192,9 @@ audit_event_table = Table(
         name=AUDIT_EVENT_UNIQUE,
         postgresql_nulls_not_distinct=True,
     ),
-    Index("ix_workflow_audit_event_case_id_occurred_at", "case_id", "occurred_at"),
+    Index(
+        "ix_workflow_audit_event_case_id_audit_event_seq", "case_id", "audit_event_seq"
+    ),
 )
 
 # AD-10: the decisions people made, one row each. Like the trail it is only
@@ -430,6 +439,35 @@ def _detail_json(detail: object) -> object:
     return detail.model_dump(mode="json") if isinstance(detail, BaseModel) else detail
 
 
+def _stored_error_code(row: Row[*tuple[Any, ...]]) -> ErrorCode | None:
+    """The error code to answer for a stored event; a row that breaks the rule is not a fault.
+
+    The code belongs to `stage.failed` and comes from the catalogue. A row
+    that holds one on another action, or one the catalogue does not know (a
+    newer build's, or a row written by hand), is answered all the same: one
+    such row must not make the whole trail unreadable.
+    """
+    if row.error_code is None:
+        return None
+    if row.action != AuditAction.STAGE_FAILED.value:
+        # security rule 31: ids only.
+        logger.warning(
+            "audit event error code ignored: case_id=%s audit_event_id=%s",
+            row.case_id,
+            row.audit_event_id,
+        )
+        return None
+    try:
+        return ErrorCode(row.error_code)
+    except ValueError:
+        logger.warning(
+            "audit event error code unknown: case_id=%s audit_event_id=%s",
+            row.case_id,
+            row.audit_event_id,
+        )
+        return ErrorCode.STAGE_FAILED
+
+
 def _audit_record(row: Row[*tuple[Any, ...]]) -> AuditRecord:
     return AuditRecord(
         actor_kind=ActorKind(row.actor_kind),
@@ -442,6 +480,7 @@ def _audit_record(row: Row[*tuple[Any, ...]]) -> AuditRecord:
         detail=row.detail,
         trace_id=row.trace_id,
         eval_run_id=row.eval_run_id,
+        error_code=_stored_error_code(row),
     )
 
 
@@ -893,10 +932,7 @@ class SqlCaseStore:
                             == AuditAction.STAGE_FAILED.value,
                             audit_event_table.c.error_code.is_not(None),
                         )
-                        .order_by(
-                            audit_event_table.c.recorded_at,
-                            audit_event_table.c.audit_event_id,
-                        )
+                        .order_by(audit_event_table.c.audit_event_seq)
                     )
                 ).all()
                 page_codes: dict[str, ErrorCode] = {}
@@ -921,8 +957,8 @@ class SqlCaseStore:
                     error_code=ErrorCode(failures[0].error_code) if failures else None,
                 )
 
-    async def audit_trail(self, case_id: str) -> AuditTrail | None:
-        """The case's audit events, oldest first."""
+    async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:
+        """The case's first audit events, in the order they were written, at most `limit`."""
         with adapter_span(tracer, "workflow.db.read_audit_trail"):
             async with self._database.connect() as connection:
                 found = await connection.execute(
@@ -935,16 +971,22 @@ class SqlCaseStore:
                 events = await connection.execute(
                     select(audit_event_table)
                     .where(audit_event_table.c.case_id == case_id)
-                    # Time order; events of one instant keep the order they
-                    # were written in (a UUIDv7 id sorts by its time).
-                    .order_by(
-                        audit_event_table.c.occurred_at,
-                        audit_event_table.c.recorded_at,
-                        audit_event_table.c.audit_event_id,
-                    )
+                    # The order `workflow` wrote them in, by the number the
+                    # database gave each at its insert, and by nothing
+                    # else. Not `occurred_at`, which the clock of the
+                    # service that did the work sets, and not the record
+                    # time, which is read before the case's row is locked:
+                    # a route must never show before the classification it
+                    # follows.
+                    .order_by(audit_event_table.c.audit_event_seq)
+                    # One more than is listed: that one says more exist.
+                    .limit(limit + 1)
                 )
+                rows = events.all()
                 return AuditTrail(
-                    case_id=case_id, events=[_audit_record(row) for row in events]
+                    case_id=case_id,
+                    events=[_audit_record(row) for row in rows[:limit]],
+                    has_more=len(rows) > limit,
                 )
 
     async def queue(self, status: PageStatus, limit: int) -> PageQueue:

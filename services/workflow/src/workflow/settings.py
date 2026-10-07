@@ -13,6 +13,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from contracts.enums import ClassifierContender, RetrieverConfig
+from workflow.domain.cases import DEFAULT_AUDIT_TRAIL_LIMIT
 from workflow.domain.gate import DEFAULT_GATE_THRESHOLD
 from workflow.domain.queue import DEFAULT_PAGE_QUEUE_LIMIT
 
@@ -127,6 +128,10 @@ class Settings(BaseSettings):
     # How many pages one read of a queue (`GET /pages?status=`) lists at most.
     # When more wait, the answer says so and the rest follow as pages are decided.
     page_queue_limit: Annotated[int, Field(ge=1, le=1000)] = DEFAULT_PAGE_QUEUE_LIMIT
+
+    # How many events one read of a case's audit trail (`GET /cases/{case_id}/audit`)
+    # lists at most: the first ones. When the case has more, the answer says so.
+    audit_trail_limit: Annotated[int, Field(ge=1, le=5000)] = DEFAULT_AUDIT_TRAIL_LIMIT
 
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.

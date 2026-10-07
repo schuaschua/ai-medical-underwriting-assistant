@@ -266,19 +266,27 @@ class MemoryCaseStore:
             error_code=failures[0][1] if failures else None,
         )
 
-    async def audit_trail(self, case_id: str) -> AuditTrail | None:
+    async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:
         if self.fail:
             raise StoreDown
         if case_id not in self.cases:
             return None
+        # As the real store: in the order written, which is the order of
+        # the list, whatever time each event names or was recorded at. Each
+        # carries the error code stored with it, and is built with the
+        # contracts' validation, as the real store builds it.
         events = [
-            (recording.audit.occurred_at, recorded_at, position, recording.audit)
-            for position, (recorded_at, recording) in enumerate(self.events)
+            AuditRecord.model_validate(
+                {
+                    **recording.audit.model_dump(),
+                    "error_code": recording.error_code,
+                }
+            )
+            for _, recording in self.events
             if recording.audit.case_id == case_id
         ]
         return AuditTrail(
-            case_id=case_id,
-            events=[event[3] for event in sorted(events, key=lambda e: e[:3])],
+            case_id=case_id, events=events[:limit], has_more=len(events) > limit
         )
 
     async def queue(self, status: PageStatus, limit: int) -> PageQueue:

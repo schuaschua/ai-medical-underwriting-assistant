@@ -84,6 +84,7 @@ def test_story_1_8_post_classifications_answers_the_stored_result_in_the_contrac
         "detail": None,
         "trace_id": TRACE_ID,
         "eval_run_id": None,
+        "error_code": None,
     }
     # AD-7: a classification never carries a route or a decision.
     assert set(response.json()) == {

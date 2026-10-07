@@ -35,6 +35,9 @@ UNKNOWN_CASE_MESSAGE = "That case could not be found."
 UNKNOWN_PAGE_MESSAGE = "That page could not be found."
 NOT_STARTED_MESSAGE = "The case could not be started. Please try again."
 
+# How many events one read of a case's trail lists at most (WORKFLOW_AUDIT_TRAIL_LIMIT).
+DEFAULT_AUDIT_TRAIL_LIMIT = 500
+
 
 def utc_now() -> datetime:
     """The current time, in UTC."""
@@ -243,9 +246,17 @@ async def read_progress(case_id: str, *, store: CaseStore) -> CaseProgress:
     return progress
 
 
-async def read_audit_trail(case_id: str, *, store: CaseStore) -> AuditTrail:
-    """The case's audit events in time order; `not_found` for a case never started."""
-    trail = await store.audit_trail(case_id)
+async def read_audit_trail(
+    case_id: str, *, store: CaseStore, limit: int = DEFAULT_AUDIT_TRAIL_LIMIT
+) -> AuditTrail:
+    """The case's first audit events in the order they were recorded, at most `limit`.
+
+    `not_found` for a case never started. A limit under 1 is the caller's
+    mistake and is refused before anything is read.
+    """
+    if limit < 1:
+        raise ValueError("the audit trail's limit must be at least 1")
+    trail = await store.audit_trail(case_id, limit)
     if trail is None:
         raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_CASE_MESSAGE)
     return trail

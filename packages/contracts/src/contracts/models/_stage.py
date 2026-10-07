@@ -43,6 +43,8 @@ class StageResult(ContractModel):
             raise ValueError(
                 f"a {self.status.value} result carries a {expected.value} audit record"
             )
+        if self.audit.error_code not in (None, self.error_code):
+            raise ValueError("the audit record's error_code must be the result's")
         if self.audit.case_id != self.case_id:
             raise ValueError("the audit record must be about the same case")
         return self

@@ -332,7 +332,7 @@ def test_story_1_9_a_recorded_route_moves_the_page_with_one_event_however_often(
     assert store.pages[first].page_status is PageStatus.AWAITING_TRIAGE
     assert store.pages[second].page_status is PageStatus.CLASSIFIED
     # The page's `page.routed` event comes after its `page.classified` event.
-    trail = asyncio.run(store.audit_trail(case_id))
+    trail = asyncio.run(store.audit_trail(case_id, 100))
     assert trail is not None
     actions = [e.action.value for e in trail.events if e.page_id == first]
     assert actions == ["page.classified", "page.routed"]

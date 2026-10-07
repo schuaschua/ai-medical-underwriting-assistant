@@ -30,6 +30,7 @@ from contracts.models.workflow import (
 from contracts.operations import get_operation
 from workflow.adapters.telemetry import current_trace_id
 from workflow.domain.cases import (
+    DEFAULT_AUDIT_TRAIL_LIMIT,
     read_audit_trail,
     read_progress,
     start_case,
@@ -76,6 +77,8 @@ class Dependencies:
     defaults: StartParameters
     # How many pages one read of a queue lists at most.
     page_queue_limit: int = DEFAULT_PAGE_QUEUE_LIMIT
+    # How many events one read of a case's audit trail lists at most.
+    audit_trail_limit: int = DEFAULT_AUDIT_TRAIL_LIMIT
     now: Callable[[], datetime] = field(default=utc_now)
 
 
@@ -140,7 +143,11 @@ def build_router(dependencies: Dependencies) -> APIRouter:
 
     @router.get(get_operation("read_audit_trail").path)
     async def audit_trail_route(case_id: CaseIdPath) -> AuditTrail:
-        return await read_audit_trail(case_id, store=dependencies.store)
+        return await read_audit_trail(
+            case_id,
+            store=dependencies.store,
+            limit=dependencies.audit_trail_limit,
+        )
 
     # AD-10: the one decision operation. The actor is in the body, as `web`
     # passed it on (AD-9); the domain refuses any that is not a demo role.

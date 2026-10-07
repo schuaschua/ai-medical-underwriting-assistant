@@ -1,11 +1,14 @@
 // Every piece of user-facing text (coding-style.md rule 18).
 import type {
+  AuditAction,
   CaseStatus,
   DemoRole,
   ErrorCode,
   PageStatus,
   PageType,
   QueuedBy,
+  RouteDetail,
+  Service,
 } from "./api/contracts.gen";
 
 /** The largest upload, in MB, as the wording states it. The server enforces it. */
@@ -23,6 +26,15 @@ export function percentage(share: number): string {
   }
   // The small addition undoes binary rounding: 0.29 times 100 is 28.99…
   return `${Math.min(99, Math.max(0, Math.floor(share * 100 + 1e-9)))}%`;
+}
+
+/**
+ * A share the server recorded, a number from 0 to 1, worded as the exact
+ * percentage: nothing is rounded away, so 92.5 in a hundred reads "92.5%".
+ */
+export function exactPercentage(share: number): string {
+  // Six decimals keep every digit a setting has and drop binary noise.
+  return `${Number((share * 100).toFixed(6))}%`;
 }
 
 export const strings = {
@@ -45,13 +57,14 @@ export const strings = {
     home: "Home",
     upload: "Upload a document",
     triage: "Triage queue",
+    audit: "Audit trail",
   },
   home: {
     customerHeading: "Customer home",
     customerIntro: "Use “Upload a document” to send us a PDF.",
     underwriterHeading: "Underwriter home",
     underwriterIntro:
-      "Use “Triage queue” to accept or deny the pages that are waiting.",
+      "Use “Triage queue” to accept or deny the pages that are waiting, and “Audit trail” to read what was done to a case.",
     checking: "Checking with the server…",
     confirmed: (role: string) => `The server sees you as: ${role}.`,
   },
@@ -176,6 +189,131 @@ export const strings = {
     tryAgain: "Try again",
     tryAgainFor: (pageNumber: number, caseId: string) =>
       `Try again to save your decision for page ${pageNumber} of case ${caseId}`,
+  },
+  audit: {
+    heading: "Audit trail",
+    intro:
+      "Every step of a case in the order it was recorded: who or what did it, and when.",
+    caseLabel: "Case id",
+    caseHint: "Type or paste the id of a case, then choose “Show the trail”.",
+    show: "Show the trail",
+    notACaseId:
+      "That is not a case id. A case id looks like 019a0000-0000-7000-8000-000000000001.",
+    reading: "Reading the trail…",
+    unknownCase: "No such case.",
+    empty: "No events yet.",
+    more: "This case has more events than are shown here. Only the first ones are listed.",
+    // A read failed after the trail was shown: what is shown may be out of date.
+    stale:
+      "The trail could not be read again. What is shown may be out of date.",
+    checkAgain: "Check again",
+    trailOf: (caseId: string) => `Audit trail of case ${caseId}`,
+    caseStatus: (status: string) => `Case status: ${status}.`,
+    following: "New events appear here as the case moves.",
+    // More events exist than one read lists: a later read would list the
+    // same first ones, so none is made.
+    firstOnly:
+      "Only the first events of this case are shown, so the trail is not read again.",
+    finished: "The case is finished, so the trail is not read again.",
+    timeColumn: "Time",
+    actorColumn: "Actor",
+    actionColumn: "Action",
+    pageColumn: "Page",
+    detailColumn: "Detail",
+    utc: (date: string, time: string) => `${date} ${time} UTC`,
+    // A person: the demo role, as recorded.
+    human: (role: string) => `${role} (a person)`,
+    // An AI step: the service, and what did the work inside it. Both show.
+    ai: (service: string, partLabel: string, part: string) =>
+      `${service}, ${partLabel} ${part}`,
+    // An actor this build does not know: its two parts, and no claim about
+    // what the second one is.
+    otherActor: (service: string, part: string) => `${service}, ${part}`,
+    service: {
+      web: "Web service",
+      intake: "Intake service",
+      classification: "Classification service",
+      extraction: "Extraction service",
+      retrieval: "Retrieval service",
+      verdict: "Verdict service",
+      workflow: "Workflow service",
+    } satisfies Record<Service, string>,
+    // What the second half of an AI actor names, for the services known to
+    // call a model deployment, and for `intake`, which calls the redaction
+    // service. No other service's second half is given a name.
+    actorPart: {
+      classification: "model deployment",
+      extraction: "model deployment",
+      retrieval: "model deployment",
+      verdict: "model deployment",
+      intake: "redaction service",
+    } satisfies Partial<Record<Service, string>>,
+    // `workflow` calls no model: its own parts, each in plain words.
+    knownActor: {
+      "workflow:gate": "Workflow service, rule gate",
+      "workflow:case-lifecycle": "Workflow service, the case's lifecycle",
+    },
+    action: {
+      "document.redacted": "Document redacted",
+      "page.classified": "Page classified",
+      "page.routed": "Page sent on by the gate",
+      "page.kept": "Page kept",
+      "page.discarded": "Page discarded",
+      "page.accepted": "Page accepted",
+      "page.denied": "Page denied",
+      "facts.extracted": "Facts extracted",
+      "verdict.suggested": "Verdict suggested",
+      "stage.failed": "Step failed",
+    } satisfies Record<AuditAction, string>,
+    actionOnPage: (action: string, pageNumber: number) =>
+      `${action} (page ${pageNumber})`,
+    pageOf: (pageNumber: number) => `Page ${pageNumber}`,
+    wholeCase: "Whole case",
+    // Counts per category of what was redacted; never the values themselves.
+    redacted: (counts: string) => `Redacted: ${counts}.`,
+    redactedNothing: "Nothing was redacted.",
+    redactionCount: (category: string, count: number) => `${category} ${count}`,
+    // The route and the confidence the gate asked for, both from the event's
+    // detail as the server recorded them; the browser compares nothing.
+    routed: (route: string, asked: string) =>
+      `Sent to ${route}. Confidence the gate asked for: ${asked}.`,
+    route: {
+      extracting: "extraction",
+      awaiting_customer: "the customer, to keep or discard",
+      awaiting_triage: "the underwriter's triage queue",
+    } satisfies Record<RouteDetail["route"], string>,
+    failedBecause: (reason: string) => `Reason: ${reason}`,
+    noReason: "No reason was recorded.",
+    // Why a step failed, in plain words, for every code of the catalogue.
+    // A code this build has no words for is shown as the server named it.
+    failure: {
+      validation_failed: "The step was given something it could not accept.",
+      invalid_role: "The step was called without a valid role.",
+      role_not_allowed: "The step was not open to the role that asked.",
+      actor_not_human:
+        "A decision only a person may make came from something else.",
+      not_found: "What the step needed could not be found.",
+      method_not_allowed: "The step was called in a way it does not take.",
+      file_too_large: "The file was too large.",
+      unsupported_file_type: "The file was not a PDF.",
+      payload_too_large: "What was sent was too large.",
+      unsupported_media_type: "What was sent was not of a type the step takes.",
+      too_many_requests: "Too many requests were made at once.",
+      in_progress: "The step was still running when it was asked again.",
+      not_redacted: "The document had not been redacted yet.",
+      not_awaiting_decision: "The page was not waiting for that decision.",
+      pages_not_terminal: "Some pages were not finished yet.",
+      rule_not_seen: "A rule was asked for that had not been found first.",
+      stage_timeout: "The step took too long and was stopped.",
+      stage_failed: "The step could not be completed.",
+      redaction_failed: "The document could not be redacted.",
+      invalid_model_output: "The model's answer could not be used.",
+      model_unavailable: "The model was not available.",
+      upstream_unavailable: "A service the step needed was not available.",
+      internal_error: "Something went wrong inside the service.",
+    } satisfies Record<ErrorCode, string>,
+    linkFromTriage: "Audit trail",
+    linkFromTriageFor: (caseId: string) => `Audit trail of case ${caseId}`,
   },
   notFound: {
     heading: "Page not found",

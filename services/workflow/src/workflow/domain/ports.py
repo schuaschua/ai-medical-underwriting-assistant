@@ -77,8 +77,15 @@ class CaseStore(Protocol):
         """
         ...
 
-    async def audit_trail(self, case_id: str) -> AuditTrail | None:
-        """The case's audit events in time order, or None if the case is unknown."""
+    async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:
+        """The case's first audit events, at most `limit`, or None if the case is unknown.
+
+        In the order `workflow` wrote them, and by nothing else: never by
+        `occurred_at`, which the clock of the service that did the work
+        sets, nor by the record time. A `stage.failed` event
+        carries the error code stored with it. `has_more` says that the case
+        has more events than are listed.
+        """
         ...
 
     async def queue(self, status: PageStatus, limit: int) -> PageQueue:

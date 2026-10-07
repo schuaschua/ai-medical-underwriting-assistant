@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { ApiError, decidePage, mayBeStored } from "../api/client";
 import type { Decision, TriagePage } from "../api/contracts.gen";
+import { auditTrailPath } from "../audit/auditPath";
 import { percentage, strings } from "../strings";
 import { ErrorMessage } from "./ErrorMessage";
 import { PageThumbnail } from "./PageThumbnail";
@@ -139,6 +141,13 @@ export function TriageRow({
         <code>{caseId}</code>
         <br />
         {strings.triage.pageOf(pageNumber)}
+        <br />
+        <Link
+          to={auditTrailPath(caseId)}
+          aria-label={strings.audit.linkFromTriageFor(caseId)}
+        >
+          {strings.audit.linkFromTriage}
+        </Link>
       </td>
       <td>
         <Reading page={page} />

@@ -16,6 +16,7 @@ import {
 import {
   ApiError,
   decidePage,
+  getAuditTrail,
   getClassifications,
   getMe,
   getProgress,
@@ -704,5 +705,152 @@ describe("1.11 API client", () => {
 
     fakeServer(() => thumbnail());
     await expect(getThumbnail(address)).resolves.toBeDefined();
+  });
+});
+
+describe("1.12 API client", () => {
+  const AUDITED = "019a0000-0000-7000-8000-000000030000";
+  const OTHER = "019a0000-0000-7000-8000-000000040000";
+
+  /** One event of a trail, whole, as `workflow` answers it. */
+  function auditEvent(changes: Record<string, unknown> = {}) {
+    return {
+      actor_kind: "ai",
+      actor: "classification:chat-main",
+      action: "stage.failed",
+      occurred_at: "2026-10-07T09:00:00Z",
+      case_id: AUDITED,
+      page_id: "019a0000-0000-7000-8000-000000030001",
+      ref: "019a0000-0000-7000-8000-000000030002",
+      detail: null,
+      trace_id: "0af7651916cd43dd8448eb211c80319c",
+      eval_run_id: null,
+      error_code: "model_unavailable",
+      ...changes,
+    };
+  }
+
+  function trail(changes: Record<string, unknown> = {}) {
+    return {
+      case_id: AUDITED,
+      events: [auditEvent()],
+      has_more: false,
+      ...changes,
+    };
+  }
+
+  function without(record: Record<string, unknown>, field: string) {
+    return Object.fromEntries(
+      Object.entries(record).filter(([name]) => name !== field),
+    );
+  }
+
+  it("reads a whole audit trail as the underwriter, with the role header", async () => {
+    const answered = trail({
+      events: [
+        auditEvent(),
+        auditEvent({
+          action: "document.redacted",
+          actor: "intake:azure-ai-language",
+          page_id: null,
+          detail: { Person: 2 },
+          error_code: null,
+        }),
+      ],
+      has_more: true,
+    });
+    const server = fakeServer(() => json(200, answered));
+    setRole("underwriter");
+
+    await expect(getAuditTrail(AUDITED)).resolves.toEqual(answered);
+
+    expect(server.calls).toMatchObject([
+      {
+        path: `/api/cases/${AUDITED}/audit`,
+        method: "GET",
+        role: "underwriter",
+      },
+    ]);
+  });
+
+  it("takes an event that leaves its error code out, as one whose code is null", async () => {
+    const answered = trail({
+      events: [
+        without(auditEvent({ action: "page.classified" }), "error_code"),
+      ],
+    });
+    fakeServer(() => json(200, answered));
+    setRole("underwriter");
+
+    await expect(getAuditTrail(AUDITED)).resolves.toEqual(answered);
+  });
+
+  it.each([
+    ["no has_more", without(trail(), "has_more")],
+    ["a has_more that is no yes or no", trail({ has_more: "no" })],
+    ["another case's case_id", trail({ case_id: OTHER })],
+    ["events that are no list", trail({ events: {} })],
+    ["an event that is no object", trail({ events: ["page.kept"] })],
+    [
+      "an event without an action",
+      trail({ events: [auditEvent({ action: "" })] }),
+    ],
+    [
+      "an event without an actor",
+      trail({ events: [auditEvent({ actor: 7 })] }),
+    ],
+    [
+      "an event without an actor kind",
+      trail({ events: [without(auditEvent(), "actor_kind")] }),
+    ],
+    [
+      "an event without a time",
+      trail({ events: [auditEvent({ occurred_at: null })] }),
+    ],
+    [
+      "an event without a ref",
+      trail({ events: [without(auditEvent(), "ref")] }),
+    ],
+    [
+      "an event whose page is neither an id nor null",
+      trail({ events: [auditEvent({ page_id: 3 })] }),
+    ],
+    [
+      "an event whose detail is text",
+      trail({ events: [auditEvent({ detail: "Person 2" })] }),
+    ],
+    [
+      "an event whose error code is no text",
+      trail({ events: [auditEvent({ error_code: 502 })] }),
+    ],
+    [
+      "one wrong event among right ones",
+      trail({
+        events: [auditEvent(), auditEvent({ actor: "" }), auditEvent()],
+      }),
+    ],
+  ])("refuses an answer with %s", async (_what, answered) => {
+    fakeServer(() => json(200, answered));
+    setRole("underwriter");
+
+    const refused = getAuditTrail(AUDITED);
+
+    await expect(refused).rejects.toBeInstanceOf(ApiError);
+    await expect(refused).rejects.toMatchObject({ status: 200, code: null });
+  });
+
+  it("turns the refusal of the customer, and an unknown case, into an ApiError with the server's code", async () => {
+    setRole("customer");
+    fakeServer();
+    await expect(getAuditTrail(AUDITED)).rejects.toMatchObject({
+      status: 403,
+      code: "role_not_allowed",
+    });
+
+    setRole("underwriter");
+    await expect(getAuditTrail(AUDITED)).rejects.toMatchObject({
+      status: 404,
+      code: "not_found",
+    });
   });
 });

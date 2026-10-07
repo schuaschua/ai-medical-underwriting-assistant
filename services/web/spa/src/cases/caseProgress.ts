@@ -37,8 +37,13 @@ const CHECKING: CaseState = { kind: "checking" };
 // again. A case that is running, or waiting for a person, is.
 const FINISHED: readonly CaseStatus[] = ["completed", "failed"];
 
+/** Whether the server's status says the case will not change again. */
+export function isFinalStatus(status: CaseStatus): boolean {
+  return FINISHED.includes(status);
+}
+
 function isFinished(state: CaseState): boolean {
-  return state.kind === "started" && FINISHED.includes(state.status);
+  return state.kind === "started" && isFinalStatus(state.status);
 }
 
 export function stateOf(states: CaseStates, caseId: string): CaseState {

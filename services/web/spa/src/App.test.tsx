@@ -54,7 +54,11 @@ describe("1.3 role switcher", () => {
     expect(
       await screen.findByText("The server sees you as: Underwriter."),
     ).toBeVisible();
-    expect(navigationLinks()).toEqual(["/underwriter", "/underwriter/triage"]);
+    expect(navigationLinks()).toEqual([
+      "/underwriter",
+      "/underwriter/triage",
+      "/underwriter/audit",
+    ]);
     expect(server.calls.length).toBeGreaterThan(0);
     expect(server.calls.every((call) => call.role === "underwriter")).toBe(
       true,
@@ -77,7 +81,11 @@ describe("1.3 role switcher", () => {
     expect(
       await screen.findByText("The server sees you as: Underwriter."),
     ).toBeVisible();
-    expect(navigationLinks()).toEqual(["/underwriter", "/underwriter/triage"]);
+    expect(navigationLinks()).toEqual([
+      "/underwriter",
+      "/underwriter/triage",
+      "/underwriter/audit",
+    ]);
     expect(
       screen.queryByRole("heading", { name: "Customer home" }),
     ).not.toBeInTheDocument();
@@ -185,7 +193,11 @@ describe("1.3 role switcher", () => {
     expect(
       screen.queryByRole("heading", { name: "Page not found" }),
     ).not.toBeInTheDocument();
-    expect(navigationLinks()).toEqual(["/underwriter", "/underwriter/triage"]);
+    expect(navigationLinks()).toEqual([
+      "/underwriter",
+      "/underwriter/triage",
+      "/underwriter/audit",
+    ]);
     await screen.findByText("The server sees you as: Underwriter.");
     expect(
       server.calls

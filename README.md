@@ -205,6 +205,44 @@ keep a page, then switch to the underwriter.
 The progress of a case, and of a page, also carries the error code of the stage that failed, if one
 did (`error_code`); the screen does not show it yet.
 
+**The audit trail (story 1.12).** `GET /cases/<case_id>/audit` on `workflow` answers a case's events
+in the order `workflow` wrote them: by `audit_event_seq`, a number the database gives each event at
+its insert (migration `0004`), and by nothing else. A case's events are inserted one after the other
+under the lock on its row, so the number is the order of writing. The trail is not ordered by
+`occurred_at`, which the clock of the service that did the work sets, nor by the record time, so a
+page's classification always comes before its route and its route before a decision about it. Each
+event still carries its `occurred_at`. A `stage.failed` event carries the `error_code` stored with
+it (the audit record has that field now; it is null for every other action, and a stage's own
+record may leave it out). One read lists the first `WORKFLOW_AUDIT_TRAIL_LIMIT` events (default 500)
+and says with `has_more` when the case has more. A stored row whose code is outside the catalogue is
+answered as `stage_failed`, and a code on a row that is no failure is left out; both are logged with
+the case id and the event id. Nothing new writes to the audit table. Migration `0004` numbers the
+events already there in the order they were read in before (record time, then id), with the
+append-only trigger set aside for that one statement and put back in the same transaction, and
+replaces the index on `(case_id, occurred_at)` by one on `(case_id, audit_event_seq)`. `web` passes the trail on at `GET /api/cases/<case_id>/audit`, for the
+underwriter only (the customer role is refused with `role_not_allowed`).
+
+The underwriter's "Audit trail" screen (`/underwriter/audit?case=<case_id>`) has a field for a case
+id and a link from every row of the triage queue. Text that is not a case id is refused in the field
+and no call is made; a case that was never started reads "No such case." The table lists the events
+in the server's order with the time (the viewer's local time; the UTC time is the title of the
+cell), the actor, the action with the page number, the page and the detail. A person is shown as
+the demo role; an AI step as the service and what did the work in it, both parts, for example
+"Classification service, model deployment chat-main" or "Workflow service, rule gate"; an actor the
+screen does not know shows its two parts with no name for the second. The detail is the redaction's
+counts per category, the gate's route and the confidence it asked for exactly as recorded, or the
+reason a step failed in plain words (a code the screen has no words for is shown as it is) with the
+event's trace id as a reference. The screen
+reads the case's progress first (for the page numbers and the case status) and the trail after it,
+every few seconds while the tab is visible, and stops once the case is completed or failed, once
+the trail holds more events than one read lists (it then says that only the first are shown), or
+once the server refuses the read (a 4xx other than 429); "Check again" reads once more. The field
+and its refusal follow the address, so back and forward move between trails. It
+orders nothing and works out no status or actor. To see it locally, run
+`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`, upload `data/cases/case-002.pdf` as the customer,
+discard a page and keep one, then switch to the underwriter, accept the kept page in the triage
+queue and follow "Audit trail" on a row (or copy the case id from the upload screen into the field).
+
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
 the service's REST job routes, reads the original from the blob emulator and writes the redacted PDF
