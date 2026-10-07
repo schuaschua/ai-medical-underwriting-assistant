@@ -262,8 +262,8 @@ resource "time_sleep" "verdict_role_propagation" {
 # The retrieval identity holds these roles and no others (azure.md, "Runtime
 # roles"); the service and its ingestion job share it (spine AD-12). Its
 # PostgreSQL role is not an Azure role: the database bootstrap creates it
-# (infra/bootstrap/README.md). The two Azure AI Search roles the standards
-# list for it come with the story that loads the index (Epic 3).
+# (infra/bootstrap/README.md). The two Azure AI Search roles are below
+# (story 3.3, retrieval row r5).
 resource "azurerm_role_assignment" "retrieval_acr_pull" {
   scope                = local.foundation.container_registry_id
   role_definition_name = "AcrPull"
@@ -308,9 +308,30 @@ resource "azurerm_role_assignment" "retrieval_manual_reader" {
   principal_type       = "ServicePrincipal"
 }
 
+# Azure AI Search (spine AD-11, row r5). The ingestion job creates the index
+# of the manual's chunks if it is missing (Search Service Contributor: index
+# definitions) and uploads, lists and deletes its documents; the service
+# queries them (Search Index Data Contributor: documents). Scoped to the one
+# search service (azure.md rule 9). The service has key access off: there is
+# no admin key and no query key.
+resource "azurerm_role_assignment" "retrieval_search_service_contributor" {
+  scope                = local.foundation.search_service_id
+  role_definition_name = "Search Service Contributor"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "retrieval_search_index_data_contributor" {
+  scope                = local.foundation.search_service_id
+  role_definition_name = "Search Index Data Contributor"
+  principal_id         = local.retrieval_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # As for intake: retrieval and its job wait for all of these, so the first
 # revision can pull its image and send telemetry, and the first run of the
-# job can read the manual, have it parsed and call the models.
+# job can read the manual, have it parsed, call the models and load the
+# search index.
 resource "time_sleep" "retrieval_role_propagation" {
   create_duration = var.role_propagation_wait
 
@@ -320,6 +341,8 @@ resource "time_sleep" "retrieval_role_propagation" {
     foundry_user_id               = azurerm_role_assignment.retrieval_foundry_user.id
     document_intelligence_user_id = azurerm_role_assignment.retrieval_document_intelligence_user.id
     manual_reader_id              = azurerm_role_assignment.retrieval_manual_reader.id
+    search_service_contributor_id = azurerm_role_assignment.retrieval_search_service_contributor.id
+    search_index_data_id          = azurerm_role_assignment.retrieval_search_index_data_contributor.id
   }
 }
 
@@ -646,8 +669,9 @@ module "workflow" {
         { name = "WORKFLOW_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
         # Spine AD-7: only workflow gets the gate's threshold.
         { name = "WORKFLOW_GATE_THRESHOLD", value = tostring(var.gate_threshold) },
-        # Spine AD-11: the ladder rows a case may run with. `retrieval` and
-        # `verdict` name the rows they can answer in their own code.
+        # Spine AD-11: the ladder rows a case may run with. `verdict` is
+        # given the same list, and `retrieval` answers r5 because it is
+        # given the search service's endpoint (local.retrieval_env).
         { name = "WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS", value = jsonencode(var.available_retriever_configs) },
       ]
 

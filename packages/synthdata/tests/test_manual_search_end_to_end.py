@@ -1,4 +1,4 @@
-"""Stories 2.3 and 3.2: the search and the rule read over the project's manual, against the rule table.
+"""Stories 2.3, 3.2 and 3.3: the search and the rule read over the project's manual, against the rule table.
 
 The manual is ingested by `retrieval`'s job into a real PostgreSQL, and the
 service searches that index, with this package's stand-in where the embedding
@@ -7,11 +7,15 @@ with the answer key's rule table: the service never reads it (spine AD-17).
 
 The stand-in's vectors only say which words two texts share. What the real
 `text-embedding-3-large` vectors do to the same queries is a check of the
-final Azure test session.
+final Azure test session. So is row `r5` on the real Azure AI Search: here
+its index is this package's stand-in, loaded by the job from the same chunks.
 
 Run `docker compose up --detach --wait` first.
 """
 
+import json
+import logging
+from array import array
 from itertools import pairwise
 from typing import Any
 
@@ -22,6 +26,8 @@ from synthdata_stack import LocalRetrieval, rule_table
 from contracts.errors import ErrorBody, ErrorCode
 from contracts.models.retrieval import RuleText, SearchResponse
 from contracts.rules import rule_ids_defined_in
+from synthdata.search_standin import Mode as SearchMode
+from synthdata.search_standin import SearchStandIn
 
 pytestmark = pytest.mark.integration
 
@@ -262,3 +268,148 @@ def test_story_3_2_rows_r1_r2_and_r3_answer_the_same_shape_each_from_its_own_chu
     # only with the real embeddings (the final Azure test session).
     assert sum(1 for place in places["r2"].values() if place is not None) > 0
     assert sum(1 for place in places["r1"].values() if place is not None) > 0
+
+
+# --- Row r5 on Azure AI Search (story 3.3) -----------------------------------------------
+
+
+def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the_common_shape(
+    retrieval: LocalRetrieval,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    index_name = retrieval.settings.search_service_index_name
+    stand_in = SearchStandIn()
+    retrieval.search = stand_in
+
+    with caplog.at_level(logging.INFO):
+        assert retrieval.ingest() == 0
+
+    # Both stores hold the same chunks: the same ids and count, and for each
+    # the same text, context line, rule ids, references, place and vector.
+    # Only the `smart` set is in the index.
+    smart = {
+        chunk_id: chunk
+        for chunk_id, chunk in retrieval.chunks().items()
+        if chunk["chunk_set"] == "smart"
+    }
+    documents = stand_in.documents(index_name)
+    assert sorted(documents) == sorted(smart) and len(documents) == 111
+    for chunk_id, chunk in smart.items():
+        document = documents[chunk_id]
+        for name in (
+            "chunk_set",
+            "rule_ids",
+            "reference_rule_ids",
+            "section_id",
+            "impairment",
+            "manual_page",
+            "text",
+            "context_line",
+        ):
+            assert document[name] == chunk[name], (chunk_id, name)
+        # As 4-byte floats, which is what both stores keep.
+        assert array("f", document["embedding"]) == array(
+            "f", json.loads(chunk["embedding"])
+        )
+    assert (
+        "index load done: documents=111 uploaded=111 removed=0 unchanged=0 "
+        f"created=yes index={index_name}"
+    ) in caplog.text
+    # Exact vector search over the embedding model's dimensions.
+    definition = stand_in.indexes[index_name].definition
+    assert stand_in.indexes[index_name].vector_fields == {"embedding": 3072}
+    assert [a["kind"] for a in definition["vectorSearch"]["algorithms"]] == [
+        "exhaustiveKnn"
+    ]
+
+    # A second run: nothing is uploaded and no model is asked; the stores
+    # are compared all the same.
+    calls, uploaded = retrieval.model_calls, stand_in.uploaded
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert retrieval.ingest() == 0
+    assert (retrieval.model_calls, stand_in.uploaded) == (calls, uploaded)
+    assert "uploaded=0 removed=0 unchanged=111 created=no" in caplog.text
+
+    rules = rule_table()
+    asked = list(rules)[::8]
+    places: dict[str, int | None] = {}
+    embedded_before = retrieval.model.embedding_calls
+    with retrieval.service() as client:
+        for rule_id in asked:
+            query = named_query(rules[rule_id])
+            result = search(client, query, retriever_config="r5")
+            # The common shape: the fields, ranks and score range of every row.
+            assert result.retriever_config.value == "r5"
+            assert [item.rank for item in result.items] == [1, 2, 3, 4, 5]
+            assert all(0 <= item.score <= 1 for item in result.items)
+            scores = [item.score for item in result.items]
+            assert scores == sorted(scores, reverse=True)
+            on_r3 = search(client, query, retriever_config="r3")
+            assert set(result.items[0].model_dump()) == set(on_r3.items[0].model_dump())
+            for item in result.items:
+                stored = smart[item.chunk_id]
+                assert item.rule_ids == stored["rule_ids"]
+                assert item.text == stored["text"]
+                assert (item.manual_page, item.impairment) == (
+                    stored["manual_page"],
+                    stored["impairment"],
+                )
+            places[rule_id] = place_of(rule_id, result)
+        # A rule read for `r5` answers the `smart` chunk from pgvector.
+        read = RuleText.model_validate(
+            client.get(f"/rules/{asked[0]}", params={"retriever_config": "r5"}).json()
+        )
+        assert (read.chunk_set.value, read.chunk_id) == ("smart", f"smart-{asked[0]}")
+        embedded = retrieval.model.embedding_calls
+
+        # The search service down, or slower than a search may take: no
+        # partial answer, and the pgvector rows answer as before.
+        stand_in.mode = SearchMode.UNAVAILABLE
+        down = client.post("/searches", json={"query": "q", "retriever_config": "r5"})
+        assert len(search(client, "q").items) == 5
+    # One embedding call per search, and one hybrid query with the semantic
+    # ranker and exact vector search per `r5` search.
+    assert embedded - embedded_before == 2 * len(asked)
+    assert len(stand_in.queries) == len(asked)
+    for sent in stand_in.queries:
+        assert sent["queryType"] == "semantic" and sent["top"] == 5
+        (vector_query,) = sent["vectorQueries"]
+        assert (
+            vector_query["exhaustive"] is True and len(vector_query["vector"]) == 3072
+        )
+    stand_in.mode, stand_in.delay_seconds = SearchMode.SLOW, 5.0
+    with retrieval.service(
+        search_deadline_seconds=0.5,
+        search_embedding_timeout_seconds=0.5,
+        search_service_query_timeout_seconds=0.5,
+    ) as client:
+        slow = client.post("/searches", json={"query": "q", "retriever_config": "r5"})
+    for response in (down, slow):
+        assert response.status_code == 502, response.text
+        assert ErrorBody.model_validate(response.json()).error.code is (
+            ErrorCode.UPSTREAM_UNAVAILABLE
+        )
+
+    # A service that is told of no search service: `r5` is refused as not
+    # available and the other rows answer.
+    retrieval.search = None
+    with retrieval.service() as client:
+        refused = client.post(
+            "/searches", json={"query": "q", "retriever_config": "r5"}
+        )
+        assert len(search(client, "q").items) == 5
+    assert refused.status_code == 409
+    assert ErrorBody.model_validate(refused.json()).error.code is (
+        ErrorCode.RETRIEVER_NOT_AVAILABLE
+    )
+    with capsys.disabled():
+        print(
+            f"\nstory 3.3, r5 over the manual with the stand-ins: {len(asked)} named "
+            f"queries, {len(documents)} documents; in the top 5 "
+            f"{sum(1 for place in places.values() if place is not None)}"
+        )
+    # The stand-in ranks by shared words: this proves the plumbing. What the
+    # real semantic ranker does is a check of the final Azure test session.
+    assert any(place is not None for place in places.values())

@@ -4,7 +4,13 @@ from functools import lru_cache
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from contracts.enums import ChunkSet
@@ -174,6 +180,42 @@ class Settings(BaseSettings):
     search_embedding_max_retries: Annotated[int, Field(ge=0, le=10)] = 1
     search_deadline_seconds: Annotated[float, Field(gt=0)] = 8.0
 
+    # AD-11, row `r5`: the Azure AI Search service, whose index the job loads
+    # from the stored `smart` chunk records and a search with `r5` asks. No
+    # default, as for the other Azure services: without it `r5` is refused
+    # as not available, the job loads no index, and the other rows work as
+    # before. On a developer machine it names the local stand-in, a dev
+    # tool outside the services.
+    search_service_endpoint: str | None = None
+    # In Azure: sign in to the search service with the service identity. There is no key.
+    search_service_entra_auth: bool = False
+    # The index of the `smart` chunks: lower-case letters, digits and dashes.
+    search_service_index_name: Annotated[
+        str, StringConstraints(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])$")
+    ] = "manual-smart"
+    # The stable REST version with hybrid queries, the semantic ranker and
+    # exhaustive vector search.
+    search_service_api_version: Annotated[
+        str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}(?:-preview)?$")
+    ] = "2024-07-01"
+    # The job's side: how long one HTTP call of a load may take, how often a
+    # call answered 429 or 5xx (or not at all) is sent again and the wait
+    # before it, how many documents one upload carries, and how long the
+    # whole load may take.
+    search_service_timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
+    search_service_max_retries: Annotated[int, Field(ge=0, le=10)] = 3
+    search_service_retry_seconds: Annotated[float, Field(gt=0)] = 1.0
+    search_service_upload_batch_size: Annotated[int, Field(ge=1, le=1000)] = 50
+    search_service_load_deadline_seconds: Annotated[float, Field(gt=0)] = 300.0
+    # The service counts what it was just sent a moment later: after a load
+    # the index is compared with pgvector this often, this far apart.
+    search_service_check_attempts: Annotated[int, Field(ge=1, le=100)] = 10
+    search_service_check_wait_seconds: Annotated[float, Field(ge=0)] = 1.0
+    # A search's side, inside the search's own deadline: how long the one
+    # query may take, and how often it is sent again.
+    search_service_query_timeout_seconds: Annotated[float, Field(gt=0)] = 5.0
+    search_service_query_max_retries: Annotated[int, Field(ge=0, le=10)] = 1
+
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.
     applicationinsights_connection_string: SecretStr | None = None
@@ -191,6 +233,7 @@ class Settings(BaseSettings):
         "embedding_deployment",
         "layout_endpoint",
         "model_endpoint",
+        "search_service_endpoint",
         mode="before",
     )
     @classmethod
@@ -234,6 +277,14 @@ class Settings(BaseSettings):
             _reached_safely("MODEL", self.model_endpoint, self.model_entra_auth)
         if self.layout_endpoint is not None:
             _reached_safely("LAYOUT", self.layout_endpoint, self.layout_entra_auth)
+        if self.search_service_endpoint is not None:
+            # The stand-in for the search service is on loopback and takes
+            # no token: it can never be the endpoint in Azure.
+            _reached_safely(
+                "SEARCH_SERVICE",
+                self.search_service_endpoint,
+                self.search_service_entra_auth,
+            )
         return self
 
     @model_validator(mode="after")
@@ -254,6 +305,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS must not be longer than "
                 "RETRIEVAL_SEARCH_DEADLINE_SECONDS"
+            )
+        if self.search_service_query_timeout_seconds > self.search_deadline_seconds:
+            raise ValueError(
+                "RETRIEVAL_SEARCH_SERVICE_QUERY_TIMEOUT_SECONDS must not be longer "
+                "than RETRIEVAL_SEARCH_DEADLINE_SECONDS"
             )
         if self.model_retry_seconds > self.model_max_retry_seconds:
             raise ValueError(

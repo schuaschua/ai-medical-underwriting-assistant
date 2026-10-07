@@ -47,6 +47,7 @@ from contracts.models.verdict import SUGGESTION_LABEL, VerdictRun
 from contracts.models.workflow import AuditTrail, CaseProgress
 from retrieval.domain.chunker import definition_in
 from synthdata.foundry_standin import LOCAL_DEPLOYMENT, FoundryStandIn, Mode
+from synthdata.search_standin import SearchStandIn
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -435,7 +436,7 @@ def test_story_2_5_the_agents_log_is_read_by_case_with_its_filters(
 # --- The baseline rows (story 3.2) -----------------------------------------------------
 
 
-def test_story_3_2_a_case_started_with_three_rows_gets_a_run_for_each_on_the_same_facts(
+def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_same_facts(
     workflow_service_settings: Settings,
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
@@ -443,12 +444,22 @@ def test_story_3_2_a_case_started_with_three_rows_gets_a_run_for_each_on_the_sam
     extraction: LocalExtraction,
     verdict: LocalVerdict,
 ) -> None:
-    rows = ["r1", "r2", "r3"]
+    # Story 3.3: `r5` is available here, because `retrieval` is given a
+    # search service (the stand-in, its index loaded from the stored
+    # chunks) and `workflow` and `verdict` are told of the row.
+    rows = ["r1", "r2", "r3", "r5"]
+    search_service = SearchStandIn()
+    verdict.retrieval.search = search_service
+    verdict.retrieval.load_index()
     case_id, _ = intake.upload("case-001.pdf")
-    sidecar = sidecar_for(intake, classification, extraction, verdict)
+    sidecar = sidecar_for(
+        intake, classification, extraction, verdict, available_retriever_configs=rows
+    )
 
     progress, trail, _ = start_and_wait(
-        workflow_service_settings,
+        workflow_service_settings.model_copy(
+            update={"available_retriever_configs": rows}
+        ),
         scheduler_client,
         sidecar,
         case_id,
@@ -460,13 +471,23 @@ def test_story_3_2_a_case_started_with_three_rows_gets_a_run_for_each_on_the_sam
     assert progress.case_status.value == "completed"
     listed = verdict.runs(case_id)
     runs = {run.retriever_config.value: run for run in listed.verdict_runs}
-    assert sorted(runs) == rows and len(listed.verdict_runs) == 3
+    assert sorted(runs) == rows and len(listed.verdict_runs) == 4
     assert all(run.status is StageStatus.DONE for run in runs.values())
     actions = [event.action.value for event in trail.events]
-    assert actions[-4:] == [*["verdict.suggested"] * 3, "case.completed"]
-    assert {event.ref for event in trail.events[-4:-1]} == {
+    assert actions[-5:] == [*["verdict.suggested"] * 4, "case.completed"]
+    assert {event.ref for event in trail.events[-5:-1]} == {
         run.verdict_run_id for run in runs.values()
     }
+    # Story 3.3: the run keyed on the case and `r5` searched the search
+    # service, once per search of the agent, and nothing else did. What it
+    # then suggests depends on the stand-in's ranker: a verdict, or a referral.
+    r5_searches = [
+        step
+        for step in verdict.steps(runs["r5"].verdict_run_id).steps
+        if step.tool is ToolName.SEARCH_RULES
+    ]
+    assert len(search_service.queries) == len(r5_searches) > 0
+    assert runs["r5"].verdict is not None
 
     # Every row judged the same extracted facts.
     case_facts = {fact.fact_id for fact in extraction.facts(case_id).facts}

@@ -7,9 +7,12 @@ from typing import Protocol
 from contracts.enums import ChunkSet
 from retrieval.domain.entities import (
     ChunkRecord,
+    IndexDocument,
     IndexedChunk,
+    IndexHoldings,
     IngestRun,
     ParsedLayout,
+    RankedDocument,
     StoredChunk,
 )
 
@@ -102,6 +105,10 @@ class ChunkRepository(Protocol):
         """What the last successful run built the chunk set from, if one is recorded."""
         ...
 
+    async def chunk_records(self, chunk_set: ChunkSet) -> Sequence[ChunkRecord]:
+        """Every stored record of one chunk set, whole, in the order of their `chunk_id`."""
+        ...
+
     async def apply(
         self,
         chunk_set: ChunkSet,
@@ -158,6 +165,10 @@ class IndexSnapshot(Protocol):
         """The embedding deployment the last ingest run of the set recorded, if one is recorded."""
         ...
 
+    async def content_hashes(self, chunk_set: ChunkSet) -> Mapping[str, str]:
+        """The `content_hash` of every stored chunk of the set, by `chunk_id`."""
+        ...
+
     async def nearest(
         self, chunk_set: ChunkSet, vector: Sequence[float], limit: int
     ) -> Sequence[IndexedChunk]:
@@ -197,4 +208,49 @@ class ChunkIndex(Protocol):
 
         When two `fixed` chunks hold it (a marker inside an overlap), the later one.
         """
+        ...
+
+
+class SearchServiceUnavailable(Exception):
+    """The search service gave no usable answer. `reason` is a short code, never a message."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class RuleSearchService(Protocol):
+    """AD-11, row `r5`: the search service's index of the `smart` chunks, as a search asks it."""
+
+    async def hybrid(
+        self, query: str, vector: Sequence[float], top: int, candidates: int
+    ) -> Sequence[RankedDocument]:
+        """The best `top` documents for the text and the vector together, best first.
+
+        `candidates` is how many documents the vector side hands to the
+        fusion. Text search and exact vector search, fused and then ordered by the
+        service's semantic ranker; each document carries that ranker's
+        score. Raises `SearchServiceUnavailable`, also when the service
+        answers without the ranker's scores: there is no partial answer.
+        """
+        ...
+
+
+class SearchIndexStore(Protocol):
+    """The search service's index, as the ingestion job loads it. Every call raises `SearchServiceUnavailable`."""
+
+    async def ensure(self) -> bool:
+        """Create the index if the service has none of its name; whether it was created."""
+        ...
+
+    async def held(self) -> IndexHoldings:
+        """The service's count of its documents, and each one's hash by `chunk_id`."""
+        ...
+
+    async def upload(self, documents: Sequence[IndexDocument]) -> None:
+        """Store the documents, each in place of the one of its `chunk_id` if there is one."""
+        ...
+
+    async def remove(self, chunk_ids: Sequence[str]) -> None:
+        """Delete the documents of these ids; an id the index does not hold is no error."""
         ...

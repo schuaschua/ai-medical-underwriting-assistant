@@ -14,6 +14,7 @@ import json
 import logging
 import secrets
 import socket
+from array import array
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
@@ -32,6 +33,7 @@ from retrieval_fakes import (
     RULE_A,
     RULE_B,
     RULE_C,
+    FakeSearchService,
     analyze_result,
     completion,
     context_answer,
@@ -362,6 +364,8 @@ class Azure:
     embedding_calls: int = 0
     layout_calls: int = 0
     submitted: list[bytes] = field(default_factory=list)
+    # Story 3.3: where Azure AI Search would be, for a job told of one.
+    search: FakeSearchService = field(default_factory=FakeSearchService)
 
     def layout(self, request: httpx2.Request) -> httpx2.Response:
         self.layout_calls += 1
@@ -404,6 +408,7 @@ class Azure:
         return Transports(
             layout=httpx2.MockTransport(self.layout),
             model=httpx2.MockTransport(self.model),
+            search=self.search.transport(),
         )
 
 
@@ -686,3 +691,166 @@ def test_story_3_2_the_job_writes_both_chunk_sets_each_as_a_run_of_its_own(
         wider, "SELECT chunk_set, manual_sha256 FROM retrieval.ingest_run ORDER BY 1"
     ) == [("fixed", hashlib.sha256(CHANGED_PDF).hexdigest()), ("smart", sha)]
     assert "SECRET" not in caplog.text
+
+
+# --- The search service's index (story 3.3) ---------------------------------------------------
+
+
+def in_the_index(stored: dict[str, tuple[Any, ...]]) -> dict[str, tuple[Any, ...]]:
+    """The `smart` chunks of the chunk table as the index must hold them, vectors as 4-byte floats."""
+    return {
+        chunk_id: (*row[:9], row[11], array("f", json.loads(row[12])))
+        for chunk_id, row in stored.items()
+        if row[1] == "smart"
+    }
+
+
+def held_by(service: FakeSearchService) -> dict[str, tuple[Any, ...]]:
+    """The index's documents in the same form."""
+    names = (
+        "chunk_id",
+        "chunk_set",
+        "rule_ids",
+        "reference_rule_ids",
+        "section_id",
+        "impairment",
+        "manual_page",
+        "text",
+        "context_line",
+        "embedding_deployment",
+    )
+    return {
+        chunk_id: (
+            *(document[name] for name in names),
+            array("f", document["embedding"]),
+        )
+        for chunk_id, document in service.documents.items()
+    }
+
+
+def test_story_3_3_the_job_loads_the_search_index_from_the_stored_chunks_and_checks_it(
+    job_settings: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    told = job_settings.model_copy(
+        update={
+            "search_service_endpoint": "http://127.0.0.1:5103",
+            "search_service_upload_batch_size": 2,
+            "search_service_retry_seconds": 0.001,
+            "search_service_check_attempts": 2,
+            "search_service_check_wait_seconds": 0.0,
+            "ingest_chunk_sets": [ChunkSet.SMART, ChunkSet.FIXED],
+        }
+    )
+    azure = Azure()
+    service = azure.search
+
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 0
+
+    # The index was missing: created, with exact vector search over the
+    # embedding model's dimensions and a semantic configuration.
+    definition_sent = service.definition
+    assert definition_sent is not None and definition_sent["name"] == "manual-smart"
+    (vector_field,) = [
+        entry
+        for entry in definition_sent["fields"]
+        if entry["type"] == "Collection(Edm.Single)"
+    ]
+    assert (vector_field["name"], vector_field["dimensions"]) == ("embedding", 3072)
+    assert [a["kind"] for a in definition_sent["vectorSearch"]["algorithms"]] == [
+        "exhaustiveKnn"
+    ]
+    assert len(definition_sent["semantic"]["configurations"]) == 1
+    # One document per `smart` chunk and none of the `fixed` set: the same
+    # ids, text, context lines, rule ids, places and vectors as pgvector.
+    stored = chunks(told)
+    assert held_by(service) == in_the_index(stored)
+    assert len(service.documents) == 3 < len(stored)
+    # Uploaded two at a time, after pgvector was written, with no model call
+    # of its own: the three context lines are the `smart` run's.
+    assert [call for call in service.calls if call[0] != "list"] == [
+        ("read_index", 0),
+        ("create_index", 0),
+        ("upload", 2),
+        ("upload", 1),
+    ]
+    assert azure.chat_calls == 3
+    assert (
+        "index load done: documents=3 uploaded=3 removed=0 unchanged=0 created=yes "
+        "index=manual-smart"
+    ) in caplog.text
+    assert all(
+        request.url.params["api-version"] == "2024-07-01"
+        for request in service.requests
+    )
+
+    # A second run: nothing changed, so nothing is uploaded; the two stores
+    # are compared all the same.
+    lists = service.count("list")
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 0
+    assert service.count("upload") == 2 and service.count("delete") == 0
+    assert service.count("list") > lists
+    assert "uploaded=0 removed=0 unchanged=3 created=no" in caplog.text
+
+    # The manual changed: one rule's text is new and one rule is gone. The
+    # changed document is replaced, the other one deleted, and the stores
+    # are the same again.
+    upload(told, tmp_path, CHANGED_PDF)
+    azure.parsed = manual(first=definition(RULE_A, "A new band."), with_c=False)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 0
+    assert held_by(service) == in_the_index(chunks(told))
+    assert sorted(service.documents) == [f"smart-{RULE_A}", f"smart-{RULE_B}"]
+    assert service.documents[f"smart-{RULE_A}"]["text"].endswith("A new band.")
+    assert service.calls[-4:-1] == [("list", 0), ("upload", 1), ("delete", 1)]
+    assert "uploaded=1 removed=1 unchanged=1 created=no" in caplog.text
+
+    # An index that does not hold what it was sent fails the run, with a
+    # line of its own, and pgvector stays as it was written.
+    upload(told, tmp_path, PDF)
+    azure.parsed = manual()
+    service.loses = {f"smart-{RULE_C}"}
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 1
+    written = chunks(told)
+    assert f"smart-{RULE_C}" in written and f"smart-{RULE_C}" not in service.documents
+    assert caplog.text.count("ingestion done:") == 2
+    assert (
+        "index load failed: code=stage_failed reason=search_index_differs "
+        "where=index=2,pgvector=3 index=manual-smart"
+    ) in caplog.text
+
+    # A service that is down likewise; the next run, with the service back,
+    # brings the index to what pgvector holds.
+    service.status = 503
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 1
+    assert (
+        "index load failed: code=upstream_unavailable "
+        "reason=search_read_index_status_503"
+    ) in caplog.text
+    assert chunks(told) == written
+    # The service is back, and counts what it is sent a moment later, as
+    # the real one does: the comparison is made again until it holds.
+    service.status, service.loses, service.lag = None, set(), 1
+    lists = service.count("list")
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 0
+    assert service.count("list") - lists == 3
+    assert "index load done: documents=3 uploaded=1" in caplog.text
+    service.lag = 0
+    assert held_by(service) == in_the_index(written)
+    assert "SECRET" not in caplog.text
+
+    # A job told of no search service loads no index and says nothing of one.
+    caplog.clear()
+    asked = len(service.requests)
+    with caplog.at_level(logging.INFO):
+        assert run_job(job_settings, azure) == 0
+    assert len(service.requests) == asked and "index load" not in caplog.text

@@ -70,6 +70,10 @@ apps:
       # to triage. A case keeps the value in force when its lifecycle
       # confirmed it: a change applies to cases started after it.
       WORKFLOW_GATE_THRESHOLD: "0.90"
+      # AD-11: the ladder rows a case may run with here. Row r5 is among
+      # them because retrieval below is given a search service (the local
+      # stand-in); verdict names the same rows.
+      WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r5"]'
   - appID: classification
     appDirPath: ./services/classification
     appProtocol: http
@@ -151,6 +155,14 @@ apps:
       RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS: "3"
       RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES: "1"
       RETRIEVAL_SEARCH_DEADLINE_SECONDS: "8"
+      # Row r5: Azure AI Search is the local stand-in that tools/dev.sh
+      # starts (packages/synthdata) and tools/ingest-local.sh loads from
+      # the stored chunks. It takes no credential, keeps its index in
+      # memory, and exists only on a developer machine. Without this
+      # variable r5 is refused as not available; then take r5 out of the
+      # two lists of rows in this file as well.
+      RETRIEVAL_SEARCH_SERVICE_ENDPOINT: "http://127.0.0.1:5103"
+      RETRIEVAL_SEARCH_SERVICE_INDEX_NAME: "manual-smart"
   - appID: verdict
     appDirPath: ./services/verdict
     appProtocol: http
@@ -179,3 +191,7 @@ apps:
       # the audit trail then names as the model.
       VERDICT_MODEL_ENDPOINT: "http://127.0.0.1:5101"
       VERDICT_CHAT_DEPLOYMENT: "local-stand-in"
+      # AD-11: the ladder rows a verdict may be commanded with here: the
+      # rows retrieval answers, r5 among them because it is given a search
+      # service above. workflow names the same rows.
+      VERDICT_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r5"]'

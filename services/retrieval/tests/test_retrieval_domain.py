@@ -136,7 +136,9 @@ def test_story_2_2_a_rule_a_chunk_refers_to_is_a_reference_never_one_of_its_rule
     assert len(cut_chunks(manual())) == 3
 
 
-def test_story_2_2_page_furniture_is_in_no_chunk_with_or_without_roles() -> None:
+def test_story_2_2_page_furniture_is_in_no_chunk_and_inside_a_rules_text_fails_the_run() -> (
+    None
+):
     with_roles = cut_chunks(manual())
     # The same manual as a layout model without roles gives it. The one line
     # that only a role tells from a heading is left out: see the test of it.
@@ -148,9 +150,8 @@ def test_story_2_2_page_furniture_is_in_no_chunk_with_or_without_roles() -> None
         assert FOOTER not in chunk.text
         assert "Page " not in chunk.text
 
-
-def test_story_2_2_a_header_or_footer_inside_a_rules_text_fails_the_run() -> None:
-    # As a layout model might merge a footer into the paragraph above it.
+    # A header or footer inside a rule's text fails the run: as a layout
+    # model might merge a footer into the paragraph above it.
     merged = manual(first=f"{definition(RULE_A)} {FOOTER}")
 
     with pytest.raises(ManualInvalid) as raised:

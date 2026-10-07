@@ -23,7 +23,7 @@ required. The rank is divided by 1 + the logarithm of the chunk's length
 """
 
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -230,6 +230,17 @@ class SqlIndexSnapshot:
             result = await self._connection.execute(embedded_with_statement(chunk_set))
             deployment: str | None = result.scalar_one_or_none()
             return deployment
+
+    async def content_hashes(self, chunk_set: ChunkSet) -> Mapping[str, str]:
+        with adapter_span(tracer, "retrieval.db.read_content_hashes") as span:
+            result = await self._connection.execute(
+                select(chunk_table.c.chunk_id, chunk_table.c.content_hash).where(
+                    chunk_table.c.chunk_set == chunk_set.value
+                )
+            )
+            hashes = {row.chunk_id: row.content_hash for row in result}
+            span.set_attribute("retrieval.chunks.count", len(hashes))
+            return hashes
 
     async def nearest(
         self, chunk_set: ChunkSet, vector: Sequence[float], limit: int

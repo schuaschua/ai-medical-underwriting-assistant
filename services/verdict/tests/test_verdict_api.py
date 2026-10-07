@@ -12,6 +12,7 @@ from typing import Any
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from verdict_fakes import (
     ACTOR,
     DM_25,
@@ -36,7 +37,9 @@ from contracts.models.verdict import (
     VerdictRunResult,
 )
 from contracts.operations import get_operation
+from verdict.adapters.http.app import run_options
 from verdict.domain.toolbox import Toolbox
+from verdict.settings import Settings
 
 Call = tuple[str, dict[str, Any]]
 LIST: Call = ("list_facts", {})
@@ -161,6 +164,7 @@ def test_story_2_5_a_row_that_is_not_built_is_409_retriever_not_available(
     repository: MemoryRepository,
     case_id: str,
     row: str,
+    settings: Settings,
 ) -> None:
     a_fact(facts, case_id)
 
@@ -173,6 +177,22 @@ def test_story_2_5_a_row_that_is_not_built_is_409_retriever_not_available(
     )
     assert (repository.rows, agent.runs, facts.calls) == ({}, 0, 0)
     assert client.get(f"/cases/{case_id}/verdict-runs").json()["verdict_runs"] == []
+    # Story 3.3: `r5` needs a search service at `retrieval`. It is refused
+    # the same way unless the settings name it, and a row this build cannot
+    # run is no setting at all.
+    on_r5 = client.post("/verdict-runs", json=command(case_id, retriever_config="r5"))
+    assert (on_r5.status_code, error_code(on_r5)) == (
+        409,
+        ErrorCode.RETRIEVER_NOT_AVAILABLE,
+    )
+    assert "Rows r1, r2 and r3 can be used" in on_r5.json()["error"]["message"]
+    named = settings.model_copy(
+        update={"available_retriever_configs": ["r1", "r2", "r3", "r5"]}
+    )
+    assert RetrieverConfig.R5 in run_options(named).retriever_configs
+    assert RetrieverConfig.R5 not in run_options(settings).retriever_configs
+    with pytest.raises(ValidationError):
+        Settings(available_retriever_configs=[RetrieverConfig.R3, RetrieverConfig(row)])
 
 
 @pytest.mark.parametrize(

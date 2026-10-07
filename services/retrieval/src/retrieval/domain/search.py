@@ -1,13 +1,16 @@
 """The two reads of `retrieval`: the search and the rule read (spine AD-11, AD-12).
 
-One search operation for every ladder row; rows `r1`, `r2` and `r3` are
-built. The steps of `r3`, each a function of its own: the query is embedded
+One search operation for every ladder row; rows `r1`, `r2`, `r3` and `r5`
+are built. The steps of `r3`, each a function of its own: the query is embedded
 (`embed_query`), the vector search and the full-text search each answer a
 ranked list of candidates (the index port), the two lists are fused
 (`fusion.reciprocal_rank_fusion`), and the best of the fused list become the
 ranked items (`rank_items`). The baseline rows `r1` and `r2` embed the query
 the same way and answer the vector search's list alone (`vector_search`),
-over the `fixed` and the `smart` chunks. Nothing is stored, nothing is
+over the `fixed` and the `smart` chunks. Row `r5` embeds the query the same
+way and hands the text and the vector to Azure AI Search (`ai_search_hybrid`),
+whose index holds a copy of the `smart` chunks: the store is the one thing
+that differs. Nothing is stored, nothing is
 cached, and no model rewrites the query. Every read of a search is from one
 unchanging view of the index, and one deadline covers the whole search.
 """
@@ -29,7 +32,11 @@ from contracts.models.retrieval import (
     SearchResponse,
 )
 from retrieval.domain.chunker import definition_in, references_in
-from retrieval.domain.entities import EMBEDDING_DIMENSIONS, IndexedChunk
+from retrieval.domain.entities import (
+    EMBEDDING_DIMENSIONS,
+    IndexedChunk,
+    RankedDocument,
+)
 from retrieval.domain.fusion import Fused, reciprocal_rank_fusion
 from retrieval.domain.ports import (
     ChunkIndex,
@@ -39,12 +46,15 @@ from retrieval.domain.ports import (
     ModelNotConfigured,
     ModelUnavailable,
     QueryEmbedder,
+    RuleSearchService,
+    SearchServiceUnavailable,
 )
 from retrieval.domain.rows import (
     CHUNK_SET_NOT_INGESTED_MESSAGE,
-    ROW_NOT_AVAILABLE_MESSAGE,
     SearchMethod,
+    available_rows,
     chunk_set_to_read,
+    row_not_available_message,
     row_to_search,
 )
 
@@ -68,6 +78,17 @@ ANOTHER_DEPLOYMENT_MESSAGE = (
     "model than the one this service is set to use. An operator must set the "
     "service to that model, or ingest the manual again."
 )
+SEARCH_SERVICE_UNAVAILABLE_MESSAGE = (
+    "The search service is not available. Please try again shortly."
+)
+SEARCH_SERVICE_TOO_SLOW_MESSAGE = (
+    "The search service did not answer in time. Please try again shortly."
+)
+# AD-11, row `r5`: the largest score Azure AI Search's semantic ranker gives.
+# Its scores run from 0 (irrelevant) to 4 (the best answer) and are no
+# probability. A row's `score` is that score divided by this, so 0 to 1 and
+# larger is better; the order of the items is the service's own.
+RERANKER_MAX_SCORE = 4.0
 # The largest value a stored vector's 4-byte float holds: pgvector takes no larger one.
 FLOAT4_MAX = 3.4028234663852886e38
 # A character no text of the database or of a model request may hold.
@@ -86,6 +107,9 @@ _NAMED_RULE_ID = re.compile(NAMED_RULE_ID)
 class SearchPorts:
     model: QueryEmbedder
     index: ChunkIndex
+    # AD-11, row `r5`: Azure AI Search. None when the service was told of
+    # no search endpoint: the row is then refused as not available.
+    search_service: RuleSearchService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +137,15 @@ class SearchStats:
     vector_candidates: int = 0
     full_text_candidates: int = 0
     items: int = 0
+    # Row `r5`: whether the search service was asked, how many documents it
+    # answered, and how many of them were left out because pgvector holds
+    # no chunk of their id (an index behind the chunk table).
+    service_asked: bool = False
+    service_documents: int = 0
+    left_out: int = 0
+    # The largest score the service's ranker gave a document of the answer,
+    # as the service gave it; None when it answered none.
+    max_reranker_score: float | None = None
 
 
 def candidate_depth(top_k: int, options: SearchOptions) -> int:
@@ -281,11 +314,113 @@ async def vector_search(
     ]
 
 
+def reranker_score(score: float) -> float:
+    """Row `r5`'s score: the semantic ranker's 0 to 4, divided by 4.
+
+    A fixed rule, not a probability: 1 is the ranker's best score and 0 its
+    worst. A score outside the documented range is cut to it.
+    """
+    return min(1.0, max(0.0, score / RERANKER_MAX_SCORE))
+
+
+async def ai_search_hybrid(
+    query: str,
+    chunk_set: ChunkSet,
+    top_k: int,
+    *,
+    ports: SearchPorts,
+    options: SearchOptions,
+    stats: SearchStats,
+) -> list[SearchItem]:
+    """Row `r5`: Azure AI Search's hybrid search with its semantic ranker, over the same chunks.
+
+    The query is embedded once, with the deployment the chunks were
+    embedded with, and sent as text and vector together. The items are the
+    service's documents in the service's order. A document whose id
+    pgvector does not hold, or holds with another content hash, is left out
+    and counted: the index is then behind the chunk table (a load failed),
+    and the search must not answer a text the rule read no longer does.
+    The vector side hands the fusion as many candidates as row `r3`'s does.
+    """
+    service = ports.search_service
+    if service is None:
+        # `row_to_search` refuses the row before this is reached.
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE,
+            row_not_available_message(available_rows(search_service=False)),
+        )
+    stats.depth = depth = candidate_depth(top_k, options)
+    vector = await embed_query(query, ports.model)
+    stats.embedded = True
+    async with ports.index.snapshot() as index:
+        check_deployment(await index.embedded_with(chunk_set), options)
+        stored = await index.content_hashes(chunk_set)
+    stats.service_asked = True
+    documents = await service.hybrid(query, vector, top_k, depth)
+    stats.service_documents = len(documents)
+    stats.max_reranker_score = max(
+        (document.reranker_score for document in documents), default=None
+    )
+    _check_documents_deployment(documents, options)
+    kept = [
+        document
+        for document in documents
+        if stored.get(document.chunk_id) == document.content_hash
+    ]
+    stats.left_out = len(documents) - len(kept)
+    if stats.left_out:
+        # Ids only (security rule 31).
+        logger.warning(
+            "search service answered chunks pgvector does not hold: count=%d "
+            "chunk_ids=%s",
+            stats.left_out,
+            ",".join(
+                document.chunk_id for document in documents if document not in kept
+            ),
+        )
+    return [
+        SearchItem(
+            chunk_id=document.chunk_id,
+            rule_ids=list(document.rule_ids),
+            # The service's order, counted without gaps.
+            rank=rank,
+            score=reranker_score(document.reranker_score),
+            text=document.text,
+            manual_page=document.manual_page,
+            impairment=document.impairment,
+        )
+        for rank, document in enumerate(kept[:top_k], start=1)
+    ]
+
+
+def _check_documents_deployment(
+    documents: Sequence[RankedDocument], options: SearchOptions
+) -> None:
+    """Refuse an answer from documents another embedding deployment made the vectors of.
+
+    The run record says what pgvector holds; the index says it for itself,
+    document by document, because a load that failed leaves it behind.
+    """
+    configured = options.embedding_deployment
+    if configured is None:
+        return
+    others = {document.embedding_deployment for document in documents} - {configured}
+    if not others:
+        return
+    logger.error(
+        "search refused: embedding deployment differs: configured=%s search_index=%s",
+        configured,
+        ",".join(sorted(others)),
+    )
+    raise DomainError(ErrorCode.MODEL_UNAVAILABLE, ANOTHER_DEPLOYMENT_MESSAGE)
+
+
 # How each built row searches. A row the table marks as built and that has
 # no entry here is refused, never answered with another row's results.
 _SEARCHES = {
     SearchMethod.VECTOR: vector_search,
     SearchMethod.HYBRID: hybrid_search,
+    SearchMethod.AI_SEARCH_HYBRID: ai_search_hybrid,
 }
 
 
@@ -330,12 +465,16 @@ async def search_rules(
     stats = stats if stats is not None else SearchStats()
     if _NUL in request.query:
         raise DomainError(ErrorCode.VALIDATION_FAILED, INVALID_QUERY_MESSAGE)
-    row = row_to_search(request.retriever_config)
+    has_search_service = ports.search_service is not None
+    row = row_to_search(request.retriever_config, has_search_service)
     search = _SEARCHES.get(row.method)
     if search is None:
         # A row marked as built without a search of its own: said as what it
         # is to the caller, never answered with another row's results.
-        raise DomainError(ErrorCode.RETRIEVER_NOT_AVAILABLE, ROW_NOT_AVAILABLE_MESSAGE)
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE,
+            row_not_available_message(available_rows(has_search_service)),
+        )
     started = clock()
     try:
         async with asyncio.timeout(options.deadline_seconds) as deadline:
@@ -352,17 +491,33 @@ async def search_rules(
         raise DomainError(
             ErrorCode.UPSTREAM_UNAVAILABLE, INDEX_UNAVAILABLE_MESSAGE
         ) from None
+    except SearchServiceUnavailable as error:
+        # No partial answer: the caller is told, and may ask again.
+        logger.warning(
+            "search failed: search service unavailable: retriever_config=%s reason=%s",
+            row.config.value,
+            error.reason,
+        )
+        raise DomainError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, SEARCH_SERVICE_UNAVAILABLE_MESSAGE
+        ) from None
     except TimeoutError:
         # Only the search's own deadline: a time-out of something a port
         # called is that port's failure, and is raised as it is.
         if not deadline.expired():
             raise
         waited_for = "index" if stats.embedded else "model"
+        if stats.service_asked:
+            waited_for = "search_service"
         logger.warning(
             "search deadline passed: retriever_config=%s waited_for=%s",
             row.config.value,
             waited_for,
         )
+        if stats.service_asked:
+            raise DomainError(
+                ErrorCode.UPSTREAM_UNAVAILABLE, SEARCH_SERVICE_TOO_SLOW_MESSAGE
+            ) from None
         if stats.embedded:
             raise DomainError(
                 ErrorCode.UPSTREAM_UNAVAILABLE, INDEX_TOO_SLOW_MESSAGE
@@ -373,11 +528,16 @@ async def search_rules(
     # security rule 31: the row, counts and the timing, never the query.
     logger.info(
         "search: retriever_config=%s top_k=%d vector_candidates=%d "
-        "full_text_candidates=%d items=%d latency_ms=%d",
+        "full_text_candidates=%d service_documents=%d left_out=%d "
+        "max_reranker_score=%s items=%d latency_ms=%d",
         row.config.value,
         request.top_k,
         stats.vector_candidates,
         stats.full_text_candidates,
+        stats.service_documents,
+        stats.left_out,
+        # A number only: the ranker's raw score, before it is divided.
+        "-" if stats.max_reranker_score is None else f"{stats.max_reranker_score:g}",
         len(items),
         latency_ms,
     )

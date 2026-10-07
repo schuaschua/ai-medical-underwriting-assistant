@@ -199,6 +199,26 @@ variable "fixed_chunk_overlap_words" {
   }
 }
 
+variable "search_index_name" {
+  description = "Name of the Azure AI Search index that holds the manual's smart chunks (retrieval row r5). The ingestion job creates it if it is missing; a changed index definition needs a new name."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,126}[a-z0-9])$", var.search_index_name))
+    error_message = "search_index_name must be 2 to 128 lower-case letters, digits and dashes, and start and end with a letter or a digit."
+  }
+}
+
+variable "search_api_version" {
+  description = "REST API version of Azure AI Search that retrieval calls: a version with hybrid queries, the semantic ranker and exhaustive vector search."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}(-preview)?$", var.search_api_version))
+    error_message = "search_api_version must be a date such as 2024-07-01, with -preview after it for a preview version."
+  }
+}
+
 variable "search_candidate_depth" {
   description = "Retrieval row r3: how many chunks the vector search and the full-text search each hand to the rank fusion. Never fewer than the most items a search may ask for (50)."
   type        = number
@@ -250,12 +270,12 @@ variable "ingest_deadline_seconds" {
 }
 
 variable "ingest_timeout_seconds" {
-  description = "How long one execution of the ingestion job may run before the platform ends it. Longer than the job's own deadline (ingest_deadline_seconds), so that the job ends itself first and says why, with room left for storing its result."
+  description = "How long one execution of the ingestion job may run before the platform ends it. Longer than the job's own deadline (ingest_deadline_seconds) by the search index load's deadline (300 s, RETRIEVAL_SEARCH_SERVICE_LOAD_DEADLINE_SECONDS) and room for storing the result, so that the job ends itself first and says why, also during the load."
   type        = number
 
   validation {
-    condition     = var.ingest_timeout_seconds == floor(var.ingest_timeout_seconds) && var.ingest_timeout_seconds >= var.ingest_deadline_seconds + 120
-    error_message = "ingest_timeout_seconds must be a whole number at least 120 above ingest_deadline_seconds, the job's own deadline."
+    condition     = var.ingest_timeout_seconds == floor(var.ingest_timeout_seconds) && var.ingest_timeout_seconds >= var.ingest_deadline_seconds + 480
+    error_message = "ingest_timeout_seconds must be a whole number at least 480 above ingest_deadline_seconds: the job's own deadline, then 300 for the search index load and room for storing the result."
   }
 }
 
@@ -270,12 +290,12 @@ variable "gate_threshold" {
 }
 
 variable "available_retriever_configs" {
-  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow, which refuses a start or a verdict run that names another row."
+  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r5 belongs here because retrieval is given the search service's endpoint."
   type        = list(string)
 
   validation {
-    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3"], row)])
-    error_message = "available_retriever_configs must name at least one of the rows that are built (r1, r2, r3), each once. Add a row here when retrieval and verdict can answer it."
+    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3", "r5"], row)])
+    error_message = "available_retriever_configs must name at least one of the rows that are built (r1, r2, r3, r5), each once. Add a row here when retrieval and verdict can answer it."
   }
 }
 

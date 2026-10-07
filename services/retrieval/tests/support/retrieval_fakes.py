@@ -8,14 +8,24 @@ manual: its rule ids are of the contracts' shape and belong to no rule, and
 its text is marked so that a test can tell if any of it reached a log.
 """
 
+import asyncio
 import json
 import math
+import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+import httpx2
+
 from contracts.enums import ChunkSet
+from retrieval.adapters.search_index import (
+    HASH_FIELD,
+    KEY_FIELD,
+    RERANKER_SCORE,
+    document_body,
+)
 from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
     Chunk,
@@ -27,6 +37,7 @@ from retrieval.domain.entities import (
     ParsedLayout,
     StoredChunk,
 )
+from retrieval.domain.index_load import index_document
 from retrieval.domain.ingest import IngestOptions
 from retrieval.domain.ports import (
     IndexChanged,
@@ -284,6 +295,16 @@ class MemoryRepository:
     async def last_run(self, chunk_set: ChunkSet) -> IngestRun | None:
         return self.run
 
+    async def chunk_records(self, chunk_set: ChunkSet) -> Sequence[ChunkRecord]:
+        return sorted(
+            (
+                record
+                for record in self.records.values()
+                if record.chunk.chunk_set is chunk_set
+            ),
+            key=lambda record: record.chunk.chunk_id,
+        )
+
     async def apply(
         self,
         chunk_set: ChunkSet,
@@ -458,6 +479,13 @@ class MemoryIndex:
     async def embedded_with(self, chunk_set: ChunkSet) -> str | None:
         return self.embedding_deployment
 
+    async def content_hashes(self, chunk_set: ChunkSet) -> Mapping[str, str]:
+        return {
+            record.chunk.chunk_id: record.content_hash
+            for record in self.records
+            if record.chunk.chunk_set is chunk_set
+        }
+
     def _chunk(self, chunk_set: ChunkSet, rule_id: str) -> IndexedChunk | None:
         """The chunk of the set that defines the rule; of several, the last by its id, as the table answers."""
         holding = [
@@ -575,3 +603,142 @@ def analyze_result(parsed: ParsedLayout | None = None) -> dict[str, Any]:
             for paragraph in parsed.paragraphs
         ],
     }
+
+
+# --- Azure AI Search, for the real client (story 3.3) -----------------------------------------
+
+
+class FakeCredential:
+    """Stands in for the Azure identity library's credential."""
+
+    def __init__(self, lifetime_seconds: float = 3600.0) -> None:
+        self.scopes: list[str] = []
+        self.lifetime_seconds = lifetime_seconds
+
+    def get_token(self, *scopes: str, **options: Any) -> Any:
+        self.scopes.extend(scopes)
+
+        @dataclass
+        class Token:
+            token: str
+            expires_on: float
+
+        return Token(
+            f"entra-token-{len(self.scopes)}", time.time() + self.lifetime_seconds
+        )
+
+
+def search_document(record: ChunkRecord) -> dict[str, Any]:
+    """A stored record as the search service's index holds it."""
+    return document_body(index_document(record))
+
+
+@dataclass
+class FakeSearchService:
+    """Stands where Azure AI Search would be: an `httpx2` transport handler.
+
+    It keeps one index in memory and speaks the REST routes the client
+    calls. It ranks nothing: a query is answered with the documents a test
+    names, in that order, each with the reranker score the test gives it.
+    """
+
+    definition: dict[str, Any] | None = None
+    documents: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Every call is answered with this status, if set.
+    status: int | None = None
+    # Documents of these ids are said to be stored and are not.
+    loses: set[str] = field(default_factory=set)
+    # What a query answers: `chunk_id` and reranker score, best first. A
+    # score of None leaves the score out, as an answer without the ranker.
+    ranked: list[tuple[str, float | None]] = field(default_factory=list)
+    # A query is not answered while the test runs.
+    never_answers: bool = False
+    # After a change, this many listings still answer what the index held
+    # before it: the real service counts what it was sent a moment later.
+    lag: int = 0
+    _stale: int = 0
+    _before: dict[str, dict[str, Any]] = field(default_factory=dict)
+    requests: list[httpx2.Request] = field(default_factory=list)
+    # What it was asked, in order: the call, and how many documents it carried.
+    calls: list[tuple[str, int]] = field(default_factory=list)
+    queries: list[dict[str, Any]] = field(default_factory=list)
+
+    def transport(self) -> httpx2.MockTransport:
+        return httpx2.MockTransport(self.handle)
+
+    def count(self, call: str) -> int:
+        return sum(1 for name, _ in self.calls if name == call)
+
+    async def handle(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(request)
+        if self.status is not None:
+            return httpx2.Response(
+                self.status,
+                headers={"retry-after": "0"},
+                json={"error": {"code": "x", "message": "SECRET-SERVICE-MESSAGE"}},
+            )
+        path = request.url.path
+        if request.method == "GET":
+            self.calls.append(("read_index", 0))
+            if self.definition is None:
+                return httpx2.Response(404, json={"error": {"code": "NotFound"}})
+            return httpx2.Response(200, json=self.definition)
+        body = json.loads(request.content)
+        if request.method == "PUT":
+            self.calls.append(("create_index", 0))
+            self.definition = body
+            return httpx2.Response(201, json=body)
+        if self.definition is None:
+            return httpx2.Response(404, json={"error": {"code": "NotFound"}})
+        if path.endswith("/docs/index"):
+            return self._change(body["value"])
+        if body.get("search") == "*":
+            return self._list(body)
+        self.calls.append(("query", 0))
+        self.queries.append(body)
+        if self.never_answers:
+            await asyncio.Event().wait()
+        value = []
+        for chunk_id, score in self.ranked[: body["top"]]:
+            document = self.documents[chunk_id]
+            entry = {name: document[name] for name in body["select"].split(",")}
+            if score is not None:
+                entry[RERANKER_SCORE] = score
+            value.append({"@search.score": 0.03, **entry})
+        return httpx2.Response(200, json={"value": value})
+
+    def _change(self, actions: list[dict[str, Any]]) -> httpx2.Response:
+        deletes = [a for a in actions if a["@search.action"] == "delete"]
+        self.calls.append(("delete" if deletes else "upload", len(actions)))
+        if self.lag and not self._stale:
+            self._before = dict(self.documents)
+        self._stale = self.lag
+        for action in actions:
+            document = {k: v for k, v in action.items() if k != "@search.action"}
+            if action["@search.action"] == "delete":
+                self.documents.pop(action[KEY_FIELD], None)
+            elif action[KEY_FIELD] not in self.loses:
+                self.documents[action[KEY_FIELD]] = document
+        results = [
+            {"key": action[KEY_FIELD], "status": True, "statusCode": 200}
+            for action in actions
+        ]
+        return httpx2.Response(200, json={"value": results})
+
+    def _list(self, body: dict[str, Any]) -> httpx2.Response:
+        self.calls.append(("list", 0))
+        documents = self.documents
+        if self._stale:
+            self._stale -= 1
+            documents = self._before
+        page = sorted(documents)[body["skip"] : body["skip"] + body["top"]]
+        return httpx2.Response(
+            200,
+            json={
+                "@odata.count": len(documents),
+                "value": [
+                    {KEY_FIELD: chunk_id, HASH_FIELD: documents[chunk_id][HASH_FIELD]}
+                    for chunk_id in page
+                ],
+            },
+        )

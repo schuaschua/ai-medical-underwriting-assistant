@@ -96,15 +96,31 @@ class RunPorts:
     agent: VerdictAgent
 
 
-# AD-11: the ladder rows a verdict can be run with: the ones `retrieval`
-# searches. `workflow` names the same rows as the ones a case may run with,
-# and a test outside `services/` holds the three lists equal. On `r1` the
-# rules come from `fixed` chunks, which may hold several definitions or the
-# start of one: a reason is checked against the rule's own definition inside
-# the chunk (`effects.definition_of`), and a definition cut off before its
-# rating bears out nothing.
+# AD-11: the ladder rows this build can run a verdict with: the ones
+# `retrieval` can search. On `r1` the rules come from `fixed` chunks, which
+# may hold several definitions or the start of one: a reason is checked
+# against the rule's own definition inside the chunk
+# (`effects.definition_of`), and a definition cut off before its rating
+# bears out nothing. `r5` answers the same `smart` chunks as `r2` and `r3`,
+# from Azure AI Search.
 RUNNABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
-    {RetrieverConfig.R1, RetrieverConfig.R2, RetrieverConfig.R3}
+    {
+        RetrieverConfig.R1,
+        RetrieverConfig.R2,
+        RetrieverConfig.R3,
+        RetrieverConfig.R5,
+    }
+)
+# The rows `retrieval` answers only where it was given a search service.
+SEARCH_SERVICE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
+    {RetrieverConfig.R5}
+)
+# The rows a verdict may be commanded with unless the settings say otherwise
+# (VERDICT_AVAILABLE_RETRIEVER_CONFIGS): the ones that need no search
+# service. `workflow` and `retrieval` name the same rows, each in its own
+# settings, and a test outside `services/` holds the three lists equal.
+DEFAULT_AVAILABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = (
+    RUNNABLE_RETRIEVER_CONFIGS - SEARCH_SERVICE_RETRIEVER_CONFIGS
 )
 
 
@@ -114,10 +130,12 @@ def _rows_in_words(configs: frozenset[RetrieverConfig]) -> str:
     return f"Rows {', '.join(others)} and {last}" if others else f"Only row {last}"
 
 
-ROW_NOT_AVAILABLE_MESSAGE = (
-    "A verdict cannot be suggested with that retrieval row yet. "
-    f"{_rows_in_words(RUNNABLE_RETRIEVER_CONFIGS)} can be used for now."
-)
+def row_not_available_message(available: frozenset[RetrieverConfig]) -> str:
+    """What a caller is told who commanded a run with a row this service does not run."""
+    return (
+        "A verdict cannot be suggested with that retrieval row here. "
+        f"{_rows_in_words(available)} can be used for now."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,8 +155,8 @@ class RunOptions:
     # AD-15: under this confidence a run refers, with `low_confidence`.
     confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR
     search_top_k: int = DEFAULT_TOP_K
-    # AD-11: the ladder rows this build can run a verdict with.
-    retriever_configs: frozenset[RetrieverConfig] = RUNNABLE_RETRIEVER_CONFIGS
+    # AD-11: the ladder rows a verdict may be commanded with here.
+    retriever_configs: frozenset[RetrieverConfig] = DEFAULT_AVAILABLE_RETRIEVER_CONFIGS
 
 
 @dataclass(slots=True)
@@ -264,7 +282,10 @@ async def run_verdict(
     (`step_limit`), as at the step limit.
     """
     if command.retriever_config not in options.retriever_configs:
-        raise DomainError(ErrorCode.RETRIEVER_NOT_AVAILABLE, ROW_NOT_AVAILABLE_MESSAGE)
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE,
+            row_not_available_message(options.retriever_configs),
+        )
     key = RunKey(command.case_id, command.retriever_config)
     repository = ports.repository
     earlier = await repository.find(key)

@@ -85,8 +85,9 @@ One command starts everything:
 
 It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
 containers (`compose.yaml`), applies the database migrations, builds the SPA, starts a stand-in for
-Azure AI Language, one for the Foundry model deployments and one for Document Intelligence's layout
-model (see below), ingests the underwriting manual, and runs the `web`, `intake`, `workflow`,
+Azure AI Language, one for the Foundry model deployments, one for Document Intelligence's layout
+model and one for Azure AI Search (see below), ingests the underwriting manual and loads the search
+stand-in's index from it, and runs the `web`, `intake`, `workflow`,
 `classification`, `extraction`, `retrieval` and `verdict` services, each with its Dapr sidecar (`dapr.yaml`; each later service
 is added to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
@@ -576,8 +577,8 @@ curl -s http://localhost:8004/rules/UW-DM-003
 `POST /searches` is the one search operation for every row of the retrieval ladder: a query, a
 `retriever_config` and `top_k` (default 5, at most 50) in; `retriever_config`, `latency_ms` (the time
 `retrieval` spent, the embedding call included) and ranked items out, each with `chunk_id`, `rule_ids`,
-`rank`, `score`, `text`, `manual_page` and `impairment`. Rows `r1`, `r2` and `r3` are built (the
-two baselines are below). The steps of `r3`, each a function of its own in
+`rank`, `score`, `text`, `manual_page` and `impairment`. Rows `r1`, `r2`, `r3` and `r5` are built (the
+two baselines and `r5` are below). The steps of `r3`, each a function of its own in
 `services/retrieval/src/retrieval/`:
 
 1. The query is embedded once, exactly as it was asked, through the model gateway on the one embedding
@@ -617,20 +618,73 @@ curl -s -X POST http://localhost:8004/searches -H 'content-type: application/jso
 curl -s 'http://localhost:8004/rules/UW-DM-003?retriever_config=r1'
 ```
 
-A case may be started with any of the three rows, or with all of them
-(`"retriever_configs": ["r1", "r2", "r3"]` in the start request): it gets one verdict run per row on
+A case may be started with any of the available rows, or with all of them
+(`"retriever_configs": ["r1", "r2", "r3", "r5"]` in the start request): it gets one verdict run per row on
 the same extracted facts and completes when each has its `verdict.suggested` event. The rows a case
 may run with are named in three places, which a test outside `services/` holds equal without any
 container (`packages/synthdata/tests/test_foundry_standin.py`): `retrieval`'s row table
-(`domain/rows.py`), `verdict`'s runnable rows (`RUNNABLE_RETRIEVER_CONFIGS` in `domain/run.py`) and
-`workflow`'s setting `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS` (its default; the deploy passes the
-list of `infra/demo/app/terraform.tfvars`). A verdict run on `r1` reads its rules from the `fixed`
+(`domain/rows.py`, `available_rows`: the built rows, less `r5` when the service has no search
+endpoint), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
+`WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS`. Both settings default to `r1`, `r2` and `r3`; `dapr.yaml`
+and the deploy (the one list of `infra/demo/app/terraform.tfvars`) add `r5`, because there
+`retrieval` is given a search service. A verdict run on `r1` reads its rules from the `fixed`
 set. A reason's effect is then read from that rule's own definition inside the chunk, from its
 marker to the end of its paragraph; a definition the chunk cuts off before its rating bears out no
 debit and no decline, so that reason is dropped and the run refers. That is the baseline's honest
 weakness and nothing works around it.
 
-There is no reranker, no query rewriting by a model and no cache. Rows `r4`, `r5` and `r6` are named
+**Row `r5` on Azure AI Search (story 3.3).** The same chunks in another store, so that the comparison
+can say what a managed search service does with them. The store is the one thing that differs:
+
+- *The index.* The ingestion job's last step (`domain/index_load.py`), after pgvector is written,
+  loads the index `manual-smart` (`RETRIEVAL_SEARCH_SERVICE_INDEX_NAME`) from the `smart` chunk
+  records the chunk table holds: one document per chunk with the same `chunk_id`, text, context line,
+  rule ids, references, section, impairment, manual page and vector. Nothing is cut again and no model
+  is asked. It creates the index if the service has none (`adapters/search_index.py`,
+  `index_definition`: a 3,072-dimension vector field searched exhaustively, `exhaustiveKnn` with
+  cosine, so exact like pgvector, and one semantic configuration), uploads the documents that are new
+  or changed (each carries a hash of its fields), deletes those whose chunk is gone, and then compares
+  what the index says it holds, its count and its ids, with pgvector. A difference fails the job
+  (`index load failed: code=stage_failed reason=search_index_differs`), as does a service that gives
+  no answer (`code=upstream_unavailable reason=search_...`); either way pgvector stays as the runs
+  before it wrote it, and the next run of the job brings the index up to date. A run that changes
+  nothing uploads nothing and still compares. Its own log line is `index load done: documents=...`.
+- *The search* (`domain/search.py`, `ai_search_hybrid`). The query is embedded once, as for the other
+  rows, and sent to the service as one hybrid query: the text (with every operator of the query
+  syntax escaped) and the vector (`exhaustive`), fused by the service and ordered by its semantic
+  ranker. The items are the service's documents in the service's order, in the common shape. `score`
+  is the ranker's score, which runs from 0 to 4 and is no probability, divided by 4: so 0 to 1 and
+  larger is better, comparable within the row only. A request the ranker could not serve fails
+  (`semanticErrorHandling: fail`): there is no partial answer, and a service that is down or slower
+  than the search's deadline is `upstream_unavailable` (502). The search keeps the guard on the
+  embedding deployment, against pgvector's run record and against each answered document's own, and
+  leaves out (and counts in its log line, `left_out=`) a document whose id pgvector does not hold,
+  or holds with another content hash, which is an index behind the chunk table. The vector side is
+  asked for as many candidates as `r3` hands its fusion (50), and the largest raw ranker score of a
+  search is in its log line and on its span. A rule read for `r5` answers the `smart` chunk from
+  pgvector.
+- *Availability.* The service is reached with `retrieval`'s identity, never a key
+  (`RETRIEVAL_SEARCH_SERVICE_ENDPOINT`, `..._ENTRA_AUTH`, `..._API_VERSION`, default `2024-07-01`).
+  With no endpoint set, `r5` is refused with `retriever_not_available` (409), the job loads no index
+  and the other rows work as before.
+- *The client* is REST over `httpx2`, like the Document Intelligence client, not the
+  `azure-search-documents` SDK: the spine pins that pre-release for row `r6` alone, and `r5` needs
+  five plain calls of the stable API.
+
+Locally Azure AI Search is a stand-in, `uv run python -m synthdata.search_standin` (port 5103,
+started by `./tools/dev.sh`): the REST routes the client calls, with its indexes in memory, so the
+job loads it again at every start. It answers a hybrid query from the vectors and from shared words,
+fused by rank and then ordered by a made-up "reranker score" from 0 to 4; it is not a search engine
+and not a language model. `SEARCH_STANDIN_MODE=unavailable ./tools/dev.sh` and `=slow` show a search
+with `r5` failing. It is part of the dev-only package: no service image holds it, and `retrieval`
+refuses a plain-HTTP search endpoint that is not on loopback.
+
+```sh
+curl -s -X POST http://localhost:8004/searches -H 'content-type: application/json' \
+  -d '{"query": "Type 2 diabetes mellitus: HbA1c from 8.0 to below 9.0 %", "retriever_config": "r5"}'
+```
+
+There is no reranker on pgvector, no query rewriting by a model and no cache. Rows `r4` and `r6` are named
 in one table (`domain/rows.py`) and refused with `retriever_not_available` (409) until their stories
 build them; a
 `retriever_config` that is no row at all is `validation_failed` (422), as are a blank query and a
@@ -707,6 +761,7 @@ more.
 | `extraction` (`/health`, `/ready`, `POST /fact-sets`, `GET /cases/<case_id>/facts`), and its Dapr sidecar | `http://localhost:8005`, `http://localhost:3505` |
 | `verdict` (`/health`, `/ready`, `POST /verdict-runs`, `GET /cases/<case_id>/verdict-runs`, `GET /verdict-runs/<verdict_run_id>/steps?tool=&rule_id=&after_step_no=`, `GET /cases/<case_id>/agent-steps?tool=&rule_id=&after_verdict_run_id=&after_step_no=`), and its Dapr sidecar | `http://localhost:8006`, `http://localhost:3506` |
 | Stand-in for Document Intelligence's layout model (this machine only) | `http://localhost:5102` |
+| Stand-in for Azure AI Search (this machine only; its index is kept in memory) | `http://localhost:5103` |
 | PostgreSQL (database and user `aiuw`, and the roles `workflow` and `verdict`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
 | Durable Task Scheduler emulator (task hubs `default` and, for tests, `aiuw-test`), and its dashboard | `localhost:8080`, <http://localhost:8082/> |

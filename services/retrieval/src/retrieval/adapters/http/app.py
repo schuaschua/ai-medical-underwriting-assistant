@@ -21,6 +21,11 @@ from retrieval.adapters.model import (
     build_model_client,
     model_token_for,
 )
+from retrieval.adapters.search_index import (
+    SearchIndex,
+    build_search_http,
+    search_token_for,
+)
 from retrieval.adapters.telemetry import configure_telemetry, instrument_app
 from retrieval.domain.ports import ModelNotConfigured, QueryEmbedder
 from retrieval.domain.search import SearchOptions, SearchPorts
@@ -74,6 +79,31 @@ def build_query_gateway(
     )
 
 
+def build_search_service(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> SearchIndex | None:
+    """The search service a search with row `r5` asks; None when no endpoint is set.
+
+    Tests pass a transport that stands in for the service. A query has the
+    search's own short budget, not the ingestion job's: one call that may
+    not outlast the search, sent again at most a time or two.
+    """
+    if settings.search_service_endpoint is None:
+        return None
+    return SearchIndex(
+        build_search_http(
+            settings, transport, settings.search_service_query_timeout_seconds
+        ),
+        index_name=settings.search_service_index_name,
+        api_version=settings.search_service_api_version,
+        max_retries=settings.search_service_query_max_retries,
+        retry_seconds=min(
+            settings.search_service_retry_seconds, settings.search_deadline_seconds
+        ),
+        token=search_token_for(settings),
+    )
+
+
 def search_options(settings: Settings) -> SearchOptions:
     """What a search works with, as the settings say."""
     return SearchOptions(
@@ -88,6 +118,7 @@ def create_app(
     *,
     dependencies: Dependencies | None = None,
     model_transport: httpx2.AsyncBaseTransport | None = None,
+    search_transport: httpx2.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build the app. The server uses the environment; unit tests pass fakes in.
 
@@ -95,7 +126,7 @@ def create_app(
     describe them. Building them opens no connection and calls no model. The
     service never reads the manual itself: only the ingestion job does.
     `model_transport` stands in for the embedding deployment in a test of
-    that wiring.
+    that wiring, and `search_transport` for the search service.
     """
     if settings is None:
         settings = get_settings()
@@ -103,9 +134,18 @@ def create_app(
 
     database = None
     gateway: ModelGateway | None = None
+    search_service: SearchIndex | None = None
     if dependencies is None:
         database = build_database(settings)
         gateway = build_query_gateway(settings, model_transport)
+        search_service = build_search_service(settings, search_transport)
+        if search_service is None:
+            # Said once, here: row `r5` is then refused as not available,
+            # and the pgvector rows answer as before.
+            logger.info(
+                "row r5 is off: not configured: "
+                "missing=RETRIEVAL_SEARCH_SERVICE_ENDPOINT"
+            )
         model: QueryEmbedder = gateway if gateway is not None else NoEmbeddingModel()
         if gateway is None:
             # Said once, here: every search is then refused, at warning.
@@ -122,7 +162,11 @@ def create_app(
                 "searches are off: not configured: missing=%s", ",".join(missing)
             )
         dependencies = Dependencies(
-            search=SearchPorts(model=model, index=SqlChunkIndex(database)),
+            search=SearchPorts(
+                model=model,
+                index=SqlChunkIndex(database),
+                search_service=search_service,
+            ),
             schema_revision=SqlSchemaRevision(database),
             head_revision=bundled_head(),
             options=search_options(settings),
@@ -139,8 +183,12 @@ def create_app(
                 if gateway is not None:
                     await gateway.aclose()
             finally:
-                if database is not None:
-                    await database.dispose()
+                try:
+                    if search_service is not None:
+                        await search_service.aclose()
+                finally:
+                    if database is not None:
+                        await database.dispose()
 
     app = FastAPI(
         title=APP_ID, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan

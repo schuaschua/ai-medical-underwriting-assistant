@@ -53,10 +53,11 @@ redaction_categories = [
 # extraction, non-medical at it or more back to the customer, anything under
 # it to triage. Only workflow is given it.
 gate_threshold = 0.90
-# The retrieval ladder rows built so far (spine AD-11): the two baselines and
-# the hybrid row. A new row is added here when retrieval and verdict can
-# answer it.
-available_retriever_configs = ["r1", "r2", "r3"]
+# The retrieval ladder rows built so far (spine AD-11): the two baselines,
+# the hybrid row and r5 on Azure AI Search, which retrieval answers because
+# it is given the search service's endpoint. A new row is added here when
+# retrieval and verdict can answer it.
+available_retriever_configs = ["r1", "r2", "r3", "r5"]
 
 # Classification (spine AD-13): the LLM classifier's confidence is the share
 # of this many runs that agree. Whether the runs differ at all on the real
@@ -91,6 +92,12 @@ verdict_confidence_floor           = 0.70
 # session (deferred-work.md).
 manual_blob_name   = "underwriting-manual.pdf"
 layout_api_version = "2024-11-30"
+# Row r5 (spine AD-11): the index of the manual's smart chunks on Azure AI
+# Search, and the REST version retrieval was written for. Unverified: the
+# version and the request shapes wait for the final Azure test session
+# (deferred-work.md).
+search_index_name  = "manual-smart"
+search_api_version = "2024-07-01"
 # The job makes one chat call per rule (about a hundred) on the deployment the
 # other services share: lower this if its token rate limit is hit.
 retrieval_model_max_concurrent_calls = 5
@@ -111,9 +118,10 @@ search_embedding_timeout_seconds = 3
 search_embedding_max_retries     = 1
 search_deadline_seconds          = 8
 # The job's own deadline, and the platform's limit on one run of it, which
-# must be the longer by two minutes or more.
+# must be the longer by eight minutes or more: five for the search index
+# load that follows (its own deadline) and room for storing the result.
 ingest_deadline_seconds = 1800
-ingest_timeout_seconds  = 2100
+ingest_timeout_seconds  = 2400
 
 # A new role assignment takes a while to reach every Azure region and service.
 role_propagation_wait = "60s"

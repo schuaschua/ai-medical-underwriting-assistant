@@ -2,7 +2,8 @@
 title: 'Story 3.3: Row r5 on Azure AI Search'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '42919df4f1ea4ee74535f612970355b839296f72'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -64,11 +65,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `services/retrieval/` -- the search-service client (create index with exhaustive vector search and a semantic configuration, upload, delete, list ids, hybrid query with the semantic ranker), the load step of the job with its comparison check, row `r5` in the table and the search with its score mapping, settings
-- [ ] `packages/synthdata/` -- a stand-in for the search service's REST routes that the client uses, holding documents in memory, answering a hybrid query by the stand-in's vectors and word overlap in a reranked order, with modes for unavailable and slow
-- [ ] `services/verdict/`, `services/workflow/`, `dapr.yaml`, `tools/`, `infra/demo/app/` -- `r5` available where a search endpoint is set; the two roles; the settings
-- [ ] Tests, within the budgets: the load and comparison, a search on `r5`, not configured, service unavailable; outside `services/` one test over the real manual (both stores identical; `r5` answers the common shape) 
-- [ ] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; the Azure checks
+- [x] `services/retrieval/` -- the search-service client (create index with exhaustive vector search and a semantic configuration, upload, delete, list ids, hybrid query with the semantic ranker), the load step of the job with its comparison check, row `r5` in the table and the search with its score mapping, settings
+- [x] `packages/synthdata/` -- a stand-in for the search service's REST routes that the client uses, holding documents in memory, answering a hybrid query by the stand-in's vectors and word overlap in a reranked order, with modes for unavailable and slow
+- [x] `services/verdict/`, `services/workflow/`, `dapr.yaml`, `tools/`, `infra/demo/app/` -- `r5` available where a search endpoint is set; the two roles; the settings
+- [x] Tests, within the budgets: the load and comparison, a search on `r5`, not configured, service unavailable; outside `services/` one test over the real manual (both stores identical; `r5` answers the common shape) 
+- [x] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; the Azure checks
 
 **Acceptance Criteria:**
 - Given the local stack with the stand-in, when the ingestion job has run, then the index and pgvector hold the same chunk ids and counts, and a search with `r5` answers the common shape.
@@ -77,9 +78,50 @@ context:
 
 ## Implementation Notes
 
+- **Client: REST with `httpx2`, not the SDK.** `services/retrieval/src/retrieval/adapters/search_index.py` (`SearchIndex`) follows `adapters/layout.py`: a replaceable transport, no redirect followed, an Entra token for `https://search.azure.com/.default` and never a key, a span per call, a visible retry. `azure-search-documents` 12.1.0b2 stays pinned by the spine for `r6` only and was not added to `retrieval`'s dependencies; `r5` needs five calls of the stable API (`2024-07-01`, a setting).
+- **Index** (`index_definition`): key `chunk_id`, the chunk record's fields, `embedding` with 3,072 dimensions on an `exhaustiveKnn` cosine profile, semantic configuration `rules`. Each document also carries `content_hash`, `embedding_deployment` and a `document_hash` of all its fields but the vector.
+- **Load** (`domain/index_load.py`, called as the job's last step from `retrieval/ingest.py`): reads the stored `smart` records (`ChunkRepository.chunk_records`), creates the index if missing, uploads documents whose `document_hash` is new or differs, deletes those whose chunk is gone, then compares the service's count, ids and hashes with pgvector, several times a second apart before failing. It runs whenever a search endpoint is set, whatever the chunk sets' runs said, and never writes pgvector. Its failure is logged on a line of its own (`index load failed: code=... reason=search_...`) with codes of the existing catalogue (`upstream_unavailable`, `stage_failed` for `search_index_differs`, `stage_timeout`); no new `ErrorCode` was added to the contracts.
+- **Search** (`domain/search.py`, `ai_search_hybrid`): one embedding call, one read of pgvector (run record for the deployment guard, and each stored chunk's `content_hash`), one hybrid query (`queryType: semantic`, `semanticErrorHandling: fail`, vector query `exhaustive: true` with `k` = `r3`'s candidate depth, `top` = `top_k`). The largest raw reranker score is on the span and in the log line. `score` = `@search.rerankerScore` / 4, cut to 0 to 1; `rank` is the service's order, counted without a gap. A document pgvector does not hold, or holds with another content hash, is left out and counted (`left_out=`); a document embedded with another deployment refuses the search (`model_unavailable`). Service down, malformed or slow past the deadline: `upstream_unavailable`.
+- **Availability:** `rows.available_rows(search_service)`; `SearchPorts.search_service` is None without `RETRIEVAL_SEARCH_SERVICE_ENDPOINT`, and `r5` is then 409 `retriever_not_available`. `verdict`'s rows became the setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` (default `r1` to `r3`; `RUNNABLE_RETRIEVER_CONFIGS` now holds `r5`). `dapr.yaml` and `infra/demo/app` name `r5` for `workflow` and `verdict` and give `retrieval` the endpoint; the test in `packages/synthdata/tests/test_foundry_standin.py` holds the lists equal, with and without a search service.
+- **Stand-in:** `packages/synthdata/src/synthdata/search_standin.py`, port 5103, modes `ok`, `unavailable`, `slow`; indexes in memory. Started by `tools/dev.sh` and `tools/ingest-local.sh`.
+- **Infra:** two role assignments for `retrieval` on the search service, four env values, variables `search_index_name` and `search_api_version`, `available_retriever_configs` with `r5`, also passed to `verdict`. `infra/demo/foundation` untouched. Formatted and validated only; nothing planned or applied.
+- **Tests:** `retrieval` 55 (was 57), `verdict` 58, `workflow` 117, `synthdata` 50, all unchanged or lower; merges are listed in `deferred-work.md`. Whole suite: 534 passed, coverage 90%.
+- **Not proven here:** everything against the real service; the checks are in `deferred-work.md`.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 1 (2026-10-08): blind hunter (B), edge-case hunter (E), verification-gap (V). No intent gap, no bad spec.
+
+| # | Finding | Verdict | Route | Evidence |
+| --- | --- | --- | --- | --- |
+| B1, E1 | `ai_search_hybrid`: an index document that is stale but whose `chunk_id` pgvector still holds is answered | medium | patch | Real after a failed load: only ids are compared, so `r5` can answer old text while the rule read answers the new chunk. Same handling as the matrix row "Index behind pgvector": compare the record's `content_hash`, leave out and count. |
+| B2 | An index with few or no documents answers 200 | low | reject | Real only after a load that failed, which ends the job non-zero with its own line; a guard adds a branch for a state the job already reports. |
+| B3 | A 4xx from the service is told as "try again shortly" | low | reject | Real, but the log's reason carries the status (`search_query_status_403`); a second message and code path for the caller is more than a direct correction. |
+| B4 | The platform can end the job during the index load | medium | patch | `ingest_deadline_seconds` 1800 plus the load's 300 equals `ingest_timeout_seconds` 2100: no room left. |
+| B5, E5 | `SEARCH_STANDIN_MODE=unavailable ./tools/dev.sh` stops the ingestion | medium | patch | `is_standin search` greps for the 404 wording only; in that mode the stand-in answers 503, so `ensure_standin` says the port is taken and the manual is not ingested. |
+| B6 | Nothing ties `r5` in the row list to the endpoint in `infra/demo/app` | low | reject | The endpoint is passed unconditionally from the foundation, so in Azure it is always set; a precondition guards a state the stack cannot reach. |
+| B7 | The raw reranker score is not recorded anywhere | low | patch | The Azure check "scores stay within 0 to 4" has nothing to read; one number on the span and the log line is a direct addition. |
+| B8 | The semantic ranker may score against the backslash-escaped text | maybe-false | defer | Cannot be told without the real service; added to the Azure checks. |
+| B9 | `r5` asks for `k = top_k` vector candidates while `r3` hands 50 a side to its fusion | medium | patch | AD-12 fairness: the store is the only thing that may differ, so the vector side gets the same candidate depth as `r3`. The "no over-fetch" half is rejected: a left-out document is rare and already counted. |
+| B10, E3, V-other | `load_index`: `build_search_index` is outside the `try` | low | patch | The docstring promises the error is answered, not raised; moving one line keeps the chunk sets' reports. |
+| B11 | `seconds=` in the load's lines is the whole job's time | low | patch | The Azure check "measure the load" cannot be read from it. |
+| B12, E4 | An empty `smart` set empties the index and logs `documents=0` | low | reject | Mirroring pgvector is what the spec asks of the load; an empty `smart` set already fails the job on its own line. |
+| B13 | `document_hash` has no version and stands for the vector by `content_hash` | low | reject | The job never re-embeds a chunk whose content hash is unchanged, and a changed index definition is a new index name by design. |
+| B14 | The 207 branch and paging past 1,000 have no test | low | reject | Owner's test rule: about 111 documents, and a refused item still fails the comparison that is tested. |
+| B15, E9 | "Tests, within the budgets" ticked while `verdict`, `workflow` and `synthdata` are over | low | reject | The overs predate the story (536 cases at the baseline, accepted by the owner); this story lowered the total to 534 and records the counts in `deferred-work.md`. |
+| B16 | Sprint status `in-progress` beside spec `in-review`; `last_updated` went backwards | false | reject | The workflow moves sprint status at the end of the review; the earlier time stamp was ahead of the clock. |
+| B17, E8 | `search_api_version` has no Terraform validation | low | patch | A typo passes the plan and fails at container start; one validation block. The "yet" to "here" wording is cosmetic and rejected. |
+| V1 | The run-record deployment guard on `r5` is seen by no test | medium | patch | Filed evidence: deleting the check fails no test; one more search inside the existing `r5` test. |
+| V2 | The comparison's repeated attempts are never needed by a fake | medium | patch | Filed evidence: a loop that gives up at the first difference passes every test, and Azure is where it matters; a lagging listing in the existing integration test. |
+| V3 | A load ending in an unexpected exception: failed status unpinned | low | defer | Filed disposition; the adapter turns every malformed answer into `SearchServiceUnavailable`. |
+| V4 | The load's own deadline (`stage_timeout`) is not exercised | low | defer | Filed disposition; the job still ends non-zero through the tested per-call path. |
+| V-other 2 | The three-lists checks over infra files are text matches | low | reject | True and already an Azure check in `deferred-work.md`. |
+| V-other 3 | `is_standin search` copies the stand-in's wording | low | reject | Same pattern as the layout probe; B5's patch touches the same line. |
+| E2 | `_ranked` lets a contract-breaking document through to `SearchItem` | low | reject | The service answers documents this job uploaded from validated records; not reachable. |
+| E6 | Stand-in: a query reads documents without the lock | low | reject | Dev tool; a 500 from the stand-in during a concurrent load is retried by the client. |
+| E7 | Stand-in: bad paging answers 500, not 400 | low | reject | Only the project's own client calls it, with fixed paging. |
 
 ## Design Notes
 

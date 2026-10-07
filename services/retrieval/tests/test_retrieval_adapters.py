@@ -10,7 +10,6 @@ import base64
 import json
 import logging
 import re
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,8 @@ from retrieval_fakes import (
     CHAT,
     EMBEDDING,
     PDF,
+    FakeCredential,
+    FakeSearchService,
     analyze_result,
     completion,
     context_answer,
@@ -43,6 +44,12 @@ from retrieval.adapters.model import (
     embedding_deployment,
     model_token_for,
 )
+from retrieval.adapters.search_index import (
+    SEARCH_SCOPE,
+    SearchIndex,
+    build_search_http,
+    search_token_for,
+)
 from retrieval.domain.ports import (
     LayoutFailed,
     ModelUnavailable,
@@ -55,24 +62,31 @@ TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
 FOUNDRY = "https://aif-aiuw-demo-wus3.cognitiveservices.azure.com"
 DOCUMENT_INTELLIGENCE = "https://di-aiuw-demo-wus3.cognitiveservices.azure.com"
+SEARCH_SERVICE = "https://srch-aiuw-demo-wus3.search.windows.net"
 RULE_PLACE = "Section: 2 SECRET-SECTION\nRule text:\nRule UW-AA-001: SECRET-RULE."
 
 
 # --- Settings ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "values",
-    [
+def test_story_2_2_settings_that_would_reach_a_service_unsafely_are_refused() -> None:
+    for values in (
         # The real service without the identity.
         {"model_endpoint": FOUNDRY},
-    ],
-)
-def test_story_2_2_settings_that_would_reach_a_service_unsafely_are_refused(
-    values: dict[str, Any],
-) -> None:
-    with pytest.raises(ValidationError):
-        Settings(**values)
+        {"search_service_endpoint": SEARCH_SERVICE},
+        # Story 3.3: the stand-in for the search service is on loopback and
+        # takes no token, so it can never be the endpoint in Azure.
+        {"search_service_endpoint": "http://search-stand-in.example:5103"},
+        {
+            "search_service_endpoint": "http://127.0.0.1:5103",
+            "search_service_entra_auth": True,
+        },
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**values)
+    # The stand-in on this machine, and the real service with the identity.
+    Settings(search_service_endpoint="http://127.0.0.1:5103")
+    Settings(search_service_endpoint=SEARCH_SERVICE, search_service_entra_auth=True)
 
 
 # --- The model gateway -------------------------------------------------------------------
@@ -147,11 +161,11 @@ def context_line(gateway: ModelGateway) -> str:
     return str(on(gateway, lambda g: g.context_line(RULE_PLACE)))
 
 
-@pytest.mark.parametrize("status", [429])
-def test_story_2_2_a_call_answered_not_now_is_retried_honouring_retry_after(
-    settings: Settings, status: int
+def test_story_2_2_a_call_answered_not_now_is_retried_and_after_three_retries_the_model_is_unavailable(
+    settings: Settings, caplog: pytest.LogCaptureFixture
 ) -> None:
-    deployments = Deployments(statuses=[status, status], headers={"retry-after": "2"})
+    # Answered in the end: the waits are what `Retry-After` asks for.
+    deployments = Deployments(statuses=[429, 429], headers={"retry-after": "2"})
     gateway, waits = gateway_for(deployments, settings)
 
     assert on(gateway, lambda g: g.embed(["a"])) == [vector_for("a")]
@@ -159,10 +173,7 @@ def test_story_2_2_a_call_answered_not_now_is_retried_honouring_retry_after(
     assert len(deployments.requests) == 3
     assert waits == [2.0, 2.0]
 
-
-def test_story_2_2_after_three_retries_the_model_is_unavailable(
-    settings: Settings, caplog: pytest.LogCaptureFixture
-) -> None:
+    # Never answered.
     deployments = Deployments(statuses=[429] * 10)
     gateway, waits = gateway_for(deployments, settings, retry_seconds=1.0)
 
@@ -177,26 +188,6 @@ def test_story_2_2_after_three_retries_the_model_is_unavailable(
         in (caplog.text)
     )
     assert "SECRET" not in caplog.text
-
-
-class FakeCredential:
-    """Stands in for the Azure identity library's credential."""
-
-    def __init__(self, lifetime_seconds: float = 3600.0) -> None:
-        self.scopes: list[str] = []
-        self.lifetime_seconds = lifetime_seconds
-
-    def get_token(self, *scopes: str, **options: Any) -> Any:
-        self.scopes.extend(scopes)
-
-        @dataclass
-        class Token:
-            token: str
-            expires_on: float
-
-        return Token(
-            f"entra-token-{len(self.scopes)}", time.time() + self.lifetime_seconds
-        )
 
 
 def azure_settings() -> Settings:
@@ -243,6 +234,46 @@ def test_story_2_2_in_azure_the_models_are_signed_in_to_with_an_entra_token_neve
     stand_in, _ = gateway_for(local, settings)
     context_line(stand_in)
     assert local.requests[0].headers["authorization"] == f"Bearer {NO_KEY}"
+
+    # Story 3.3: the search service likewise, with a token for its own
+    # scope and never a key; the local stand-in is sent no credential.
+    monkeypatch.setattr(
+        "retrieval.adapters.search_index.azure_credential", lambda settings: credential
+    )
+    in_azure = azure.model_copy(
+        update={
+            "search_service_endpoint": SEARCH_SERVICE,
+            "search_service_entra_auth": True,
+        }
+    )
+    service, stand_in_service = FakeSearchService(), FakeSearchService()
+
+    async def created(of: Settings, fake: FakeSearchService) -> bool:
+        index = SearchIndex(
+            build_search_http(of, fake.transport()),
+            index_name=of.search_service_index_name,
+            api_version=of.search_service_api_version,
+            token=search_token_for(of),
+        )
+        try:
+            return await index.ensure()
+        finally:
+            await index.aclose()
+
+    assert asyncio.run(created(in_azure, service))
+    read, create = service.requests
+    assert (
+        str(read.url) == f"{SEARCH_SERVICE}/indexes/manual-smart?api-version=2024-07-01"
+    )
+    assert (read.method, create.method) == ("GET", "PUT")
+    assert create.headers["authorization"] == "Bearer entra-token-2"
+    assert credential.scopes == [COGNITIVE_SERVICES_SCOPE, SEARCH_SCOPE]
+    assert "api-key" not in read.headers and "api-key" not in create.headers
+    local_search = settings.model_copy(
+        update={"search_service_endpoint": "http://127.0.0.1:5103"}
+    )
+    assert asyncio.run(created(local_search, stand_in_service))
+    assert "authorization" not in stand_in_service.requests[0].headers
 
 
 # --- Document Intelligence ---------------------------------------------------------------
@@ -407,7 +438,7 @@ def test_story_2_2_a_layout_error_ends_the_parse_with_a_code(
 # --- What the service is made of -------------------------------------------------------------
 
 
-def test_story_2_2_the_service_shares_no_code_with_another_service() -> None:
+def test_story_2_2_the_service_shares_no_code_with_and_calls_no_other_service() -> None:
     pyproject = (SERVICE_DIR / "pyproject.toml").read_text()
 
     # Contracts is the only shared code (AD-3); the spine's pins.
@@ -423,9 +454,7 @@ def test_story_2_2_the_service_shares_no_code_with_another_service() -> None:
             text,
             re.MULTILINE,
         ), source.name
-
-
-def test_story_2_2_the_job_calls_no_other_service_of_ours() -> None:
+    # The job calls no other service of ours.
     # No Dapr sidecar, no app id, no service invocation anywhere in the package.
     for source in (SERVICE_DIR / "src").rglob("*.py"):
         text = source.read_text().lower()

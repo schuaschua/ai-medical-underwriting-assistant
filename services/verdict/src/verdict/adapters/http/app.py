@@ -46,6 +46,7 @@ def run_options(settings: Settings) -> RunOptions:
         agent_budget_seconds=settings.agent_time_budget_seconds,
         confidence_floor=settings.confidence_floor,
         search_top_k=settings.search_top_k,
+        retriever_configs=frozenset(settings.available_retriever_configs),
     )
 
 

@@ -17,8 +17,15 @@ It ends with status 0 when every chunk set is as the manual has it, and with
 error code and the reason. A failed run leaves its chunk set as it was, and
 the other set as its own run left it. When the stored sets then stand on
 different manuals the job says so in a line of its own and ends with 1 as
-well: the rows of the ladder are compared with each other. Before the process ends its telemetry
-is sent.
+well: the rows of the ladder are compared with each other.
+
+Where the settings name a search service (row `r5`, spine AD-11), the job's
+last step loads that service's index from the `smart` chunk records pgvector
+now holds, and checks that both stores hold the same chunks. It asks no
+model. A failure of that step has a log line of its own and ends the job
+with 1; pgvector stays as the runs before it left it.
+
+Before the process ends its telemetry is sent.
 """
 
 import asyncio
@@ -51,6 +58,11 @@ from retrieval.adapters.model import (
     embedding_deployment,
     model_token_for,
 )
+from retrieval.adapters.search_index import (
+    SearchIndex,
+    build_search_http,
+    search_token_for,
+)
 from retrieval.adapters.telemetry import (
     adapter_span,
     code_locations,
@@ -58,7 +70,8 @@ from retrieval.adapters.telemetry import (
     configure_telemetry,
     shutdown_telemetry,
 )
-from retrieval.domain.entities import IngestReport
+from retrieval.domain.entities import IndexLoadReport, IngestReport
+from retrieval.domain.index_load import IndexLoadOptions, load_search_index
 from retrieval.domain.ingest import (
     IngestError,
     IngestOptions,
@@ -84,6 +97,7 @@ class Transports:
 
     layout: httpx2.AsyncBaseTransport | None = None
     model: httpx2.AsyncBaseTransport | None = None
+    search: httpx2.AsyncBaseTransport | None = None
 
 
 def missing_settings(settings: Settings) -> list[str]:
@@ -122,6 +136,72 @@ class JobResult:
     chunk_sets: dict[ChunkSet, IngestReport | Exception]
     # The manual each stored set was last built from, when they differ; else empty.
     different_manuals: dict[ChunkSet, str]
+    # The load of the search service's index: its report, or the error it
+    # ended with; None when the settings name no search service.
+    index_load: IndexLoadReport | Exception | None = None
+    # How long that load took, by itself.
+    index_load_seconds: float = 0.0
+
+
+def index_load_options(settings: Settings) -> IndexLoadOptions:
+    """What a load of the search index works with, as the settings say."""
+    return IndexLoadOptions(
+        upload_batch_size=settings.search_service_upload_batch_size,
+        deadline_seconds=settings.search_service_load_deadline_seconds,
+        check_attempts=settings.search_service_check_attempts,
+        check_wait_seconds=settings.search_service_check_wait_seconds,
+    )
+
+
+def build_search_index(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> SearchIndex:
+    """The search service's index as the job loads it, with the job's own patience."""
+    return SearchIndex(
+        build_search_http(settings, transport),
+        index_name=settings.search_service_index_name,
+        api_version=settings.search_service_api_version,
+        max_retries=settings.search_service_max_retries,
+        retry_seconds=settings.search_service_retry_seconds,
+        token=search_token_for(settings),
+    )
+
+
+async def load_index(
+    settings: Settings,
+    repository: SqlChunkRepository,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> IndexLoadReport | Exception:
+    """Load the search service's index from the stored chunks; the report, or the error.
+
+    Whatever goes wrong here is answered, not raised: pgvector is written
+    by then, and the job still reports every chunk set's run.
+    """
+    with adapter_span(tracer, "retrieval.index_load") as span:
+        span.set_attribute(
+            "retrieval.search_service.index", settings.search_service_index_name
+        )
+        index: SearchIndex | None = None
+        try:
+            # Building the client is part of the load: a credential that
+            # cannot be made is answered like any other failure of it.
+            index = build_search_index(settings, transport)
+            report = await load_search_index(
+                repository, index, index_load_options(settings)
+            )
+        except Exception as error:  # noqa: BLE001 - whatever the load raised, the job reports it beside the runs
+            span.set_attribute("retrieval.index_load.outcome", "failed")
+            span.set_attribute("error.type", _code_of(error).value)
+            span.set_attribute("retrieval.index_load.reason", _reason_of(error))
+            return error
+        finally:
+            if index is not None:
+                await index.aclose()
+        span.set_attribute("retrieval.index_load.outcome", "done")
+        span.set_attribute("retrieval.index_load.documents", report.documents)
+        span.set_attribute("retrieval.index_load.uploaded", report.uploaded)
+        span.set_attribute("retrieval.index_load.removed", report.removed)
+        return report
 
 
 async def run(settings: Settings, transports: Transports | None = None) -> JobResult:
@@ -153,6 +233,7 @@ async def run(settings: Settings, transports: Transports | None = None) -> JobRe
         max_completion_tokens=settings.model_max_completion_tokens,
         max_concurrent_calls=settings.model_max_concurrent_calls,
     )
+    repository = SqlChunkRepository(database)
     ports = IngestPorts(
         manual=BlobManualStore(
             build_blob_service(settings),
@@ -161,7 +242,7 @@ async def run(settings: Settings, transports: Transports | None = None) -> JobRe
         ),
         layout=layout,
         model=gateway,
-        repository=SqlChunkRepository(database),
+        repository=repository,
     )
     try:
         with adapter_span(tracer, "retrieval.ingest") as span:
@@ -226,7 +307,14 @@ async def run(settings: Settings, transports: Transports | None = None) -> JobRe
             span.set_attribute(
                 "retrieval.chunks.unchanged", sum(r.unchanged for r in reports)
             )
-            return JobResult(outcomes, different)
+            loaded, load_seconds = None, 0.0
+            if settings.search_service_endpoint is not None:
+                # After pgvector is written, and whatever the runs said:
+                # the index is brought to what pgvector holds now.
+                load_started = time.monotonic()
+                loaded = await load_index(settings, repository, transports.search)
+                load_seconds = time.monotonic() - load_started
+            return JobResult(outcomes, different, loaded, load_seconds)
     finally:
         # Each resource is closed even if the one before it failed to close.
         try:
@@ -335,6 +423,41 @@ def _run_and_report(
             ",".join(result.different_manuals.values()),
         )
         status = FAILED
+    loaded = result.index_load
+    index = settings.search_service_index_name
+    if isinstance(loaded, IngestError):
+        # A line of its own: pgvector is as the lines above say.
+        logger.error(
+            "index load failed: code=%s reason=%s where=%s index=%s seconds=%.1f",
+            loaded.code.value,
+            loaded.reason,
+            loaded.where or "-",
+            index,
+            result.index_load_seconds,
+        )
+        status = FAILED
+    elif isinstance(loaded, Exception):
+        logger.error(
+            "index load failed: code=%s reason=%s at=%s index=%s seconds=%.1f",
+            ErrorCode.INTERNAL_ERROR.value,
+            type(loaded).__qualname__,
+            " <- ".join(reversed(code_locations(loaded))),
+            index,
+            result.index_load_seconds,
+        )
+        status = FAILED
+    elif loaded is not None:
+        logger.info(
+            "index load done: documents=%d uploaded=%d removed=%d unchanged=%d "
+            "created=%s index=%s seconds=%.1f",
+            loaded.documents,
+            loaded.uploaded,
+            loaded.removed,
+            loaded.unchanged,
+            "yes" if loaded.created else "no",
+            index,
+            result.index_load_seconds,
+        )
     return status
 
 

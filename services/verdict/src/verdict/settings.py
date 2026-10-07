@@ -7,7 +7,12 @@ from urllib.parse import urlsplit
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from contracts.enums import RetrieverConfig
 from contracts.models.retrieval import DEFAULT_TOP_K, MAX_TOP_K
+from verdict.domain.run import (
+    DEFAULT_AVAILABLE_RETRIEVER_CONFIGS,
+    RUNNABLE_RETRIEVER_CONFIGS,
+)
 
 # The Dapr app id; also the service name telemetry is reported under, and the
 # name of the one database schema the service owns (spine AD-4).
@@ -125,6 +130,15 @@ class Settings(BaseSettings):
     # AD-15: a run whose agent is less confident than this refers its case
     # (`low_confidence`). At the floor it is not low.
     confidence_floor: Annotated[float, Field(ge=0.0, le=1.0)] = 0.70
+    # AD-11: the ladder rows a verdict may be commanded with: the ones
+    # `retrieval` answers in this environment. `r5` is named only where
+    # `retrieval` was given a search service
+    # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT); `workflow` names the same rows
+    # (WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS). A command with another row is
+    # refused with `retriever_not_available` before anything is done.
+    available_retriever_configs: Annotated[
+        list[RetrieverConfig], Field(min_length=1)
+    ] = sorted(DEFAULT_AVAILABLE_RETRIEVER_CONFIGS)
     # How many rules one `search_rules` call returns to the agent.
     search_top_k: Annotated[int, Field(ge=1, le=MAX_TOP_K)] = DEFAULT_TOP_K
     # How many runs, and how many steps, one read lists at most.
@@ -192,6 +206,20 @@ class Settings(BaseSettings):
             # Security rule 9: the real deployment is reached with the identity.
             raise ValueError(
                 "An https:// VERDICT_MODEL_ENDPOINT needs VERDICT_MODEL_ENTRA_AUTH=true"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _rows_are_ones_this_build_runs(self) -> Self:
+        configs = self.available_retriever_configs
+        if len(set(configs)) != len(configs):
+            raise ValueError(
+                "VERDICT_AVAILABLE_RETRIEVER_CONFIGS must not repeat a value"
+            )
+        if not set(configs) <= RUNNABLE_RETRIEVER_CONFIGS:
+            raise ValueError(
+                "VERDICT_AVAILABLE_RETRIEVER_CONFIGS names a row this build cannot "
+                "run a verdict with"
             )
         return self
 

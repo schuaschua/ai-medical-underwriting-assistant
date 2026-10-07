@@ -117,6 +117,20 @@ def build_router(dependencies: Dependencies) -> APIRouter:
                     "retrieval.full_text_candidates", stats.full_text_candidates
                 )
                 span.set_attribute("retrieval.items", stats.items)
+                if stats.service_asked:
+                    # Row `r5` only: what the search service answered, and
+                    # how many of its documents pgvector does not hold.
+                    span.set_attribute(
+                        "retrieval.search_service.documents",
+                        stats.service_documents,
+                    )
+                    span.set_attribute("retrieval.left_out", stats.left_out)
+                    if stats.max_reranker_score is not None:
+                        # The ranker's raw score, as the service gave it.
+                        span.set_attribute(
+                            "retrieval.search_service.max_reranker_score",
+                            stats.max_reranker_score,
+                        )
 
     @router.get(rule_read.path)
     async def read_rule_route(

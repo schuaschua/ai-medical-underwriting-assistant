@@ -39,6 +39,7 @@ from retrieval.adapters.credential import azure_credential
 from retrieval.adapters.telemetry import adapter_span
 from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
+    Chunk,
     ChunkRecord,
     IngestRun,
     StoredChunk,
@@ -333,6 +334,19 @@ class SqlChunkRepository:
             chunk_count=row.chunk_count,
         )
 
+    async def chunk_records(self, chunk_set: ChunkSet) -> Sequence[ChunkRecord]:
+        """Every stored record of the set, whole: what another store is loaded from (AD-12)."""
+        with adapter_span(tracer, "retrieval.db.read_records") as span:
+            async with self._database.connect() as connection:
+                result = await connection.execute(
+                    select(chunk_table)
+                    .where(chunk_table.c.chunk_set == chunk_set.value)
+                    .order_by(chunk_table.c.chunk_id)
+                )
+                records = [_record(row) for row in result]
+            span.set_attribute("retrieval.chunks.count", len(records))
+            return records
+
     async def apply(
         self,
         chunk_set: ChunkSet,
@@ -401,6 +415,30 @@ async def _stored(
         )
         for row in result
     }
+
+
+def _record(row: Any) -> ChunkRecord:
+    return ChunkRecord(
+        chunk=Chunk(
+            chunk_id=row.chunk_id,
+            chunk_set=ChunkSet(row.chunk_set),
+            rule_ids=tuple(row.rule_ids),
+            text=row.text,
+            reference_rule_ids=tuple(row.reference_rule_ids),
+            section_id=row.section_id,
+            section_title=row.section_title,
+            impairment=row.impairment,
+            manual_page=row.manual_page,
+        ),
+        context_line=row.context_line,
+        # The stored 4-byte floats, each written with the nine digits that
+        # say exactly which one it is: another store that keeps 4-byte
+        # floats then holds the very same vector.
+        embedding=tuple(float(f"{float(value):.9g}") for value in row.embedding),
+        content_hash=row.content_hash,
+        chat_deployment=row.chat_deployment,
+        embedding_deployment=row.embedding_deployment,
+    )
 
 
 def _record_run(chunk_set: ChunkSet, run: IngestRun) -> Any:

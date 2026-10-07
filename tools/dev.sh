@@ -4,13 +4,15 @@
 #      in containers;
 #   2. the database migrations and the blob containers (tools/migrate-local.sh);
 #   3. the built SPA;
-#   4. the stand-ins for Azure AI Language, for the Foundry model deployments
-#      and for Document Intelligence's layout model (packages/synthdata),
-#      which redact documents, classify pages, read their facts, run the
-#      verdict agent and parse the manual while the Azure environment is
-#      down;
+#   4. the stand-ins for Azure AI Language, for the Foundry model deployments,
+#      for Document Intelligence's layout model and for Azure AI Search
+#      (packages/synthdata), which redact documents, classify pages, read
+#      their facts, run the verdict agent, parse the manual and answer
+#      retrieval row r5 while the Azure environment is down;
 #   5. the ingestion of the underwriting manual into schema `retrieval`
-#      (tools/ingest-local.sh), which does nothing when it was done before;
+#      (tools/ingest-local.sh), which does nothing when it was done before,
+#      and then loads the search stand-in's index from the stored chunks
+#      (every start: that stand-in keeps its index in memory);
 #   6. each service in dapr.yaml with its Dapr sidecar (so far: web, intake,
 #      workflow, classification, extraction, retrieval, verdict).
 # Stop with Ctrl+C, then `docker compose down` for the containers.
@@ -54,12 +56,15 @@ npm --prefix "$spa" run build
 # dapr.yaml gives intake (INTAKE_LANGUAGE_ENDPOINT), classification
 # (CLASSIFICATION_MODEL_ENDPOINT), extraction (EXTRACTION_MODEL_ENDPOINT),
 # retrieval (RETRIEVAL_MODEL_ENDPOINT) and verdict (VERDICT_MODEL_ENDPOINT),
-# and the ones tools/ingest-local.sh gives the ingestion job.
+# and the ones tools/ingest-local.sh gives the ingestion job. The stand-in for
+# Azure AI Search (retrieval row r5) is on the port dapr.yaml gives retrieval
+# (RETRIEVAL_SEARCH_SERVICE_ENDPOINT).
 language_port=5100
 model_port=5101
 layout_port=5102
+search_port=5103
 # Something else on a port would be taken for the stand-in below.
-for port in "$language_port" "$model_port" "$layout_port"; do
+for port in "$language_port" "$model_port" "$layout_port" "$search_port"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
     echo "Port ${port} is in use; a stand-in needs it." >&2
     exit 1
@@ -68,6 +73,7 @@ done
 language_standin=""
 model_standin=""
 layout_standin=""
+search_standin=""
 dapr_run=""
 
 # Stops Dapr (and with it the services) and the stand-ins, however the script
@@ -78,7 +84,7 @@ stop_all() {
     kill "$dapr_run" 2>/dev/null || true
     wait "$dapr_run" 2>/dev/null || true
   fi
-  for standin in "$language_standin" "$model_standin" "$layout_standin"; do
+  for standin in "$language_standin" "$model_standin" "$layout_standin" "$search_standin"; do
     if [ -n "$standin" ]; then
       kill "$standin" 2>/dev/null || true
     fi
@@ -98,6 +104,11 @@ uv run python -m synthdata.foundry_standin --port "$model_port" \
 model_standin=$!
 uv run python -m synthdata.layout_standin --port "$layout_port" &
 layout_standin=$!
+# SEARCH_STANDIN_MODE picks what the search stand-in does (README, 'Run
+# locally'): `unavailable` and `slow` show a search with r5 failing.
+uv run python -m synthdata.search_standin --port "$search_port" \
+  --mode "${SEARCH_STANDIN_MODE:-ok}" &
+search_standin=$!
 
 # Without the Language stand-in every case would fail at redaction, and
 # without the model's at classification: wait until each listens, and stop
@@ -120,6 +131,7 @@ wait_for_standin() {
 wait_for_standin "Language" "$language_standin" "$language_port" || exit 1
 wait_for_standin "model" "$model_standin" "$model_port" || exit 1
 wait_for_standin "layout" "$layout_standin" "$layout_port" || exit 1
+wait_for_standin "search" "$search_standin" "$search_port" || exit 1
 
 # The manual's rules, as chunks with vectors in schema `retrieval`. The job is
 # one-off and safe to run again: once the manual is ingested a run changes

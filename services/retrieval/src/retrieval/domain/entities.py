@@ -1,5 +1,6 @@
 """What the service works with: the parsed manual, a chunk, the record every store holds, and a chunk as a search reads it."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from contracts.enums import ChunkSet
@@ -161,3 +162,71 @@ class IndexedChunk:
     # The cosine distance from the query's vector, 0 to 2, when the chunk
     # was found by the vector search; None otherwise.
     cosine_distance: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IndexDocument:
+    """AD-11, row `r5`: one `smart` chunk record as the search service's index holds it.
+
+    The stored record and nothing else: the same id, text, context line and
+    vector as the chunk table has. Nothing is cut again and nothing is
+    embedded for the index.
+    """
+
+    chunk_id: str
+    chunk_set: ChunkSet
+    rule_ids: tuple[str, ...]
+    reference_rule_ids: tuple[str, ...]
+    section_id: str
+    section_title: str
+    impairment: str
+    manual_page: int
+    text: str
+    context_line: str
+    embedding: tuple[float, ...]
+    # The record's own hash, of what its context line and vector were made from.
+    content_hash: str
+    embedding_deployment: str
+    # A hash of every field above but the vector, which `content_hash`
+    # stands for: a load uploads a document only where this differs.
+    document_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndexHoldings:
+    """What the search service's index holds, as it says itself."""
+
+    # The service's own count of its documents.
+    count: int
+    # Each document's `document_hash`, by `chunk_id`.
+    document_hashes: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class RankedDocument:
+    """One document of the search service's answer to a query, in the service's order."""
+
+    chunk_id: str
+    rule_ids: tuple[str, ...]
+    text: str
+    manual_page: int
+    impairment: str
+    # The semantic ranker's score as the service gave it: 0 to 4.
+    reranker_score: float
+    # The deployment the document's vector was made with.
+    embedding_deployment: str
+    # The stored record's hash, as the index holds it: another one than
+    # the chunk table's says the document is stale.
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class IndexLoadReport:
+    """Counts of one load of the search service's index, for its log line."""
+
+    documents: int
+    uploaded: int
+    removed: int
+    unchanged: int
+    # Whether the load had to create the index.
+    created: bool = False

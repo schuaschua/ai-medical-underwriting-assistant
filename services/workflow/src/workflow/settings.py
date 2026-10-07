@@ -120,9 +120,12 @@ class Settings(BaseSettings):
     default_retriever_configs: Annotated[list[RetrieverConfig], Field(min_length=1)] = [
         RetrieverConfig.R3
     ]
-    # AD-11: the ladder rows a case may run with in this build: the ones
-    # `verdict` and `retrieval` can answer (each names them in its own code;
-    # a test outside `services/` holds the three lists equal). A start, or a
+    # AD-11: the ladder rows a case may run with here: the ones `verdict`
+    # and `retrieval` answer (each names them by itself; a test outside
+    # `services/` holds the three lists equal). `r5` is named only where
+    # `retrieval` is given a search service
+    # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT), and then in `verdict`'s setting
+    # too (VERDICT_AVAILABLE_RETRIEVER_CONFIGS). A start, or a
     # request for one more verdict run, that names another row is refused
     # with `retriever_not_available` at once, not after every stage and
     # decision.

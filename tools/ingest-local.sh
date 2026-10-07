@@ -4,10 +4,16 @@
 # vectors, in schema `retrieval` of the local PostgreSQL.
 #
 # The Azure environment is down while the stories are built, so Document
-# Intelligence and the Foundry deployments are the stand-ins of
-# packages/synthdata. If they already listen on their ports (./tools/dev.sh
+# Intelligence, the Foundry deployments and Azure AI Search are the stand-ins
+# of packages/synthdata. If they already listen on their ports (./tools/dev.sh
 # starts them) they are used; otherwise this script starts them and stops
 # them again when the job has ended.
+#
+# The job's last step loads the search stand-in's index from the stored
+# chunks and compares the two stores (retrieval row r5). That stand-in keeps
+# its index in memory: under ./tools/dev.sh the index lives as long as the
+# application runs; when this script had to start the stand-in itself, the
+# load is proven and the index is gone when the script ends.
 #
 # Safe to run again: a second run changes nothing and calls no model. It only
 # ever touches this machine: the settings below point at loopback, whatever
@@ -19,6 +25,7 @@ cd "$(dirname "$0")/.."
 
 model_port=5101
 layout_port=5102
+search_port=5103
 started=()
 
 stop_standins() {
@@ -55,6 +62,13 @@ is_standin() {
       curl --silent --max-time 3 \
         "http://127.0.0.1:${port}/documentintelligence/documentModels/prebuilt-layout/analyzeResults/none" 2>/dev/null |
         grep --quiet 'No such analysis.'
+      ;;
+    search)
+      # The header it puts on every answer, whatever mode it runs in
+      # (SEARCH_STANDIN_MODE=unavailable answers 503 to everything).
+      curl --silent --max-time 3 --include \
+        "http://127.0.0.1:${port}/indexes/none?api-version=2024-07-01" 2>/dev/null |
+        grep --quiet --ignore-case '^x-synthdata-stand-in: search'
       ;;
     *) return 1 ;;
   esac
@@ -95,6 +109,7 @@ fi
 
 ensure_standin "model" synthdata.foundry_standin "$model_port"
 ensure_standin "layout" synthdata.layout_standin "$layout_port"
+ensure_standin "search" synthdata.search_standin "$search_port"
 
 export RETRIEVAL_DATABASE_HOST=127.0.0.1
 export RETRIEVAL_DATABASE_PORT=5432
@@ -117,5 +132,9 @@ export RETRIEVAL_EMBEDDING_DEPLOYMENT="local-stand-in-embedding"
 export RETRIEVAL_INGEST_CHUNK_SETS='["smart", "fixed"]'
 export RETRIEVAL_FIXED_CHUNK_WORDS=350
 export RETRIEVAL_FIXED_CHUNK_OVERLAP_WORDS=35
+# Row r5: the search stand-in, and the index dapr.yaml tells the service to ask.
+export RETRIEVAL_SEARCH_SERVICE_ENDPOINT="http://127.0.0.1:${search_port}"
+export RETRIEVAL_SEARCH_SERVICE_ENTRA_AUTH=false
+export RETRIEVAL_SEARCH_SERVICE_INDEX_NAME="manual-smart"
 
 uv run python -m retrieval.ingest

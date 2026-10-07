@@ -43,6 +43,8 @@ from intake.adapters.http.app import create_app as create_intake
 from intake.settings import Settings as IntakeSettings
 from retrieval import ingest as ingest_job
 from retrieval.adapters.blob import upload_local_manual
+from retrieval.adapters.db import SqlChunkRepository
+from retrieval.adapters.db import build_database as build_retrieval_database
 from retrieval.adapters.http.app import create_app as create_retrieval
 from retrieval.settings import Settings as RetrievalSettings
 from synthdata.foundry_standin import FoundryStandIn
@@ -50,6 +52,7 @@ from synthdata.generate import RULE_TABLE_FILE
 from synthdata.language_standin import LanguageStandIn
 from synthdata.layout_standin import LayoutStandIn
 from synthdata.manual import MANUAL_FILE_NAME
+from synthdata.search_standin import SearchStandIn
 from verdict.adapters.http.app import create_app as create_verdict
 from verdict.settings import Settings as VerdictSettings
 from web.adapters.http.app import create_app as create_web
@@ -62,6 +65,8 @@ CASES_DIR = REPOSITORY_ROOT / "data" / "cases"
 ANSWER_KEY_DIR = REPOSITORY_ROOT / "data" / "answer-key" / "cases"
 MANUAL_PDF = REPOSITORY_ROOT / "data" / "manual" / MANUAL_FILE_NAME
 PDF = {"Content-Type": "application/pdf"}
+# Where the stand-in for Azure AI Search is said to be (`synthdata.search_standin`).
+SEARCH_ENDPOINT = "http://127.0.0.1:5103"
 # So that a failing step is not waited out: the same attempts, closer together.
 FAST_RETRIES = {
     "activity_first_retry_seconds": 0.2,
@@ -340,11 +345,33 @@ class LocalRetrieval:
     The job runs as it really runs (`python -m retrieval.ingest`), with the
     layout stand-in where Document Intelligence would be and the model
     stand-in where the Foundry deployments would be.
+
+    `search` is the stand-in for Azure AI Search (story 3.3). While it is
+    None the job and the service are told of no search service, as before
+    row `r5` was built; a test that sets it gets the index loaded by the
+    job and row `r5` answered by the service.
     """
 
     settings: RetrievalSettings
     layout: LayoutStandIn
     model: FoundryStandIn
+    search: SearchStandIn | None = None
+
+    def _settings(self, changes: dict[str, Any]) -> RetrievalSettings:
+        """The settings of a run: with the search service's endpoint when there is a stand-in for it."""
+        told = dict(changes)
+        if self.search is not None:
+            # Where the stand-in listens when it runs as a process. The
+            # tests hand the job a transport to it and never use the network.
+            told.setdefault("search_service_endpoint", SEARCH_ENDPOINT)
+            told.setdefault("search_service_check_wait_seconds", 0.0)
+            told.setdefault("search_service_retry_seconds", 0.01)
+        return self.settings.model_copy(update=told)
+
+    def _search_transport(self) -> httpx2.AsyncBaseTransport | None:
+        if self.search is None:
+            return None
+        return httpx2.ASGITransport(app=self.search.app())
 
     def upload(self, pdf: Path = MANUAL_PDF) -> None:
         """Put a manual PDF into this test's `manual` container."""
@@ -353,12 +380,29 @@ class LocalRetrieval:
     def ingest(self, **changes: Any) -> int:
         """Run the job once; its exit status."""
         return ingest_job.main(
-            self.settings.model_copy(update=changes),
+            self._settings(changes),
             ingest_job.Transports(
                 layout=httpx2.ASGITransport(app=self.layout.app()),
                 model=httpx2.ASGITransport(app=self.model.app()),
+                search=self._search_transport(),
             ),
         )
+
+    def load_index(self) -> None:
+        """Run the job's last step alone: load the search stand-in's index from the stored chunks."""
+        settings = self._settings({})
+
+        async def load() -> object:
+            database = build_retrieval_database(settings)
+            try:
+                return await ingest_job.load_index(
+                    settings, SqlChunkRepository(database), self._search_transport()
+                )
+            finally:
+                await database.dispose()
+
+        loaded = asyncio.run(load())
+        assert not isinstance(loaded, Exception), loaded
 
     def chunks(self) -> dict[str, dict[str, Any]]:
         """Every stored chunk, by `chunk_id`."""
@@ -390,8 +434,9 @@ class LocalRetrieval:
     def app(self, **changes: Any) -> Any:
         """A new instance of the service, with the model stand-in behind its gateway."""
         return create_retrieval(
-            self.settings.model_copy(update=changes),
+            self._settings(changes),
             model_transport=httpx2.ASGITransport(app=self.model.app()),
+            search_transport=self._search_transport(),
         )
 
 

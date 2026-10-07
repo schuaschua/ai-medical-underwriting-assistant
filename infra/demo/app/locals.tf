@@ -111,6 +111,14 @@ locals {
     { name = "RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS", value = tostring(var.search_embedding_timeout_seconds) },
     { name = "RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES", value = tostring(var.search_embedding_max_retries) },
     { name = "RETRIEVAL_SEARCH_DEADLINE_SECONDS", value = tostring(var.search_deadline_seconds) },
+    # Spine AD-11, row r5: the Azure AI Search service of the foundation
+    # stack, reached with the service identity (there is no key). The job
+    # loads the index from the stored chunks; the service queries it. With
+    # this endpoint set, r5 belongs in var.available_retriever_configs.
+    { name = "RETRIEVAL_SEARCH_SERVICE_ENDPOINT", value = local.foundation.search_endpoint },
+    { name = "RETRIEVAL_SEARCH_SERVICE_ENTRA_AUTH", value = "true" },
+    { name = "RETRIEVAL_SEARCH_SERVICE_INDEX_NAME", value = var.search_index_name },
+    { name = "RETRIEVAL_SEARCH_SERVICE_API_VERSION", value = var.search_api_version },
     # The job's own deadline: under the platform's limit on one execution
     # (var.ingest_timeout_seconds), so that the job ends itself and says why.
     { name = "RETRIEVAL_INGEST_DEADLINE_SECONDS", value = tostring(var.ingest_deadline_seconds) },
@@ -149,5 +157,8 @@ locals {
     # the confidence under which a run refers its case.
     { name = "VERDICT_STEP_LIMIT", value = tostring(var.verdict_step_limit) },
     { name = "VERDICT_CONFIDENCE_FLOOR", value = tostring(var.verdict_confidence_floor) },
+    # Spine AD-11: the ladder rows a verdict may be commanded with, the same
+    # list workflow is given.
+    { name = "VERDICT_AVAILABLE_RETRIEVER_CONFIGS", value = jsonencode(var.available_retriever_configs) },
   ]
 }

@@ -1,8 +1,9 @@
-"""Story 2.3: the search and the rule read, on fakes.
+"""Stories 2.3, 3.2 and 3.3: the search and the rule read, on fakes.
 
 No database, no model and no network: the index is a list a test writes, and
 the gateway a stub. The two statements themselves are tested against
-PostgreSQL in `test_retrieval_search_integration.py`.
+PostgreSQL in `test_retrieval_search_integration.py`. For row `r5` the real
+client of the search service runs against a transport that stands in for it.
 """
 
 import asyncio
@@ -25,17 +26,19 @@ from retrieval_fakes import (
     RULE_A,
     RULE_B,
     RULE_C,
+    FakeSearchService,
     MemoryIndex,
     MemorySchemaRevision,
     StubModel,
     axis,
     chunk_record,
     fixed_record,
+    search_document,
     vector_for,
 )
 
 from contracts.enums import ChunkSet, RetrieverConfig
-from contracts.errors import DomainError, ErrorBody, ErrorCode
+from contracts.errors import ErrorBody, ErrorCode
 from contracts.models.retrieval import (
     MAX_TOP_K,
     RuleText,
@@ -46,10 +49,9 @@ from retrieval.adapters.http.app import (
     create_app,
 )
 from retrieval.adapters.http.routes import Dependencies
+from retrieval.adapters.search_index import SearchIndex, build_search_http
 from retrieval.domain.fusion import RRF_K, Fused, reciprocal_rank_fusion
-from retrieval.domain.rows import (
-    row_to_search,
-)
+from retrieval.domain.rows import BUILT_ROWS, available_rows
 from retrieval.domain.search import (
     SearchOptions,
     SearchPorts,
@@ -81,13 +83,38 @@ def index() -> MemoryIndex:
     )
 
 
+SEARCH_ENDPOINT = "http://127.0.0.1:5103"
+
+
+def search_client(
+    settings: Settings, service: FakeSearchService, **options: Any
+) -> SearchIndex:
+    """The real client of the search service, with the fake where the service would be."""
+    of = settings.model_copy(update={"search_service_endpoint": SEARCH_ENDPOINT})
+
+    async def at_once(seconds: float) -> None:
+        return None
+
+    return SearchIndex(
+        build_search_http(of, service.transport()),
+        index_name=of.search_service_index_name,
+        api_version=of.search_service_api_version,
+        sleep=at_once,
+        **options,
+    )
+
+
 @contextmanager
 def service_with(
-    settings: Settings, model: Any, index: MemoryIndex, **options: Any
+    settings: Settings,
+    model: Any,
+    index: MemoryIndex,
+    search_service: SearchIndex | None = None,
+    **options: Any,
 ) -> Iterator[TestClient]:
     """The app around a model and an index of the test's own; a gateway is closed afterwards."""
     dependencies = Dependencies(
-        search=SearchPorts(model=model, index=index),
+        search=SearchPorts(model=model, index=index, search_service=search_service),
         schema_revision=MemorySchemaRevision("head"),
         head_revision="head",
         options=SearchOptions(**options),
@@ -113,20 +140,6 @@ def search(client: TestClient, **body: Any) -> httpx2.Response:
 def found(response: httpx2.Response) -> SearchResponse:
     assert response.status_code == 200, response.text
     return SearchResponse.model_validate(response.json())
-
-
-# --- The row table ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("config", ["r4"])
-def test_story_2_3_a_row_that_is_not_built_is_refused_as_not_available(
-    config: str,
-) -> None:
-    with pytest.raises(DomainError) as refused:
-        row_to_search(RetrieverConfig(config))
-
-    assert refused.value.code is ErrorCode.RETRIEVER_NOT_AVAILABLE
-    assert "not available" in refused.value.message
 
 
 # --- Reciprocal rank fusion, alone ---------------------------------------------------------
@@ -199,19 +212,13 @@ def test_story_2_3_a_search_with_r3_answers_ranked_items_with_every_field(
     ]
 
 
-@pytest.mark.parametrize("top_k", [MAX_TOP_K + 1])
-def test_story_2_3_top_k_outside_its_bounds_is_refused(
-    client: TestClient, index: MemoryIndex, model: StubModel, top_k: Any
+def test_story_2_3_an_unknown_row_or_a_top_k_outside_its_bounds_is_refused_by_validation(
+    client: TestClient, index: MemoryIndex, model: StubModel
 ) -> None:
-    response = search(client, top_k=top_k)
+    response = search(client, top_k=MAX_TOP_K + 1)
 
     assert error_of(response) == (422, ErrorCode.VALIDATION_FAILED)
     assert model.calls == 0 and index.asked == []
-
-
-def test_story_2_3_an_unknown_row_is_refused_by_validation_with_a_plain_message(
-    client: TestClient, model: StubModel
-) -> None:
     for config in ("r9", "R3", "", None):
         response = search(client, retriever_config=config)
 
@@ -242,9 +249,13 @@ class NeverReads(MemoryIndex):
         await asyncio.Event().wait()
 
 
-def test_story_2_3_a_search_whose_model_does_not_answer_in_time_is_model_unavailable(
-    settings: Settings, index: MemoryIndex, caplog: pytest.LogCaptureFixture
+def test_story_2_3_a_search_that_outlasts_its_deadline_says_what_did_not_answer_in_time(
+    settings: Settings,
+    index: MemoryIndex,
+    model: StubModel,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    answering = model
     model = NeverAnswers()
 
     with (
@@ -259,13 +270,10 @@ def test_story_2_3_a_search_whose_model_does_not_answer_in_time_is_model_unavail
     assert "search deadline passed: retriever_config=r3 waited_for=model" in caplog.text
     assert "SECRET" not in caplog.text
 
-
-def test_story_2_3_a_search_whose_index_does_not_answer_in_time_is_upstream_unavailable(
-    settings: Settings, model: StubModel, index: MemoryIndex
-) -> None:
+    # The model answers and the index does not.
     slow = NeverReads(index.records, index.vector_order, index.text_order)
 
-    with service_with(settings, model, slow, deadline_seconds=0.05) as client:
+    with service_with(settings, answering, slow, deadline_seconds=0.05) as client:
         response = search(client)
 
     assert error_of(response) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
@@ -284,7 +292,7 @@ def test_story_2_3_a_search_is_refused_when_the_index_was_embedded_with_another_
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     index.embedding_deployment = "another-embedding"
-    options = {"embedding_deployment": EMBEDDING}
+    options: dict[str, Any] = {"embedding_deployment": EMBEDDING}
 
     with (
         service_with(settings, model, index, **options) as client,
@@ -442,3 +450,192 @@ def test_story_3_2_a_rule_read_on_r1_answers_the_references_of_that_rules_own_de
     assert second["reference_rule_ids"] == [RULE_C]
     # The text is the chunk, whole.
     assert first["text"] == second["text"]
+
+
+# --- Row r5 on Azure AI Search (story 3.3) ----------------------------------------------------
+
+
+@pytest.fixture
+def search_service(index: MemoryIndex) -> FakeSearchService:
+    """The search service's index, holding the four chunks pgvector holds."""
+    return FakeSearchService(
+        definition={"name": "manual-smart"},
+        documents={
+            record.chunk.chunk_id: search_document(record) for record in index.records
+        },
+    )
+
+
+def test_story_3_3_a_search_with_r5_answers_the_services_reranked_order_in_the_common_shape(
+    settings: Settings,
+    model: StubModel,
+    index: MemoryIndex,
+    search_service: FakeSearchService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The index is behind pgvector: it still holds a chunk the manual lost.
+    gone = chunk_record("UW-ZZ-009", "Gone.", axis(5))
+    search_service.documents[gone.chunk.chunk_id] = search_document(gone)
+    search_service.ranked = [
+        (f"smart-{RULE_C}", 3.0),
+        ("smart-UW-ZZ-009", 2.5),
+        (f"smart-{RULE_A}", 1.0),
+        # Outside the documented range: cut to it.
+        (f"smart-{RULE_B}", 4.6),
+    ]
+    odd = 'SECRET-QUERY "HbA1c" (7.4 %) -stable + raised|high'
+    options = {"embedding_deployment": EMBEDDING}
+
+    with (
+        service_with(
+            settings, model, index, search_client(settings, search_service), **options
+        ) as client,
+        caplog.at_level(logging.INFO),
+    ):
+        result = found(search(client, query=odd, retriever_config="r5", top_k=5))
+        rule = client.get(f"/rules/{RULE_A}", params={"retriever_config": "r5"})
+        # A stale document, of an id pgvector holds with another content
+        # hash (a load failed after the chunk changed), is left out too.
+        search_service.documents[f"smart-{RULE_C}"]["content_hash"] = "1" * 64
+        without_stale = found(search(client, retriever_config="r5"))
+        # The run record names another deployment while every document
+        # carries the configured one: refused before the service is asked.
+        asked = len(search_service.queries)
+        index.embedding_deployment = "another-embedding"
+        by_record = search(client, retriever_config="r5")
+        not_asked = len(search_service.queries) == asked
+        index.embedding_deployment = EMBEDDING
+        # A document whose vector another deployment made is not answered.
+        search_service.documents[f"smart-{RULE_A}"]["embedding_deployment"] = "other"
+        refused = search(client, retriever_config="r5")
+
+    # The service's order, kept; the chunk pgvector does not hold left out
+    # and the ranks counted on without a gap.
+    assert result.retriever_config is RetrieverConfig.R5
+    assert [item.rule_ids for item in result.items] == [[RULE_C], [RULE_A], [RULE_B]]
+    assert [item.rank for item in result.items] == [1, 2, 3]
+    # The reranker's 0 to 4, divided by 4.
+    assert [item.score for item in result.items] == [0.75, 0.25, 1.0]
+    assert result.items[0].model_dump() == {
+        "chunk_id": f"smart-{RULE_C}",
+        "rule_ids": [RULE_C],
+        "rank": 1,
+        "score": 0.75,
+        "text": f"Rule {RULE_C}: Gout.",
+        "manual_page": 40,
+        "impairment": "Gout",
+    }
+    # One embedding call, with the query as it was asked; one hybrid query
+    # with the semantic ranker, exact vector search, and no operator in its text.
+    assert model.embedded[0] == [odd]
+    sent = search_service.queries[0]
+    assert sent["search"] == (
+        r"SECRET-QUERY \"HbA1c\" \(7.4 %\) \-stable \+ raised\|high"
+    )
+    assert (sent["queryType"], sent["semanticErrorHandling"]) == ("semantic", "fail")
+    assert sent["semanticConfiguration"] == "rules" and sent["top"] == 5
+    assert sent["vectorQueries"] == [
+        {
+            "kind": "vector",
+            "vector": vector_for(odd),
+            "fields": "embedding",
+            # As many vector candidates as row `r3` hands its fusion.
+            "k": 50,
+            "exhaustive": True,
+        }
+    ]
+    assert "left_out=1 max_reranker_score=4.6 items=3" in caplog.text
+    assert [item.rule_ids for item in without_stale.items] == [[RULE_A], [RULE_B]]
+    assert "left_out=2 max_reranker_score=4.6 items=2" in caplog.text
+    assert error_of(by_record) == (503, ErrorCode.MODEL_UNAVAILABLE) and not_asked
+    assert (
+        "search service answered chunks pgvector does not hold: count=1 "
+        "chunk_ids=smart-UW-ZZ-009"
+    ) in caplog.text
+    # A rule read for `r5` answers the `smart` chunk from pgvector.
+    assert rule.json()["chunk_id"] == f"smart-{RULE_A}"
+    # Neither of pgvector's two lists was read by the searches.
+    assert index.asked == [("defining", ChunkSet.SMART, RULE_A)]
+    assert error_of(refused) == (503, ErrorCode.MODEL_UNAVAILABLE)
+    assert "another embedding model" in refused.json()["error"]["message"]
+    assert "SECRET" not in caplog.text
+
+
+def test_story_3_3_without_a_search_endpoint_r5_is_refused_and_the_other_rows_answer(
+    settings: Settings,
+    model: StubModel,
+    index: MemoryIndex,
+    search_service: FakeSearchService,
+) -> None:
+    index.records.append(fixed_record(1, f"Rule {RULE_A}: Mild.", axis(1), [RULE_A]))
+
+    with service_with(settings, model, index) as client:
+        refused = search(client, retriever_config="r5")
+        calls = model.calls
+        answered = {
+            row: len(found(search(client, retriever_config=row)).items)
+            for row in ("r1", "r2", "r3")
+        }
+        # A row that is not built is refused the same way, endpoint or not.
+        not_built = search(client, retriever_config="r4")
+
+    assert error_of(refused) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
+    assert refused.json()["error"]["message"] == (
+        "That retrieval row is not available here. "
+        "Rows r1, r2 and r3 can be used for now."
+    )
+    # Refused before anything is spent, and nothing was asked of a service.
+    assert calls == 0 and search_service.requests == []
+    assert answered == {"r1": 1, "r2": 3, "r3": 4}
+    assert error_of(not_built) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
+    # The rows a service answers, without a search service and with one.
+    assert {row.value for row in available_rows(False)} == {"r1", "r2", "r3"}
+    assert {row.value for row in available_rows(True)} == {"r1", "r2", "r3", "r5"}
+    assert available_rows(True) == BUILT_ROWS
+    with service_with(
+        settings, model, index, search_client(settings, search_service)
+    ) as client:
+        assert found(search(client, retriever_config="r5")).items == []
+        assert "r5" in search(client, retriever_config="r4").json()["error"]["message"]
+
+
+def test_story_3_3_a_search_service_that_is_down_or_slow_gives_no_partial_answer(
+    settings: Settings,
+    model: StubModel,
+    index: MemoryIndex,
+    search_service: FakeSearchService,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    search_service.ranked = [(f"smart-{RULE_A}", 2.0), (f"smart-{RULE_B}", None)]
+    once_more = search_client(settings, search_service, max_retries=1)
+
+    with (
+        service_with(settings, model, index, once_more) as client,
+        caplog.at_level(logging.INFO),
+    ):
+        # An answer without the ranker's score for one document.
+        unranked = search(client, retriever_config="r5")
+        search_service.status = 503
+        down = search(client, retriever_config="r5")
+        asked = search_service.count("query"), len(search_service.requests)
+        # The pgvector rows do not need the search service.
+        assert len(found(search(client)).items) == 4
+    search_service.status, search_service.never_answers = None, True
+    with service_with(
+        settings,
+        model,
+        index,
+        search_client(settings, search_service),
+        deadline_seconds=0.05,
+    ) as client:
+        slow = search(client, retriever_config="r5")
+
+    for response in (unranked, down, slow):
+        assert error_of(response) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
+        assert "items" not in response.json()
+    assert "search service" in slow.json()["error"]["message"]
+    # Down: the one query, and once more.
+    assert asked == (1, 3)
+    assert "reason=search_query_malformed" in caplog.text
+    assert "reason=search_query_status_503" in caplog.text
+    assert "SECRET" not in caplog.text

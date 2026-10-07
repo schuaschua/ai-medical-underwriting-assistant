@@ -541,7 +541,9 @@ def test_story_2_1_generation_fails_when_the_manual_and_the_table_disagree() -> 
 # ---------------------------------------------------------------------------
 
 
-def test_story_2_1_regenerating_gives_the_same_manual_and_rule_table() -> None:
+def test_story_2_1_regenerating_gives_the_same_manual_and_rule_table_which_are_what_is_committed(
+    generated: Path, pages: list[str]
+) -> None:
     first, second = render_manual(MANUAL), render_manual(MANUAL)
 
     # Byte for byte in one process, so nothing in the file depends on the run.
@@ -552,10 +554,6 @@ def test_story_2_1_regenerating_gives_the_same_manual_and_rule_table() -> None:
         == rule_table_for(MANUAL, second).model_dump_json()
     )
 
-
-def test_story_2_1_committed_manual_and_rule_table_are_what_the_generator_writes(
-    generated: Path, pages: list[str]
-) -> None:
     # Acceptance: a fresh run leaves `data/` unchanged in git.
     assert (COMMITTED / RULE_TABLE_FILE).read_bytes() == (
         generated / RULE_TABLE_FILE
