@@ -1,8 +1,10 @@
 """The model gateway: the one module that calls the Foundry deployments (spine AD-16).
 
-Two calls: the shared chat deployment writes one chunk's context line, and
-the one embedding deployment turns texts into vectors: a chunk's at
-ingestion and a query's at search, the same way. The gateway does not
+Three calls: the shared chat deployment writes one chunk's context line at
+ingestion and, for a search with row `r4`, says how relevant each fused
+candidate is to the query; and the one embedding deployment turns texts
+into vectors: a chunk's at ingestion and a query's at search, the same
+way. The gateway does not
 judge what comes back; the domain does. A call answered 429 or 5xx (or 408
 or 409), or not answered at all, is sent again up to three times, waiting as
 long as `Retry-After` asks or else longer each time, and then the model is
@@ -14,10 +16,11 @@ counts and timings.
 """
 
 import asyncio
+import contextlib
 import logging
 import math
 import random
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from typing import Any
 
 import httpx2
@@ -35,7 +38,8 @@ from retrieval.domain.ports import (
     ModelCallFailed,
     ModelUnavailable,
 )
-from retrieval.prompts import CHUNK_CONTEXT, load_prompt
+from retrieval.domain.rerank import CHUNK_ID_FIELD, RANKING_FIELD, RELEVANCE_FIELD
+from retrieval.prompts import CHUNK_CONTEXT, RERANK, load_prompt
 from retrieval.settings import APP_ID, Settings
 
 logger = logging.getLogger(__name__)
@@ -67,6 +71,39 @@ CONTEXT_FORMAT: ResponseFormatJSONSchema = {
         "name": CONTEXT_SCHEMA_NAME,
         "strict": True,
         "schema": CONTEXT_SCHEMA,
+    },
+}
+
+
+# Row `r4`: the reranker's structured output, one entry per candidate. The
+# schema says nothing of the range of a relevance or of which ids may be
+# named: the domain checks both, as it would have to anyway.
+RERANK_SCHEMA_NAME = "rerank_relevance"
+RERANK_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        RANKING_FIELD: {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    CHUNK_ID_FIELD: {"type": "string"},
+                    RELEVANCE_FIELD: {"type": "number"},
+                },
+                "required": [CHUNK_ID_FIELD, RELEVANCE_FIELD],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": [RANKING_FIELD],
+    "additionalProperties": False,
+}
+RERANK_FORMAT: ResponseFormatJSONSchema = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": RERANK_SCHEMA_NAME,
+        "strict": True,
+        "schema": RERANK_SCHEMA,
     },
 }
 
@@ -168,21 +205,25 @@ def _retry_after_seconds(headers: Any) -> float | None:
 
 
 class ModelGateway:
-    """Writes context lines on the chat deployment and vectors on the embedding deployment."""
+    """Writes context lines and rates candidates on the chat deployment, and vectors on the embedding deployment."""
 
     def __init__(
         self,
         client: openai.AsyncOpenAI,
         *,
         embedding_deployment: str,
-        # None in the service, which embeds queries and writes no context
-        # line: only the ingestion job names the chat deployment.
+        # None where the service was told of no chat deployment: it then
+        # embeds queries and rates no candidates (row `r4` is off).
         chat_deployment: str | None = None,
         max_retries: int = 3,
         retry_seconds: float = 1.0,
         max_retry_seconds: float = 30.0,
         max_completion_tokens: int = 2000,
         max_concurrent_calls: int = 5,
+        # Row `r4`: how long the one chat call of a search may take, whatever
+        # the client's own timeout is, and the most tokens of its answer.
+        rerank_timeout_seconds: float = 15.0,
+        rerank_max_completion_tokens: int = 4000,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = random.random,
     ) -> None:
@@ -196,9 +237,18 @@ class ModelGateway:
         # One for the whole process: however many chunks are written at
         # once, no more calls than this are with the deployments at a time.
         self._calls = asyncio.Semaphore(max_concurrent_calls)
+        # Row `r4`: a rerank call is slow, and takes its place under the
+        # same cap. Rerank calls together may hold all of it but one slot,
+        # so that a query's embedding, which has a few seconds, never
+        # waits behind a full house of them. (With a cap of one there is
+        # no slot to leave.)
+        self._rerank_calls = asyncio.Semaphore(max(1, max_concurrent_calls - 1))
         self._sleep = sleep
         self._jitter = jitter
         self._prompt = load_prompt(CHUNK_CONTEXT)
+        self._rerank_timeout_seconds = rerank_timeout_seconds
+        self._rerank_max_completion_tokens = rerank_max_completion_tokens
+        self._rerank_prompt = load_prompt(RERANK)
 
     async def aclose(self) -> None:
         await self._client.close()
@@ -224,6 +274,44 @@ class ModelGateway:
             )
 
         completion = await self._call("context_line", deployment, send)
+        return _answer_of(completion)
+
+    async def relevance(self, query_and_candidates: str) -> str:
+        """Row `r4`: one chat completion that rates the candidates; the answer as the model gave it.
+
+        It shares the cap on concurrent calls with every other call of this
+        gateway, of which rerank calls leave one slot free, and has a
+        timeout of its own: a chat call does not fit the few seconds a
+        query's embedding gets. A call that timed out is not sent again:
+        the search's deadline would pass before a second one is answered,
+        and its prompt would be paid for and thrown away.
+        """
+        deployment = self._chat_deployment
+        if deployment is None:
+            raise ModelCallFailed("chat_deployment_not_set")
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": self._rerank_prompt},
+            # The query and the chunks are data: they go in the user turn,
+            # never in the instructions (security rule 14).
+            {"role": "user", "content": query_and_candidates},
+        ]
+
+        async def send() -> Any:
+            return await self._client.chat.completions.create(
+                model=deployment,
+                messages=messages,
+                response_format=RERANK_FORMAT,
+                max_completion_tokens=self._rerank_max_completion_tokens,
+                timeout=self._rerank_timeout_seconds,
+            )
+
+        completion = await self._call(
+            "rerank",
+            deployment,
+            send,
+            part=self._rerank_calls,
+            again_after_timeout=False,
+        )
         return _answer_of(completion)
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
@@ -252,17 +340,42 @@ class ModelGateway:
         longest = min(self._retry_seconds * 2.0 ** (retry - 1), self._max_retry_seconds)
         return longest * (0.5 + 0.5 * self._jitter())
 
+    @contextlib.asynccontextmanager
+    async def _slot(self, part: asyncio.Semaphore | None) -> AsyncIterator[None]:
+        """One slot of the cap; for a call that may use only a part of it, a slot of that part first.
+
+        The part is waited for before the cap, never while holding a slot
+        of it: calls that wait for their part hold up nobody else.
+        """
+        if part is None:
+            async with self._calls:
+                yield
+            return
+        async with part, self._calls:
+            yield
+
     async def _call(
-        self, operation: str, deployment: str, send: Callable[[], Awaitable[Any]]
+        self,
+        operation: str,
+        deployment: str,
+        send: Callable[[], Awaitable[Any]],
+        *,
+        part: asyncio.Semaphore | None = None,
+        again_after_timeout: bool = True,
     ) -> Any:
-        """Send one call until it is answered, at most `max_retries` more times."""
+        """Send one call until it is answered, at most `max_retries` more times.
+
+        `part` limits how many such calls are under way at once, inside
+        the cap. Without `again_after_timeout` a call that got no answer
+        in its time is not sent again.
+        """
         with adapter_span(tracer, f"retrieval.model.{operation}") as span:
             span.set_attribute("gen_ai.request.model", deployment)
             # AD-16: the first attempt, then up to `max_retries` more.
             for attempt in range(1, self._max_retries + 2):
                 span.set_attribute("retrieval.model.attempts", attempt)
                 try:
-                    answer = await self._attempt(deployment, send, attempt)
+                    answer = await self._attempt(deployment, send, attempt, part)
                 except _NotAnswered as not_answered:
                     logger.warning(
                         "model call not answered: operation=%s deployment=%s "
@@ -272,6 +385,8 @@ class ModelGateway:
                         attempt,
                         not_answered.code,
                     )
+                    if not_answered.timed_out and not again_after_timeout:
+                        break
                     if attempt <= self._max_retries:
                         await self._sleep(not_answered.wait_seconds)
                     continue
@@ -293,12 +408,16 @@ class ModelGateway:
                 "model unavailable: operation=%s deployment=%s attempts=%d",
                 operation,
                 deployment,
-                self._max_retries + 1,
+                attempt,
             )
             raise ModelUnavailable
 
     async def _attempt(
-        self, deployment: str, send: Callable[[], Awaitable[Any]], attempt: int
+        self,
+        deployment: str,
+        send: Callable[[], Awaitable[Any]],
+        attempt: int,
+        part: asyncio.Semaphore | None = None,
     ) -> Any:
         """One HTTP call, in a span of its own; `_NotAnswered` when it is worth sending again."""
         with adapter_span(tracer, "retrieval.model.attempt") as span:
@@ -306,7 +425,7 @@ class ModelGateway:
             try:
                 # Held only while the call is under way, not while waiting
                 # to retry.
-                async with self._calls:
+                async with self._slot(part):
                     answer = await send()
             except openai.APIStatusError as error:
                 status = error.status_code
@@ -339,7 +458,9 @@ class ModelGateway:
                     if isinstance(cause, TokenUnavailable)
                     else type(error).__qualname__
                 )
-                raise self._not_answered(span, code, attempt, None) from None
+                not_answered = self._not_answered(span, code, attempt, None)
+                not_answered.timed_out = isinstance(error, openai.APITimeoutError)
+                raise not_answered from None
             span.set_attribute("http.response.status_code", 200)
             return answer
 
@@ -361,6 +482,8 @@ class _NotAnswered(Exception):
         super().__init__(code)
         self.code = code
         self.wait_seconds = wait_seconds
+        # Whether the call was sent and got no answer in its time.
+        self.timed_out = False
 
 
 def _usage_of(answer: Any) -> tuple[int, int]:

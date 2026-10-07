@@ -1,4 +1,4 @@
-"""Stories 2.3, 3.2 and 3.3: the search and the rule read over the project's manual, against the rule table.
+"""Stories 2.3, 3.2, 3.3 and 3.7: the search and the rule read over the project's manual, against the rule table.
 
 The manual is ingested by `retrieval`'s job into a real PostgreSQL, and the
 service searches that index, with this package's stand-in where the embedding
@@ -9,6 +9,8 @@ The stand-in's vectors only say which words two texts share. What the real
 `text-embedding-3-large` vectors do to the same queries is a check of the
 final Azure test session. So is row `r5` on the real Azure AI Search: here
 its index is this package's stand-in, loaded by the job from the same chunks.
+And so is row `r4`'s reranker: here the model stand-in rates a candidate by
+the words it shares with the query.
 
 Run `docker compose up --detach --wait` first.
 """
@@ -26,6 +28,7 @@ from synthdata_stack import LocalRetrieval, rule_table
 from contracts.errors import ErrorBody, ErrorCode
 from contracts.models.retrieval import RuleText, SearchResponse
 from contracts.rules import rule_ids_defined_in
+from synthdata.foundry_standin import Mode as ModelMode
 from synthdata.search_standin import Mode as SearchMode
 from synthdata.search_standin import SearchStandIn
 
@@ -245,7 +248,8 @@ def test_story_3_2_rows_r1_r2_and_r3_answer_the_same_shape_each_from_its_own_chu
             assert read.text == fixed[read.chunk_id]["text"]
         not_built = [
             client.post("/searches", json={"query": "q", "retriever_config": row})
-            for row in ("r4", "r5", "r6")
+            # `r5` has no search service here, and `r6` is not built.
+            for row in ("r5", "r6")
         ]
         undefined = client.get("/rules/UW-ZZ-999", params={"retriever_config": "r1"})
 
@@ -335,6 +339,7 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
     rules = rule_table()
     asked = list(rules)[::8]
     places: dict[str, int | None] = {}
+    places_r4: dict[str, int | None] = {}
     embedded_before = retrieval.model.embedding_calls
     with retrieval.service() as client:
         for rule_id in asked:
@@ -357,6 +362,22 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
                     stored["impairment"],
                 )
             places[rule_id] = place_of(rule_id, result)
+            # Story 3.7, row `r4`: the 20 best fused candidates of `r3`, in
+            # the reranker's order. The same chunks, the same shape; only
+            # the order and the scores are its own.
+            candidates = search(client, query, retriever_config="r3", top_k=20)
+            on_r4 = search(client, query, retriever_config="r4")
+            assert on_r4.retriever_config.value == "r4"
+            assert [item.rank for item in on_r4.items] == [1, 2, 3, 4, 5]
+            assert all(0 <= item.score <= 1 for item in on_r4.items)
+            relevance = [item.score for item in on_r4.items]
+            assert relevance == sorted(relevance, reverse=True)
+            fused = {item.chunk_id: item for item in candidates.items}
+            for item in on_r4.items:
+                assert item.model_dump(exclude={"rank", "score"}) == fused[
+                    item.chunk_id
+                ].model_dump(exclude={"rank", "score"})
+            places_r4[rule_id] = place_of(rule_id, on_r4)
         # A rule read for `r5` answers the `smart` chunk from pgvector.
         read = RuleText.model_validate(
             client.get(f"/rules/{asked[0]}", params={"retriever_config": "r5"}).json()
@@ -369,9 +390,13 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
         stand_in.mode = SearchMode.UNAVAILABLE
         down = client.post("/searches", json={"query": "q", "retriever_config": "r5"})
         assert len(search(client, "q").items) == 5
-    # One embedding call per search, and one hybrid query with the semantic
-    # ranker and exact vector search per `r5` search.
-    assert embedded - embedded_before == 2 * len(asked)
+    # One embedding call per search, one hybrid query with the semantic
+    # ranker and exact vector search per `r5` search, and one chat call
+    # with 20 candidates per `r4` search.
+    assert embedded - embedded_before == 4 * len(asked)
+    assert retrieval.model.rerank_calls == len(asked)
+    shown = json.loads(retrieval.model.requests[-1]["messages"][1]["content"])
+    assert len(shown["candidates"]) == 20
     assert len(stand_in.queries) == len(asked)
     for sent in stand_in.queries:
         assert sent["queryType"] == "semantic" and sent["top"] == 5
@@ -392,24 +417,70 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
             ErrorCode.UPSTREAM_UNAVAILABLE
         )
 
-    # A service that is told of no search service: `r5` is refused as not
-    # available and the other rows answer.
-    retrieval.search = None
-    with retrieval.service() as client:
-        refused = client.post(
-            "/searches", json={"query": "q", "retriever_config": "r5"}
+    # Row `r4`'s reranker leaves a candidate out, answers prose, or answers
+    # later than a search with the row may take: no answer, and never the
+    # fused order in its place.
+    stand_in.mode = SearchMode.OK
+    no_answer = []
+    try:
+        with retrieval.service() as client:
+            for mode in (ModelMode.RERANK_INCOMPLETE, ModelMode.INVALID):
+                retrieval.model.mode = mode
+                no_answer.append(
+                    client.post(
+                        "/searches", json={"query": "q", "retriever_config": "r4"}
+                    )
+                )
+        # The embedding and the two reads keep seconds of their own: only
+        # the reranker, which answers after 6 s, is too slow for the 3 s
+        # the row has here.
+        retrieval.model.mode = ModelMode.RERANK_SLOW
+        retrieval.model.rerank_delay_seconds = 6.0
+        with retrieval.service(
+            search_deadline_seconds=3.0,
+            search_embedding_timeout_seconds=3.0,
+            search_service_query_timeout_seconds=3.0,
+            search_rerank_timeout_seconds=3.0,
+            search_rerank_deadline_seconds=3.0,
+        ) as client:
+            no_answer.append(
+                client.post("/searches", json={"query": "q", "retriever_config": "r4"})
+            )
+    finally:
+        retrieval.model.mode = ModelMode.OK
+    for response in no_answer:
+        assert response.status_code == 503, response.text
+        assert ErrorBody.model_validate(response.json()).error.code is (
+            ErrorCode.MODEL_UNAVAILABLE
         )
+
+    # A service that is told of no search service and of no chat deployment:
+    # `r5` and `r4` are refused as not available and the other rows answer.
+    retrieval.search = None
+    with retrieval.service(chat_deployment=None) as client:
+        refused = [
+            client.post("/searches", json={"query": "q", "retriever_config": row})
+            for row in ("r4", "r5")
+        ]
         assert len(search(client, "q").items) == 5
-    assert refused.status_code == 409
-    assert ErrorBody.model_validate(refused.json()).error.code is (
-        ErrorCode.RETRIEVER_NOT_AVAILABLE
-    )
+    for response in refused:
+        assert response.status_code == 409
+        assert ErrorBody.model_validate(response.json()).error.code is (
+            ErrorCode.RETRIEVER_NOT_AVAILABLE
+        )
     with capsys.disabled():
         print(
             f"\nstory 3.3, r5 over the manual with the stand-ins: {len(asked)} named "
             f"queries, {len(documents)} documents; in the top 5 "
             f"{sum(1 for place in places.values() if place is not None)}"
         )
+        print(
+            f"\nstory 3.7, r4 over the manual with the stand-ins: {len(asked)} named "
+            f"queries, 20 candidates each; in the top 5 "
+            f"{sum(1 for place in places_r4.values() if place is not None)}"
+        )
     # The stand-in ranks by shared words: this proves the plumbing. What the
-    # real semantic ranker does is a check of the final Azure test session.
+    # real semantic ranker and the real reranker do is a check of the final
+    # Azure test session.
     assert any(place is not None for place in places.values())
+    assert any(place is not None for place in places_r4.values())

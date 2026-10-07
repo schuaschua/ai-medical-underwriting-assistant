@@ -196,7 +196,9 @@ function resultServer(changes: Partial<Held> = {}) {
         default_pair: { first: "r4", second: "r5" },
         fallback_pair: { first: "r3", second: "r5" },
       }),
-    // As long as story 3.7 has not built `r4`: every other row can be run.
+    // A stack where `r4` is not available (`retrieval` has no chat
+    // deployment for its reranker): every other row can be run. Where `r4`
+    // is listed, as locally and in the app stack, the default pair is shown.
     requestRun: (row) =>
       row === "r4"
         ? json(
@@ -1073,7 +1075,7 @@ describe("3.6 Compare two retrieval rows on one case", () => {
       .map((item) => item.textContent);
   }
 
-  it("asks for the run the pair lacks, uses the fallback pair while r4 is not built, and marks what differs once both runs are done", async () => {
+  it("asks for the run the pair lacks, uses the fallback pair where r4 is not available, and marks what differs once both runs are done", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const first = run().verdict_run_id;
     const server = resultServer({

@@ -51,7 +51,6 @@ from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
     Chunk,
     IngestRun,
-    ParsedLayout,
     StoredChunk,
 )
 from retrieval.domain.ingest import (
@@ -264,38 +263,30 @@ def test_story_3_2_the_fixed_cut_is_the_body_text_in_order_in_runs_of_a_fixed_si
         assert (raised.value.reason, raised.value.where) == (reason, where)
 
 
-@pytest.mark.parametrize(
-    ("parsed", "reason", "where"),
-    [
+def test_story_2_2_the_chunker_checks_its_own_result_and_fails_loudly() -> None:
+    for parsed, reason in (
         # A rule id defined twice.
         (
             layout(["1 Gout", definition(RULE_A)], [definition(RULE_A, "Again.")]),
             "rule_defined_twice",
-            RULE_A,
         ),
         # A definition cut before the end of its sentence.
         (
             layout(["1 Gout", f"Rule {RULE_A}: Threshold: a reading in the"]),
             "definition_cut_short",
-            RULE_A,
         ),
         # A rule the layout model took for a footer.
         (
             layout(["1 Gout", (definition(RULE_A), "pageFooter")]),
             "definition_in_page_furniture",
-            RULE_A,
         ),
-    ],
-)
-def test_story_2_2_the_chunker_checks_its_own_result_and_fails_loudly(
-    parsed: ParsedLayout, reason: str, where: str
-) -> None:
-    with pytest.raises(ManualInvalid) as raised:
-        cut_chunks(parsed)
+    ):
+        with pytest.raises(ManualInvalid) as raised:
+            cut_chunks(parsed)
 
-    assert (raised.value.reason, raised.value.where) == (reason, where)
-    # A code and an id, never text of the manual.
-    assert MARK not in str(raised.value)
+        assert (raised.value.reason, raised.value.where) == (reason, RULE_A)
+        # A code and an id, never text of the manual.
+        assert MARK not in str(raised.value)
 
 
 # --- The run ---------------------------------------------------------------------------------

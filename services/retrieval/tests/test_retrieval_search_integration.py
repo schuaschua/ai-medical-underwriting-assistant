@@ -550,8 +550,9 @@ def test_story_3_2_rows_r1_and_r2_search_by_vector_alone_each_over_its_own_chunk
     assert f"Rule {RULE_B}:" in once.text
     # A row on the `smart` set answers the `smart` chunk, as before.
     assert by_smart_row.json()["chunk_id"] == f"smart-{RULE_B}"
-    # A rule no `fixed` chunk defines is not found; the rows not built yet
-    # are refused as not available.
+    # A rule no `fixed` chunk defines is not found; the rows this service
+    # does not answer (it was given no reranker and no search service, and
+    # `r6` is not built) are refused as not available.
     assert answered(undefined) == (404, ErrorCode.NOT_FOUND)
     assert [answered(response) for response in not_built] == [
         (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)

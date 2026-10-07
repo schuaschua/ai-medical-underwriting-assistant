@@ -1,4 +1,4 @@
-"""A local stand-in for the Foundry model deployments (stories 1.8, 2.2, 2.4, 2.5 and 2.6).
+"""A local stand-in for the Foundry model deployments (stories 1.8, 2.2, 2.4, 2.5, 2.6 and 3.7).
 
 The Azure environment is down while the stories are built, so the services'
 model gateways are proven against this: an HTTP app with the routes the
@@ -6,7 +6,8 @@ gateways call. On `POST /openai/v1/chat/completions` it answers, in the shape
 of a chat completion, what the request's structured output asks for: for
 `classification` a page type and a one-line reason, read from the page text
 in the request; for `retrieval`'s ingestion job the context line of one rule
-of the manual, built from the section and part the request names; for
+of the manual, built from the section and part the request names, and for
+a search with row `r4` the relevance of each candidate to the query; for
 `extraction` the facts of one page, each a statement and a quote, read from
 the page text in the request; for `verdict`'s agent the next turn of its
 conversation, a tool call or the final proposal, worked out from the messages
@@ -19,7 +20,8 @@ that is not on loopback, so it cannot stand in for the models in Azure.
 
 It is not a model. It tells the page types apart by the headings the
 generator prints on the synthetic pages; it does not look at the picture.
-Its context line repeats the headings it was given. Its facts are the labelled
+Its context line repeats the headings it was given. Its relevance of a
+candidate is the share of the query's words the candidate holds. Its facts are the labelled
 values and the table rows the generator prints on the medical pages: it knows
 those labels and nothing of medicine. Its vectors count words:
 each word of a text adds to one of the vector's dimensions, picked by a hash
@@ -58,6 +60,14 @@ DEFAULT_PORT = 5101
 # the one field of its answer.
 CONTEXT_SCHEMA_NAME = "chunk_context"
 CONTEXT_FIELD = "context_line"
+# The name of the structured output a search with row `r4` asks for (story
+# 3.7), the fields of the message it sends and those of the answer.
+RERANK_SCHEMA_NAME = "rerank_relevance"
+RERANK_QUERY_FIELD = "query"
+RERANK_CANDIDATES_FIELD = "candidates"
+RERANK_RANKING_FIELD = "ranking"
+RERANK_CHUNK_ID_FIELD = "chunk_id"
+RERANK_RELEVANCE_FIELD = "relevance"
 # The size of a vector of `text-embedding-3-large`.
 EMBEDDING_DIMENSIONS = 3072
 # A local name for the embedding deployment; the real one is a setting of the
@@ -201,6 +211,11 @@ class Mode(StrEnum):
     WRONG_EFFECT = "wrong_effect"
     LOW_CONFIDENCE = "low_confidence"
     INVALID_ANSWER = "invalid_answer"
+    # The reranker of row `r4` (story 3.7): its answer leaves the last
+    # candidate out, or comes only after `rerank_delay_seconds`. Every other
+    # request is answered as in `ok`.
+    RERANK_INCOMPLETE = "rerank_incomplete"
+    RERANK_SLOW = "rerank_slow"
 
 
 # The flaw of the verdict conversation in each mode that has one. In the
@@ -281,6 +296,46 @@ def context_line_for(rule_place: str) -> str:
     if part is not None:
         line += f", part {part.group(1)} ({part.group(2)})"
     return f"{line}, of the underwriting manual: one rule of that section."
+
+
+def rerank_request_of(body: dict[str, Any]) -> dict[str, Any] | None:
+    """The query and the candidates of a rerank request (story 3.7): its user message, read as JSON.
+
+    None when the request does not ask for the reranker's structured output
+    with one user message that is the object `retrieval` sends.
+    """
+    try:
+        schema = body["response_format"]["json_schema"]
+        if schema["name"] != RERANK_SCHEMA_NAME:
+            return None
+        (user,) = (message for message in body["messages"] if message["role"] == "user")
+        asked = json.loads(user["content"])
+        query = asked[RERANK_QUERY_FIELD]
+        candidates = asked[RERANK_CANDIDATES_FIELD]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not isinstance(query, str) or not isinstance(candidates, list):
+        return None
+    if not all(
+        isinstance(candidate, dict)
+        and isinstance(candidate.get(RERANK_CHUNK_ID_FIELD), str)
+        and isinstance(candidate.get("text"), str)
+        for candidate in candidates
+    ):
+        return None
+    return {RERANK_QUERY_FIELD: query, RERANK_CANDIDATES_FIELD: candidates}
+
+
+def relevance_of(query: str, text: str) -> float:
+    """The relevance the stand-in gives a candidate: the share of the query's words its text holds.
+
+    From 0 to 1. It knows nothing of meaning: a candidate that repeats the
+    query's words is relevant to it, whatever it says.
+    """
+    asked = set(_WORD.findall(query.lower()))
+    if not asked:
+        return 0.0
+    return round(len(asked & set(_WORD.findall(text.lower()))) / len(asked), 6)
 
 
 def page_to_extract_of(body: dict[str, Any]) -> str | None:
@@ -466,6 +521,9 @@ class FoundryStandIn:
         self.embedding_requests: list[dict[str, Any]] = []
         # The size of the vectors it answers with; a test makes it wrong.
         self.embedding_dimensions = EMBEDDING_DIMENSIONS
+        # How long a rerank request waits in the `rerank_slow` mode: longer
+        # than a search with row `r4` may take.
+        self.rerank_delay_seconds = 30.0
         # How often each page was run, by a digest of its text.
         self._runs: Counter[str] = Counter()
         self._lock = threading.Lock()
@@ -493,6 +551,30 @@ class FoundryStandIn:
             # What a model does when it ignores the format it was given.
             return "This rule is about a medical impairment, I think."
         return json.dumps({CONTEXT_FIELD: context_line_for(rule_place)})
+
+    def rerank_answer(self, asked: dict[str, Any]) -> str:
+        """The content of the completion for one rerank request (story 3.7)."""
+        if self.mode is Mode.INVALID:
+            # What a model does when it ignores the format it was given.
+            return "The first candidate looks the most relevant to me."
+        if self.mode is Mode.RERANK_SLOW:
+            time.sleep(self.rerank_delay_seconds)
+        query = asked[RERANK_QUERY_FIELD]
+        ranking = [
+            {
+                RERANK_CHUNK_ID_FIELD: candidate[RERANK_CHUNK_ID_FIELD],
+                RERANK_RELEVANCE_FIELD: relevance_of(query, candidate["text"]),
+            }
+            for candidate in asked[RERANK_CANDIDATES_FIELD]
+        ]
+        if self.mode is Mode.RERANK_INCOMPLETE:
+            ranking = ranking[:-1]
+        return json.dumps({RERANK_RANKING_FIELD: ranking})
+
+    @property
+    def rerank_calls(self) -> int:
+        """How many rerank requests it has had, answered or not."""
+        return sum(rerank_request_of(body) is not None for body in self.requests)
 
     def extraction_answer(self, page_text: str) -> str:
         """The content of the completion for one page's facts (story 2.4)."""
@@ -586,6 +668,15 @@ class FoundryStandIn:
             if not isinstance(model, str) or not model:
                 return _error(400, "invalid_request", "A chat request names its model.")
             return self.verdict_turn(body, model)
+        to_rerank = rerank_request_of(body)
+        if to_rerank is not None and isinstance(model, str) and model:
+            content = self.rerank_answer(to_rerank)
+            return _completion(
+                model,
+                {"role": "assistant", "content": content},
+                prompt_tokens=_words(body.get("messages")),
+                completion_tokens=_words(content),
+            )
         rule_place = rule_place_of(body)
         to_extract = page_to_extract_of(body) if rule_place is None else None
         text = page_text_of(body) if rule_place is None and to_extract is None else None
@@ -597,8 +688,8 @@ class FoundryStandIn:
             return _error(
                 400,
                 "invalid_request",
-                "Not a page classification, a context line, an extraction or a "
-                "verdict request.",
+                "Not a page classification, a context line, a rerank, an "
+                "extraction or a verdict request.",
             )
         if to_extract is not None:
             content = self.extraction_answer(to_extract)

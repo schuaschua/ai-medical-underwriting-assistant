@@ -50,12 +50,12 @@ rows:
   r4:
     store: pgvector
     chunk_set: smart
-    method: Hybrid and a reranker
+    method: "Hybrid, then an LLM reranker on the chat deployment"
     cost: null
     effort:
       amount: "3"
       unit: stories built
-      source: "epics.md: stories 2.2 (ingestion), 2.3 (hybrid search) and 3.7 (reranker, not built yet)"
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (hybrid search) and 3.7 (LLM reranker)"
   r5:
     store: Azure AI Search
     chunk_set: smart

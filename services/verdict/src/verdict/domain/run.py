@@ -101,26 +101,34 @@ class RunPorts:
 # may hold several definitions or the start of one: a reason is checked
 # against the rule's own definition inside the chunk
 # (`effects.definition_of`), and a definition cut off before its rating
-# bears out nothing. `r5` answers the same `smart` chunks as `r2` and `r3`,
+# bears out nothing. `r4` answers the `smart` chunks `r3` finds, in a
+# reranker's order; `r5` answers the same `smart` chunks as `r2` and `r3`,
 # from Azure AI Search.
 RUNNABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
     {
         RetrieverConfig.R1,
         RetrieverConfig.R2,
         RetrieverConfig.R3,
+        RetrieverConfig.R4,
         RetrieverConfig.R5,
     }
 )
+# The rows `retrieval` answers only where it was given the chat deployment,
+# which is its reranker.
+RERANKER_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset({RetrieverConfig.R4})
 # The rows `retrieval` answers only where it was given a search service.
 SEARCH_SERVICE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
     {RetrieverConfig.R5}
 )
 # The rows a verdict may be commanded with unless the settings say otherwise
 # (VERDICT_AVAILABLE_RETRIEVER_CONFIGS): the ones that need no search
-# service. `workflow` and `retrieval` name the same rows, each in its own
-# settings, and a test outside `services/` holds the three lists equal.
+# service and no reranker. `workflow` and `retrieval` name the same rows,
+# each in its own settings, and a test outside `services/` holds the three
+# lists equal.
 DEFAULT_AVAILABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = (
-    RUNNABLE_RETRIEVER_CONFIGS - SEARCH_SERVICE_RETRIEVER_CONFIGS
+    RUNNABLE_RETRIEVER_CONFIGS
+    - SEARCH_SERVICE_RETRIEVER_CONFIGS
+    - RERANKER_RETRIEVER_CONFIGS
 )
 
 

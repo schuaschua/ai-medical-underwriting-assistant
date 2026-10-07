@@ -7,7 +7,9 @@ knows the rows.
 
 A row on Azure AI Search (`r5`) is built and still not available everywhere:
 it needs a search service, and a service that was told of none refuses it
-the same way, while the pgvector rows answer as before.
+the same way, while the pgvector rows answer as before. So is the row with
+a reranker (`r4`): its reranker is the chat deployment, and a service that
+was told of none refuses the row.
 """
 
 from collections.abc import Mapping
@@ -25,6 +27,7 @@ class SearchMethod(StrEnum):
     VECTOR = "vector"
     # Vector and full-text search, fused with reciprocal rank fusion.
     HYBRID = "hybrid"
+    # The fused candidates of `HYBRID`, put in a new order by a reranker.
     HYBRID_RERANKED = "hybrid_reranked"
     AI_SEARCH_HYBRID = "ai_search_hybrid"
     AI_SEARCH_AGENTIC = "ai_search_agentic"
@@ -49,12 +52,19 @@ class RetrieverRow:
         """Whether the row's store is Azure AI Search: it then needs a search endpoint."""
         return self.method in _ON_THE_SEARCH_SERVICE
 
+    @property
+    def needs_reranker(self) -> bool:
+        """Whether the row's order is a reranker's: it then needs the chat deployment."""
+        return self.method is SearchMethod.HYBRID_RERANKED
+
 
 _ROWS = (
     RetrieverRow(RetrieverConfig.R1, ChunkSet.FIXED, SearchMethod.VECTOR, built=True),
     RetrieverRow(RetrieverConfig.R2, ChunkSet.SMART, SearchMethod.VECTOR, built=True),
     RetrieverRow(RetrieverConfig.R3, ChunkSet.SMART, SearchMethod.HYBRID, built=True),
-    RetrieverRow(RetrieverConfig.R4, ChunkSet.SMART, SearchMethod.HYBRID_RERANKED),
+    RetrieverRow(
+        RetrieverConfig.R4, ChunkSet.SMART, SearchMethod.HYBRID_RERANKED, built=True
+    ),
     RetrieverRow(
         RetrieverConfig.R5, ChunkSet.SMART, SearchMethod.AI_SEARCH_HYBRID, built=True
     ),
@@ -63,23 +73,27 @@ _ROWS = (
 ROWS: Mapping[RetrieverConfig, RetrieverRow] = MappingProxyType(
     {row.config: row for row in _ROWS}
 )
-# AD-11: the rows this build can search with, a search service given.
+# AD-11: the rows this build can search with, a search service and a
+# reranker given.
 BUILT_ROWS: frozenset[RetrieverConfig] = frozenset(
     row.config for row in _ROWS if row.built
 )
 
 
-def available_rows(search_service: bool) -> frozenset[RetrieverConfig]:
-    """The rows a service answers: the built ones, less those on a search service it was not given.
+def available_rows(search_service: bool, reranker: bool) -> frozenset[RetrieverConfig]:
+    """The rows a service answers: the built ones, less those that need what it was not given.
 
-    `workflow` and `verdict` each name the rows a case may run with, as a
-    setting; a test outside `services/` holds the three lists equal, with
-    and without a search service.
+    That is a search service (`r5`) and a reranker (`r4`). `workflow` and
+    `verdict` each name the rows a case may run with, as a setting; a test
+    outside `services/` holds the three lists equal, with and without each
+    of the two.
     """
     return frozenset(
         row.config
         for row in _ROWS
-        if row.built and (search_service or not row.needs_search_service)
+        if row.built
+        and (search_service or not row.needs_search_service)
+        and (reranker or not row.needs_reranker)
     )
 
 
@@ -103,15 +117,16 @@ CHUNK_SET_NOT_INGESTED_MESSAGE = (
 
 
 def row_to_search(
-    config: RetrieverConfig, search_service: bool = False
+    config: RetrieverConfig, search_service: bool = False, reranker: bool = False
 ) -> RetrieverRow:
     """The row a search runs with; `retriever_not_available` when this service does not answer it.
 
-    That is a row that is not built yet, and a row on Azure AI Search when
-    the service has no search endpoint (`search_service` false).
+    That is a row that is not built yet, a row on Azure AI Search when the
+    service has no search endpoint (`search_service` false), and the row
+    with a reranker when it has no chat deployment (`reranker` false).
     """
     row = ROWS[config]
-    available = available_rows(search_service)
+    available = available_rows(search_service, reranker)
     if row.config not in available:
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE, row_not_available_message(available)

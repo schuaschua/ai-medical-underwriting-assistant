@@ -1,4 +1,4 @@
-"""Story 3.4: one bake-off run over synthetic cases, against the system as it really runs.
+"""Stories 3.4 and 3.7: one bake-off run over synthetic cases, against the system as it really runs.
 
 `web`, `workflow`, `intake`, `classification`, `extraction`, `retrieval` and
 `verdict`, against a real PostgreSQL, the Durable Task Scheduler emulator and
@@ -46,6 +46,9 @@ pytestmark = pytest.mark.integration
 UNDERWRITER = {"X-Demo-Role": "underwriter"}
 # A case of medical pages only, and one with a blank page.
 CASES = ["case-001", "case-003"]
+# Story 3.7: `retrieval` is given the chat deployment here (the stand-in),
+# so it answers row `r4`, and `workflow` and `verdict` are told of the row.
+ROWS = ["r1", "r2", "r3", "r4"]
 
 
 def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through_web_and_writes_both_files(
@@ -75,17 +78,20 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
-        verdict=verdict.app(),
+        verdict=verdict.app(available_retriever_configs=ROWS),
     )
     case_ids: dict[str, str] = {}
+    workflow_settings = workflow_service_settings.model_copy(
+        update={"available_retriever_configs": ROWS}
+    )
 
-    with workflow_service(workflow_service_settings, behind_workflow) as workflow:
+    with workflow_service(workflow_settings, behind_workflow) as workflow:
         behind_web = ServicesBehindSidecar(
             intake=intake.app(),
             workflow=RunningService(workflow),
             classification=classification.app(),
             extraction=extraction.app(),
-            verdict=verdict.app(),
+            verdict=verdict.app(available_retriever_configs=ROWS),
             retrieval=verdict.retrieval.app(),
         )
         with web_service(tmp_path, behind_web) as web:
@@ -120,23 +126,29 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
 
     board, redaction = result.retrieval, result.redaction
     rows = {row.retriever_config.value: row for row in board.rows}
-    # The rows that are built are measured; the rows that are not built, and
-    # `r5` without a search service, are recorded as not measured.
+    # The rows that are available are measured, `r4` with its reranker
+    # among them; `r5` without a search service and `r6`, which is not
+    # built, are recorded as not measured.
     assert [row.measured for row in board.rows] == [
         True,
         True,
         True,
-        False,
+        True,
         False,
         False,
     ]
+    # The scoreboard names the reranker used.
+    assert rows["r4"].method == "Hybrid, then an LLM reranker on the chat deployment"
+    assert (rows["r4"].store, rows["r4"].chunk_set.value) == ("pgvector", "smart")
+    # Its verdict runs, one per case, were made and none of them failed.
+    assert (rows["r4"].cases, rows["r4"].failed_runs) == (2, 0)
     expected_searches = sum(
         bool(fact["rule_ids"])
         for key in keys.values()
         for fact in key["expected_facts"]
     )
     assert expected_searches >= 1
-    for row in ("r1", "r2", "r3"):
+    for row in ROWS:
         scored = rows[row]
         # One search per expected fact that meets a rule, each answered and timed.
         assert scored.recall_searches == expected_searches
@@ -146,9 +158,9 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
     assert board.failed_searches == [] and board.unscored_cases == []
     # `r3` over the one-rule chunks gives both cases the answer key's verdict.
     assert rows["r3"].right_runs == 2
-    assert board.winner in {"r1", "r2", "r3"}
+    assert board.winner in set(ROWS)
 
-    # Each case was uploaded once, started with the three rows and the run's
+    # Each case was uploaded once, started with the four rows and the run's
     # id, and ran to its end with the waits answered from the page labels:
     # the laboratory report accepted, the blank page discarded.
     assert sorted(case_ids) == CASES
@@ -160,7 +172,7 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
             assert page.page_status.value == wanted, (name, page.page_number)
     actions = [event.action.value for event in trail.events]
     assert "page.discarded" in actions and "page.accepted" in actions
-    assert actions.count("verdict.suggested") == 3
+    assert actions.count("verdict.suggested") == len(ROWS)
     assert {event.eval_run_id for event in trail.events} == {eval_run_id}
     # The runner's cases are in neither of the underwriter's lists.
     assert queue.pages == [] and listed.cases == []

@@ -872,7 +872,7 @@ function Compare({
   }
   if (state.kind === "unavailable") {
     return (
-      // An expected state, not a fault: a row of each pair is not built here.
+      // An expected state, not a fault: a row of each pair is not available here.
       <p role="status">
         {strings.compare.notAvailable(
           state.pairs

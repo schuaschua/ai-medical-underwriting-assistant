@@ -154,6 +154,18 @@ class QueryEmbedder(Protocol):
         ...
 
 
+class Reranker(Protocol):
+    """AD-11, row `r4`: the chat deployment, asked how relevant each candidate is to a query."""
+
+    async def relevance(self, query_and_candidates: str) -> str:
+        """Ask the chat model for the relevance of each candidate; its answer as it gave it.
+
+        The answer is not looked at here: the caller parses it. Raises
+        `ModelUnavailable` or `ModelCallFailed`.
+        """
+        ...
+
+
 class IndexSnapshot(Protocol):
     """The stored chunks as they are at one moment: every read of it sees the same index.
 

@@ -117,6 +117,11 @@ def build_router(dependencies: Dependencies) -> APIRouter:
                     "retrieval.full_text_candidates", stats.full_text_candidates
                 )
                 span.set_attribute("retrieval.items", stats.items)
+                if stats.rerank_asked:
+                    # Row `r4` only: how many candidates the reranker was
+                    # given, and how long its answer took.
+                    span.set_attribute("retrieval.reranked", stats.reranked)
+                    span.set_attribute("retrieval.rerank_ms", stats.rerank_ms)
                 if stats.service_asked:
                     # Row `r5` only: what the search service answered, and
                     # how many of its documents pgvector does not hold.

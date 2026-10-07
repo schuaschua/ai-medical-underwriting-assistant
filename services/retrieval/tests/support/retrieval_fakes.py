@@ -232,10 +232,23 @@ class StubModel:
     vectors_per_call: int | None = None
     shown: list[str] = field(default_factory=list)
     embedded: list[list[str]] = field(default_factory=list)
+    # Row `r4` (story 3.7): what a rerank call is answered with, one answer
+    # for all or a function of the message it was sent; an error raised in
+    # its place; and the messages it was sent.
+    rerank_answer: Any = ""
+    rerank_error: Exception | None = None
+    reranked: list[str] = field(default_factory=list)
 
     @property
     def calls(self) -> int:
-        return len(self.shown) + len(self.embedded)
+        return len(self.shown) + len(self.embedded) + len(self.reranked)
+
+    async def relevance(self, query_and_candidates: str) -> str:
+        self.reranked.append(query_and_candidates)
+        if self.rerank_error is not None:
+            raise self.rerank_error
+        answer = self.rerank_answer
+        return str(answer(query_and_candidates) if callable(answer) else answer)
 
     async def context_line(self, rule_in_its_place: str) -> str:
         self.shown.append(rule_in_its_place)
@@ -557,6 +570,21 @@ def completion(content: Any = None) -> dict[str, Any]:
         ],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
+
+
+def rerank_answer(relevance: Mapping[str, Any]) -> str:
+    """The reranker's answer, as the prompt asks for it: one entry per candidate.
+
+    A test may give a relevance that is no number, as a model might.
+    """
+    return json.dumps(
+        {
+            "ranking": [
+                {"chunk_id": chunk_id, "relevance": value}
+                for chunk_id, value in relevance.items()
+            ]
+        }
+    )
 
 
 def embedding_answer(

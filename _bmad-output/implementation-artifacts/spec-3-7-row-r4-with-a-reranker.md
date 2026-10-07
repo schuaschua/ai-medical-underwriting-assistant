@@ -2,7 +2,8 @@
 title: 'Story 3.7: Row r4 with a reranker'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'd28b713d6a863839d97d0eb59e9674e2f73371c0'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -68,11 +69,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `services/retrieval/` -- the shared candidates step, the reranker port and its chat call with the prompt, row `r4` with its deadline and settings, availability by the chat deployment
-- [ ] `packages/synthdata/` -- the chat stand-in answers a rerank request by word overlap, with its failure modes
-- [ ] `services/verdict/`, `services/workflow/`, `dapr.yaml`, `tools/`, `infra/demo/app/` -- `r4` available where the chat deployment is set; the callers' timeouts above `r4`'s deadline
-- [ ] Tests, inside the budgets: a search on `r4` (order, scores, same candidates as `r3`), a bad answer, not configured, the slow reranker; the three-lists test and the test over the real manual extended in place
-- [ ] `evals/static-metrics.yaml`, `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- the reranker named; what changed; the Azure checks
+- [x] `services/retrieval/` -- the shared candidates step, the reranker port and its chat call with the prompt, row `r4` with its deadline and settings, availability by the chat deployment
+- [x] `packages/synthdata/` -- the chat stand-in answers a rerank request by word overlap, with its failure modes
+- [x] `services/verdict/`, `services/workflow/`, `dapr.yaml`, `tools/`, `infra/demo/app/` -- `r4` available where the chat deployment is set; the callers' timeouts above `r4`'s deadline
+- [x] Tests, inside the budgets: a search on `r4` (order, scores, same candidates as `r3`), a bad answer, not configured, the slow reranker; the three-lists test and the test over the real manual extended in place
+- [x] `evals/static-metrics.yaml`, `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- the reranker named; what changed; the Azure checks
 
 **Acceptance Criteria:**
 - Given the local stack, when a search runs with `r4`, then it takes `r3`'s candidates, reranks them and answers the common shape.
@@ -81,9 +82,52 @@ context:
 
 ## Implementation Notes
 
+- **The shared step:** `domain/search.py`, `fused_candidates` (the embedding, the deployment guard, the two reads in one view, the fusion) is called by `hybrid_search` (`r3`, which then ranks as before) and by `hybrid_reranked_search` (`r4`). `r4` gives the reranker the best `max(rerank_depth, top_k)` fused candidates; with none it asks no model and answers no items.
+- **The reranker:** port `Reranker.relevance(query_and_candidates) -> str` (`domain/ports.py`); `domain/rerank.py` builds the message (one JSON object: `query`, and `candidates` with `chunk_id`, `impairment`, `text`, in the fused order) and reads the answer (`relevance_by_chunk`: the object `{"ranking": [{"chunk_id", "relevance"}]}`, every candidate once and no other, each a number from 0 to 1, else `RerankAnswerInvalid` with a reason code). `ModelGateway.relevance` (`adapters/model.py`) is one chat completion with the strict schema `rerank_relevance`, the prompt `prompts/rerank.md` as the system message and the message as the user turn, through `_call` (the same retries and the one semaphore), with a per-call timeout. The items are sorted by relevance, stable, so ties keep the fused order; `score` is the relevance.
+- **Failures:** an unusable answer, a model that gave up after its retries and a passed deadline are `model_unavailable` (503); a call the model refuses (4xx) is `upstream_unavailable`, as for a query's embedding. The log has `rerank answer invalid: reason=... candidates=N` and `search deadline passed: retriever_config=r4 waited_for=reranker`. The fused order is never answered.
+- **Budget:** `SearchOptions.rerank_depth` 20 and `rerank_deadline_seconds` 20 (`deadline_of(row, options)` picks the row's deadline); settings `RETRIEVAL_SEARCH_RERANK_DEPTH`, `..._TIMEOUT_SECONDS` (15), `..._DEADLINE_SECONDS` (20), `..._MAX_COMPLETION_TOKENS` (4000), with validators (timeout not over the deadline; the deadline not under the other rows'). `verdict`'s `upstream_timeout_seconds` went from 12 to 25; `web`'s 30 and the runner's 30 were already above and are untouched. The three-lists test holds all three above `r4`'s deadline.
+- **Availability:** `rows.available_rows(search_service, reranker)`; `R4` is built and `needs_reranker`. `SearchPorts.reranker` is the query gateway where `RETRIEVAL_CHAT_DEPLOYMENT` is set, else None, and `r4` is then 409 `retriever_not_available` (said once at start-up). `verdict`: `RUNNABLE_RETRIEVER_CONFIGS` holds `r4`, new `RERANKER_RETRIEVER_CONFIGS`, defaults still `r1` to `r3`. `dapr.yaml` gives `retrieval` the chat deployment and the three rerank settings and lists `r4` for `workflow` and `verdict`; `infra/demo/app` lists `r4` (tfvars, the validation) and passes three new variables (`search_rerank_depth`, `search_rerank_timeout_seconds`, `search_rerank_deadline_seconds`, the last held under 25). `locals.tf` already gave the chat deployment. Formatted and validated only; nothing planned or applied; `infra/demo/foundation` untouched.
+- **Stats:** `SearchStats.rerank_asked`, `reranked`, `rerank_ms`; the search log line gained `reranked=` and `rerank_ms=`, the span `retrieval.reranked` and `retrieval.rerank_ms` (for `r4` only). The gateway logs `model call: operation=rerank` with token counts.
+- **Stand-in:** `foundry_standin.py` answers a request with the schema `rerank_relevance`: relevance = the share of the query's words the candidate's text holds. Modes `rerank_incomplete` (last candidate left out) and `rerank_slow` (`rerank_delay_seconds`, 30 s); `invalid` answers prose. `tools/dev.sh` names the two modes.
+- **Scoreboard:** `evals/static-metrics.yaml`, `r4`: `Hybrid, then an LLM reranker on the chat deployment`. The runner's whole-path test (`evals/tests/test_whole_path.py`) now runs with `r4` available, scores it (recall, latency, two verdict runs through `workflow` and `verdict`) and reads that method off the board. It had to change: `retrieval` in that stack has a chat deployment, so `r4`'s search answered while `workflow` refused the row.
+- **Tests:** `retrieval` 55 (two added, the chunker's three parametrised cases merged into one test), `verdict` 58, `workflow` 117, `synthdata` 50, all unchanged in number; the list is in `deferred-work.md`. Whole suite: 543 passed, coverage 91%.
+- **Verification run (2026-10-08):** `docker compose up -d --wait`; `uv sync`, `ruff format --check`, `ruff check`, `mypy packages services evals` clean; `uv run pytest --cov` 543 passed, 90.84%; the `retrieval` image builds and holds `prompts/rerank.md`; `terraform fmt -check -recursive` and `validate` of `infra/demo/app` clean.
+- **After review 1 (2026-10-08):** rerank calls take a slot of a part of the gateway's cap first (the cap less one), so one slot is always left for an embedding; a rerank call that timed out is not sent again; `rerank_ms` is recorded whatever the outcome and is in the `search deadline passed` line; an empty answer is `rerank_empty`; a huge whole number as a relevance is out of range, not a 500; the prompt asks for the whole range in five bands; the completion token cap is the variable `search_rerank_max_completion_tokens` and set in `dapr.yaml`; a chat deployment without the rest logs `row r4 is off` with what is missing; the three-lists test also holds the deadlines of `dapr.yaml` and `terraform.tfvars` under `verdict`'s wait; the slow-reranker case over the real manual has 3 s against a 6 s delay and restores the mode in a `finally`; the two `r4` tests cover a refused call, a candidate named twice, a timed-out call and non-default settings, with no new test case; the whole-path test asserts `r4`'s runs; the SPA's wording speaks of `r4` as not available somewhere, not as not built. Only the tests of the edited files were run after this.
+- **Not proven here:** anything against a real model (Cohere's availability, the reranker's time and tokens, real recall): the checks are in `deferred-work.md`. `tools/dev.sh` was not started, so `r4` has not answered over the Dapr sidecars locally. A comment in `services/web/src/web/settings.py` still says "not built here" of the Compare fallback; only the SPA was open for edits.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 1 (2026-10-08): blind hunter (B), edge-case hunter (E), verification-gap (V). No intent gap, no bad spec.
+
+| # | Finding | Verdict | Route | Evidence |
+| --- | --- | --- | --- | --- |
+| B1, E3 | Five slow rerank calls hold every slot of the gateway's cap, so the other rows' query embeddings wait past their 8 s deadline | medium | patch | `relevance` goes through `_call`, which holds the one semaphore for up to 15 s. The cap stays shared, as the spec says; the reranker gets a smaller share of it so an embedding always finds a slot. |
+| B2, E6 | A rerank call that timed out is sent again with under 5 s of the deadline left | medium | patch | 15 s per call, one retry, 20 s for the search: the second prompt is paid for and cancelled. |
+| B3 | `rerank_ms` is missing when the reranker failed or was too slow | low | patch | It is set only after an answer; the Azure check reads it to judge the deadline. |
+| B4 | An empty answer (a refusal, a filter, a cut at the token limit) is logged as `rerank_not_json` | low | patch | `_answer_of` gives `""` for all three; one reason code of its own. |
+| B5 | The prompt names only 0, 0.5 and 1, so many candidates tie and fall back to the fused order | medium | patch | A tie is answered in `r3`'s order by a valid answer; the prompt can ask for the whole range. |
+| B6, E2 | A failed `r4` search is sent again by `verdict`, so one tool call can cost several chat calls | low | reject | `verdict`'s resend of a 503 is its rule for every row and already recorded in `deferred-work.md` for the Azure session; B2's patch removes the gateway's share. |
+| B7, E5, V-other 1 | The guard that callers wait longer than `r4`'s deadline compares code defaults only | low | patch | `dapr.yaml` and `terraform.tfvars` set the deadline as free values; the test already reads both files for the rows. |
+| B8, E4 | No validation ties the rerank depth to the candidate depth or to the token cap | low | reject | Combinations of settings nobody ships; the depth is capped by what the fusion gives. |
+| B9 | The reranker's completion token cap is a code default only | low | patch | The Azure checks name it as the setting most likely to need tuning; one more variable. |
+| B10 | `r4`'s cost is still null on the scoreboard | low | reject | Every row's cost is null until the owner states them (`deferred-work.md`, story 3.4). |
+| B11 | Sprint status beside spec status | false | reject | Sprint status moves at the end of the review. |
+| B12, E9 | "Tests, inside the budgets" while three packages are over | low | reject | The overs predate the story; its counts did not grow. |
+| B13, E8 | The slow-reranker case gives the whole search 0.5 s against a real database | medium | patch | An embedding and two reads over 0.5 s on a busy machine would answer 502 and fail the test; the mode is restored without `try/finally`. That the `r4` checks sit in story 3.3's test is the budget rule and rejected. |
+| B14, V1 | A rerank call the model refuses (4xx) has no test | low | patch | Filed evidence: deleting the `except ModelCallFailed` fails nothing; one more search in the existing test. |
+| B15, V-other 2 | The SPA's comments and test wording still call `r4` not built | low | patch | With `r4` listed locally and in the `app` stack, Compare's default pair is the live one. |
+| B16 | The whole-path test asserts nothing of `r4`'s verdict runs | low | patch | One assertion that none of its runs failed. |
+| B17 | Nothing was run over real HTTP or Dapr | low | reject | True and recorded; the local stack is run once when the stories are done, as the hand-off note asks. |
+| V2 | Three of the four rerank settings are not shown to reach the code that uses them | medium | patch | Filed evidence: every default equals the setting's default. |
+| V3 | The span's `r4` attributes are never observed | low | defer | Filed disposition; the log line is tested. |
+| V4 | A candidate named twice, and four other refusals of `relevance_by_chunk`, are unpinned | low | patch | The duplicate only, as filed: one entry in the existing dict. The other four are deferred. |
+| V5 | The two new settings validators have no test | low | defer | Filed disposition. |
+| V6 | `r4` asking no model when there are no candidates has no test | low | defer | Filed disposition. |
+| V-other 3 | The stand-in repeats the reranker's wire names | low | reject | No service may import the stand-in; the cross-service test catches a rename. |
+| E1 | A huge whole number as a relevance raises `OverflowError` out of the domain | low | patch | `math.isfinite` on a large `int`; a direct correction. |
+| E7 | A chat deployment set without a model endpoint leaves `r4` off with no log line | low | patch | One line beside the other "off" lines. |
 
 ## Design Notes
 

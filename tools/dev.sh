@@ -98,7 +98,8 @@ uv run python -m synthdata.language_standin --port "$language_port" &
 language_standin=$!
 # FOUNDRY_STANDIN_MODE picks what the model stand-in does (README, 'Run
 # locally'): `mixed` makes one case show all three routes of the gate, and
-# `quote_not_on_page` gives every page a fact whose quote cannot be verified.
+# `quote_not_on_page` gives every page a fact whose quote cannot be verified;
+# `rerank_incomplete` and `rerank_slow` show a search with r4 failing.
 uv run python -m synthdata.foundry_standin --port "$model_port" \
   --mode "${FOUNDRY_STANDIN_MODE:-ok}" &
 model_standin=$!

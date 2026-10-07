@@ -72,8 +72,11 @@ class Settings(BaseSettings):
         ),
     ] = 3500
     # How long one call of a tool to `extraction` or `retrieval` may take.
-    # A search has its own deadline of 8 s at `retrieval`.
-    upstream_timeout_seconds: Annotated[float, Field(gt=0)] = 12.0
+    # A search has its own deadline at `retrieval`: 8 s, and 20 s with row
+    # `r4`, whose reranker is a chat call
+    # (RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS). This stays above both, so
+    # that the agent is told `retrieval`'s own answer and not a time-out.
+    upstream_timeout_seconds: Annotated[float, Field(gt=0)] = 25.0
     # A call that got no answer, or 408, 429, 502, 503 or 504, is sent again this
     # often, waiting this long first and twice as long each time after.
     # Then the run fails with `upstream_unavailable`.
@@ -133,7 +136,9 @@ class Settings(BaseSettings):
     # AD-11: the ladder rows a verdict may be commanded with: the ones
     # `retrieval` answers in this environment. `r5` is named only where
     # `retrieval` was given a search service
-    # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT); `workflow` names the same rows
+    # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT), and `r4` only where it was given
+    # the chat deployment, its reranker (RETRIEVAL_CHAT_DEPLOYMENT);
+    # `workflow` names the same rows
     # (WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS). A command with another row is
     # refused with `retriever_not_available` before anything is done.
     available_retriever_configs: Annotated[

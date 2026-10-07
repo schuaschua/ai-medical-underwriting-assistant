@@ -259,6 +259,46 @@ variable "search_deadline_seconds" {
   }
 }
 
+variable "search_rerank_depth" {
+  description = "Row r4 (spine AD-11): how many of the best fused candidates the reranker is given with the query. A search that asks for more items than this has that many reranked."
+  type        = number
+
+  validation {
+    condition     = var.search_rerank_depth == floor(var.search_rerank_depth) && var.search_rerank_depth >= 1 && var.search_rerank_depth <= 200
+    error_message = "search_rerank_depth must be a whole number from 1 to 200."
+  }
+}
+
+variable "search_rerank_timeout_seconds" {
+  description = "Row r4: how long the reranker's one chat call may take, in seconds. Not longer than search_rerank_deadline_seconds."
+  type        = number
+
+  validation {
+    condition     = var.search_rerank_timeout_seconds > 0
+    error_message = "search_rerank_timeout_seconds must be above 0."
+  }
+}
+
+variable "search_rerank_max_completion_tokens" {
+  description = "Row r4: the most tokens the reranker's answer may take: an entry per candidate, and room for a model that reasons before it answers. An answer cut off at this limit is no answer, and the search is model_unavailable."
+  type        = number
+
+  validation {
+    condition     = var.search_rerank_max_completion_tokens == floor(var.search_rerank_max_completion_tokens) && var.search_rerank_max_completion_tokens >= 16
+    error_message = "search_rerank_max_completion_tokens must be a whole number of at least 16."
+  }
+}
+
+variable "search_rerank_deadline_seconds" {
+  description = "Row r4: the deadline over one whole search with that row, the reranker's chat call included, in seconds, in place of search_deadline_seconds. When it passes the search is answered model_unavailable. Keep it under the callers' timeouts for a search: verdict's 25 s (VERDICT_UPSTREAM_TIMEOUT_SECONDS), web's 30 s and the bake-off runner's 30 s."
+  type        = number
+
+  validation {
+    condition     = var.search_rerank_deadline_seconds >= var.search_rerank_timeout_seconds && var.search_rerank_deadline_seconds >= var.search_deadline_seconds && var.search_rerank_deadline_seconds < 25
+    error_message = "search_rerank_deadline_seconds must not be shorter than search_rerank_timeout_seconds or search_deadline_seconds, and must stay under 25, verdict's timeout for one search."
+  }
+}
+
 variable "ingest_deadline_seconds" {
   description = "The ingestion job's own deadline: after this long it ends itself with `stage_timeout` and leaves the index as it was. The one transaction that stores a finished run is not cut off by it."
   type        = number
@@ -290,12 +330,12 @@ variable "gate_threshold" {
 }
 
 variable "available_retriever_configs" {
-  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r5 belongs here because retrieval is given the search service's endpoint."
+  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r4 belongs here because retrieval is given the chat deployment, its reranker, and row r5 because it is given the search service's endpoint."
   type        = list(string)
 
   validation {
-    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3", "r5"], row)])
-    error_message = "available_retriever_configs must name at least one of the rows that are built (r1, r2, r3, r5), each once. Add a row here when retrieval and verdict can answer it."
+    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3", "r4", "r5"], row)])
+    error_message = "available_retriever_configs must name at least one of the rows that are built (r1, r2, r3, r4, r5), each once. Add a row here when retrieval and verdict can answer it."
   }
 }
 

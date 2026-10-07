@@ -27,7 +27,7 @@ from retrieval.adapters.search_index import (
     search_token_for,
 )
 from retrieval.adapters.telemetry import configure_telemetry, instrument_app
-from retrieval.domain.ports import ModelNotConfigured, QueryEmbedder
+from retrieval.domain.ports import ModelNotConfigured, QueryEmbedder, Reranker
 from retrieval.domain.search import SearchOptions, SearchPorts
 from retrieval.settings import APP_ID, Settings, get_settings
 
@@ -53,8 +53,10 @@ def build_query_gateway(
 ) -> ModelGateway | None:
     """The gateway a search embeds its query through; None when it is not configured.
 
-    Tests pass a transport that stands in for the deployment. A query's
-    call has the search's own short budget, not the ingestion job's.
+    Tests pass a transport that stands in for the deployments. A query's
+    call has the search's own short budget, not the ingestion job's. Given
+    a chat deployment, the same gateway is row `r4`'s reranker, under the
+    same cap on concurrent calls, with a timeout of its own for that call.
     """
     if settings.model_endpoint is None or settings.embedding_deployment is None:
         return None
@@ -72,6 +74,10 @@ def build_query_gateway(
         # AD-16: the one embedding deployment, the same the chunks were
         # embedded with at ingestion.
         embedding_deployment=settings.embedding_deployment,
+        # AD-11, row `r4`: the shared chat deployment, when one is named.
+        chat_deployment=settings.chat_deployment,
+        rerank_timeout_seconds=settings.search_rerank_timeout_seconds,
+        rerank_max_completion_tokens=settings.search_rerank_max_completion_tokens,
         max_retries=settings.search_embedding_max_retries,
         retry_seconds=min(settings.model_retry_seconds, longest_wait),
         max_retry_seconds=longest_wait,
@@ -110,6 +116,8 @@ def search_options(settings: Settings) -> SearchOptions:
         candidate_depth=settings.search_candidate_depth,
         deadline_seconds=settings.search_deadline_seconds,
         embedding_deployment=settings.embedding_deployment,
+        rerank_depth=settings.search_rerank_depth,
+        rerank_deadline_seconds=settings.search_rerank_deadline_seconds,
     )
 
 
@@ -125,7 +133,7 @@ def create_app(
     Without `dependencies` the real adapters are built, as the settings
     describe them. Building them opens no connection and calls no model. The
     service never reads the manual itself: only the ingestion job does.
-    `model_transport` stands in for the embedding deployment in a test of
+    `model_transport` stands in for the model deployments in a test of
     that wiring, and `search_transport` for the search service.
     """
     if settings is None:
@@ -147,17 +155,30 @@ def create_app(
                 "missing=RETRIEVAL_SEARCH_SERVICE_ENDPOINT"
             )
         model: QueryEmbedder = gateway if gateway is not None else NoEmbeddingModel()
+        # AD-11, row `r4`: the gateway is the reranker where it was given
+        # the chat deployment.
+        reranker: Reranker | None = (
+            gateway if settings.chat_deployment is not None else None
+        )
+        missing = [
+            name
+            for name, value in zip(
+                SEARCH_SETTINGS,
+                (settings.model_endpoint, settings.embedding_deployment),
+                strict=True,
+            )
+            if value is None
+        ]
+        if settings.chat_deployment is None:
+            missing.append("RETRIEVAL_CHAT_DEPLOYMENT")
+        if reranker is None:
+            # Said once, here: row `r4` is then refused as not available.
+            # With the chat deployment alone missing the other rows answer
+            # as before; a chat deployment without the rest is no reranker.
+            logger.info("row r4 is off: not configured: missing=%s", ",".join(missing))
         if gateway is None:
             # Said once, here: every search is then refused, at warning.
-            missing = [
-                name
-                for name, value in zip(
-                    SEARCH_SETTINGS,
-                    (settings.model_endpoint, settings.embedding_deployment),
-                    strict=True,
-                )
-                if value is None
-            ]
+            missing = [name for name in missing if name in SEARCH_SETTINGS]
             logger.warning(
                 "searches are off: not configured: missing=%s", ",".join(missing)
             )
@@ -166,6 +187,7 @@ def create_app(
                 model=model,
                 index=SqlChunkIndex(database),
                 search_service=search_service,
+                reranker=reranker,
             ),
             schema_revision=SqlSchemaRevision(database),
             head_revision=bundled_head(),

@@ -119,8 +119,10 @@ class Settings(BaseSettings):
     # In Azure: sign in to the model deployments with the service identity. There is no key.
     model_entra_auth: bool = False
     # AD-16: the names of the shared chat deployment, which writes each
-    # chunk's context line, and of the one embedding deployment
-    # (`text-embedding-3-large`). They reach code only here.
+    # chunk's context line at ingestion and is the reranker of row `r4` at
+    # search, and of the one embedding deployment
+    # (`text-embedding-3-large`). They reach code only here. A service
+    # without the chat deployment refuses row `r4` as not available.
     chat_deployment: str | None = None
     embedding_deployment: str | None = None
     # How long one call to a model may take.
@@ -179,6 +181,18 @@ class Settings(BaseSettings):
     search_embedding_timeout_seconds: Annotated[float, Field(gt=0)] = 3.0
     search_embedding_max_retries: Annotated[int, Field(ge=0, le=10)] = 1
     search_deadline_seconds: Annotated[float, Field(gt=0)] = 8.0
+    # AD-11, row `r4`: how many of the best fused candidates the reranker
+    # is given (never fewer than a search's `top_k`), how long its one chat
+    # call may take, the most tokens of its answer (an entry per candidate,
+    # and room for a model that reasons first), and the deadline over a
+    # whole search with that row, in place of the one above: a chat call
+    # does not fit 8 s. Every caller of a search waits longer than this
+    # (VERDICT_UPSTREAM_TIMEOUT_SECONDS, WEB_SERVICE_TIMEOUT_SECONDS, the
+    # bake-off runner's EVALS_REQUEST_TIMEOUT_SECONDS).
+    search_rerank_depth: Annotated[int, Field(ge=1, le=200)] = 20
+    search_rerank_timeout_seconds: Annotated[float, Field(gt=0)] = 15.0
+    search_rerank_max_completion_tokens: Annotated[int, Field(ge=16)] = 4000
+    search_rerank_deadline_seconds: Annotated[float, Field(gt=0)] = 20.0
 
     # AD-11, row `r5`: the Azure AI Search service, whose index the job loads
     # from the stored `smart` chunk records and a search with `r5` asks. No
@@ -310,6 +324,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RETRIEVAL_SEARCH_SERVICE_QUERY_TIMEOUT_SECONDS must not be longer "
                 "than RETRIEVAL_SEARCH_DEADLINE_SECONDS"
+            )
+        if self.search_rerank_timeout_seconds > self.search_rerank_deadline_seconds:
+            raise ValueError(
+                "RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS must not be longer than "
+                "RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS"
+            )
+        if self.search_rerank_deadline_seconds < self.search_deadline_seconds:
+            # Row `r4` does all that row `r3` does, and then asks the reranker.
+            raise ValueError(
+                "RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS must not be shorter than "
+                "RETRIEVAL_SEARCH_DEADLINE_SECONDS"
             )
         if self.model_retry_seconds > self.model_max_retry_seconds:
             raise ValueError(

@@ -1,18 +1,23 @@
 """The two reads of `retrieval`: the search and the rule read (spine AD-11, AD-12).
 
-One search operation for every ladder row; rows `r1`, `r2`, `r3` and `r5`
-are built. The steps of `r3`, each a function of its own: the query is embedded
+One search operation for every ladder row; rows `r1` to `r5` are built.
+The steps of `r3`, each a function of its own: the query is embedded
 (`embed_query`), the vector search and the full-text search each answer a
 ranked list of candidates (the index port), the two lists are fused
 (`fusion.reciprocal_rank_fusion`), and the best of the fused list become the
 ranked items (`rank_items`). The baseline rows `r1` and `r2` embed the query
 the same way and answer the vector search's list alone (`vector_search`),
-over the `fixed` and the `smart` chunks. Row `r5` embeds the query the same
-way and hands the text and the vector to Azure AI Search (`ai_search_hybrid`),
-whose index holds a copy of the `smart` chunks: the store is the one thing
-that differs. Nothing is stored, nothing is
-cached, and no model rewrites the query. Every read of a search is from one
-unchanging view of the index, and one deadline covers the whole search.
+over the `fixed` and the `smart` chunks. Row `r4` takes the fused list of
+`r3` as it is (`fused_candidates`, which both rows call) and has the chat
+deployment say how relevant its best candidates are to the query
+(`hybrid_reranked_search`): the order is the one thing that differs. Row
+`r5` embeds the query the same way and hands the text and the vector to
+Azure AI Search (`ai_search_hybrid`), whose index holds a copy of the
+`smart` chunks: the store is the one thing that differs. Nothing is stored,
+nothing is cached, and no model rewrites the query. Every read of a search
+is from one unchanging view of the index, and one deadline covers the whole
+search; row `r4` has a longer one of its own, since a chat call does not
+fit the others'.
 """
 
 import asyncio
@@ -46,11 +51,18 @@ from retrieval.domain.ports import (
     ModelNotConfigured,
     ModelUnavailable,
     QueryEmbedder,
+    Reranker,
     RuleSearchService,
     SearchServiceUnavailable,
 )
+from retrieval.domain.rerank import (
+    RerankAnswerInvalid,
+    relevance_by_chunk,
+    rerank_request,
+)
 from retrieval.domain.rows import (
     CHUNK_SET_NOT_INGESTED_MESSAGE,
+    RetrieverRow,
     SearchMethod,
     available_rows,
     chunk_set_to_read,
@@ -84,6 +96,12 @@ SEARCH_SERVICE_UNAVAILABLE_MESSAGE = (
 SEARCH_SERVICE_TOO_SLOW_MESSAGE = (
     "The search service did not answer in time. Please try again shortly."
 )
+RERANKER_NO_ANSWER_MESSAGE = (
+    "The reranker gave no usable answer. Please try again shortly."
+)
+RERANKER_TOO_SLOW_MESSAGE = (
+    "The reranker did not answer in time. Please try again shortly."
+)
 # AD-11, row `r5`: the largest score Azure AI Search's semantic ranker gives.
 # Its scores run from 0 (irrelevant) to 4 (the best answer) and are no
 # probability. A row's `score` is that score divided by this, so 0 to 1 and
@@ -110,6 +128,10 @@ class SearchPorts:
     # AD-11, row `r5`: Azure AI Search. None when the service was told of
     # no search endpoint: the row is then refused as not available.
     search_service: RuleSearchService | None = None
+    # AD-11, row `r4`: the chat deployment as a reranker. None when the
+    # service was told of no chat deployment: the row is then refused as
+    # not available.
+    reranker: Reranker | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +148,11 @@ class SearchOptions:
     # when the index says its chunks were embedded with another one. None
     # when the service has no model, and then no search gets that far.
     embedding_deployment: str | None = None
+    # Row `r4`: how many of the best fused candidates the reranker is
+    # given, and never fewer than `top_k`; and the deadline of that row's
+    # whole search, the chat call included, in place of `deadline_seconds`.
+    rerank_depth: int = 20
+    rerank_deadline_seconds: float | None = 20.0
 
 
 @dataclass(slots=True)
@@ -146,6 +173,11 @@ class SearchStats:
     # The largest score the service's ranker gave a document of the answer,
     # as the service gave it; None when it answered none.
     max_reranker_score: float | None = None
+    # Row `r4`: whether the reranker was asked, how many candidates it was
+    # given, and how long its answer took.
+    rerank_asked: bool = False
+    reranked: int = 0
+    rerank_ms: int = 0
 
 
 def candidate_depth(top_k: int, options: SearchOptions) -> int:
@@ -236,7 +268,7 @@ def rank_items(
     return items
 
 
-async def hybrid_search(
+async def fused_candidates(
     query: str,
     chunk_set: ChunkSet,
     top_k: int,
@@ -244,8 +276,13 @@ async def hybrid_search(
     ports: SearchPorts,
     options: SearchOptions,
     stats: SearchStats,
-) -> list[SearchItem]:
-    """Row `r3`: vector and full-text candidates, fused into the ranked items."""
+) -> tuple[list[Fused], dict[str, IndexedChunk]]:
+    """Rows `r3` and `r4`: the fused list of the two searches, best first, and its chunks by id.
+
+    The one step both rows share, so that `r4` reranks exactly what `r3`
+    would answer from: the same embedding, the same two lists to the same
+    depth, the same fusion.
+    """
     stats.depth = depth = candidate_depth(top_k, options)
     vector = await embed_query(query, ports.model)
     stats.embedded = True
@@ -263,7 +300,110 @@ async def hybrid_search(
         [chunk.chunk_id for chunk in matching],
     )
     chunks = {chunk.chunk_id: chunk for chunk in (*nearest, *matching)}
+    return fused, chunks
+
+
+async def hybrid_search(
+    query: str,
+    chunk_set: ChunkSet,
+    top_k: int,
+    *,
+    ports: SearchPorts,
+    options: SearchOptions,
+    stats: SearchStats,
+) -> list[SearchItem]:
+    """Row `r3`: vector and full-text candidates, fused into the ranked items."""
+    fused, chunks = await fused_candidates(
+        query, chunk_set, top_k, ports=ports, options=options, stats=stats
+    )
     return rank_items(fused, chunks, top_k)
+
+
+def rerank_depth(top_k: int, options: SearchOptions) -> int:
+    """How many fused candidates the reranker is given: the setting, or `top_k` if that is more."""
+    return max(options.rerank_depth, top_k)
+
+
+async def hybrid_reranked_search(
+    query: str,
+    chunk_set: ChunkSet,
+    top_k: int,
+    *,
+    ports: SearchPorts,
+    options: SearchOptions,
+    stats: SearchStats,
+) -> list[SearchItem]:
+    """Row `r4`: the fused candidates of `r3`, in the order a reranker gives them.
+
+    The best of the fused list are shown to the chat deployment with the
+    query, in one call. The items are the candidates by the relevance it
+    gave them, largest first, and candidates it rated alike in the fused
+    order; `score` is that relevance. An answer that does not rate exactly
+    the candidates it was given fails the search: the fused order is never
+    answered in its place.
+    """
+    reranker = ports.reranker
+    if reranker is None:
+        # `row_to_search` refuses the row before this is reached.
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE,
+            row_not_available_message(
+                available_rows(ports.search_service is not None, reranker=False)
+            ),
+        )
+    fused, chunks = await fused_candidates(
+        query, chunk_set, top_k, ports=ports, options=options, stats=stats
+    )
+    candidates = [chunks[entry.chunk_id] for entry in fused][
+        : rerank_depth(top_k, options)
+    ]
+    if not candidates:
+        # Nothing to put in order, and nothing to ask a model about.
+        return []
+    stats.rerank_asked, stats.reranked = True, len(candidates)
+    started = time.perf_counter()
+    try:
+        try:
+            answer = await reranker.relevance(rerank_request(query, candidates))
+        finally:
+            # Whatever the outcome, the deadline's cancellation included:
+            # the time matters most when the reranker failed or was slow.
+            stats.rerank_ms = max(0, round((time.perf_counter() - started) * 1000))
+    except ModelUnavailable:
+        raise DomainError(
+            ErrorCode.MODEL_UNAVAILABLE, MODEL_UNAVAILABLE_MESSAGE
+        ) from None
+    except ModelCallFailed as error:
+        # Codes only (security rule 31): never the query or a chunk's text.
+        logger.error("rerank refused: reason=%s", error.reason)
+        raise DomainError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, MODEL_REFUSED_MESSAGE
+        ) from None
+    try:
+        relevance = relevance_by_chunk(answer, [chunk.chunk_id for chunk in candidates])
+    except RerankAnswerInvalid as error:
+        logger.error(
+            "rerank answer invalid: reason=%s candidates=%d",
+            error.reason,
+            len(candidates),
+        )
+        raise DomainError(
+            ErrorCode.MODEL_UNAVAILABLE, RERANKER_NO_ANSWER_MESSAGE
+        ) from None
+    # A stable sort: candidates of the same relevance stay in the fused order.
+    ordered = sorted(candidates, key=lambda chunk: -relevance[chunk.chunk_id])
+    return [
+        SearchItem(
+            chunk_id=chunk.chunk_id,
+            rule_ids=list(chunk.rule_ids),
+            rank=rank,
+            score=relevance[chunk.chunk_id],
+            text=chunk.text,
+            manual_page=chunk.manual_page,
+            impairment=chunk.impairment,
+        )
+        for rank, chunk in enumerate(ordered[:top_k], start=1)
+    ]
 
 
 def similarity(cosine_distance: float | None) -> float:
@@ -347,7 +487,11 @@ async def ai_search_hybrid(
         # `row_to_search` refuses the row before this is reached.
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE,
-            row_not_available_message(available_rows(search_service=False)),
+            row_not_available_message(
+                available_rows(
+                    search_service=False, reranker=ports.reranker is not None
+                )
+            ),
         )
     stats.depth = depth = candidate_depth(top_k, options)
     vector = await embed_query(query, ports.model)
@@ -420,8 +564,16 @@ def _check_documents_deployment(
 _SEARCHES = {
     SearchMethod.VECTOR: vector_search,
     SearchMethod.HYBRID: hybrid_search,
+    SearchMethod.HYBRID_RERANKED: hybrid_reranked_search,
     SearchMethod.AI_SEARCH_HYBRID: ai_search_hybrid,
 }
+
+
+def deadline_of(row: RetrieverRow, options: SearchOptions) -> float | None:
+    """The deadline over one whole search with a row: `r4`'s own, or the one of the other rows."""
+    if row.needs_reranker:
+        return options.rerank_deadline_seconds
+    return options.deadline_seconds
 
 
 def check_deployment(indexed_with: str | None, options: SearchOptions) -> None:
@@ -466,18 +618,19 @@ async def search_rules(
     if _NUL in request.query:
         raise DomainError(ErrorCode.VALIDATION_FAILED, INVALID_QUERY_MESSAGE)
     has_search_service = ports.search_service is not None
-    row = row_to_search(request.retriever_config, has_search_service)
+    has_reranker = ports.reranker is not None
+    row = row_to_search(request.retriever_config, has_search_service, has_reranker)
     search = _SEARCHES.get(row.method)
     if search is None:
         # A row marked as built without a search of its own: said as what it
         # is to the caller, never answered with another row's results.
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE,
-            row_not_available_message(available_rows(has_search_service)),
+            row_not_available_message(available_rows(has_search_service, has_reranker)),
         )
     started = clock()
     try:
-        async with asyncio.timeout(options.deadline_seconds) as deadline:
+        async with asyncio.timeout(deadline_of(row, options)) as deadline:
             items = await search(
                 request.query,
                 row.chunk_set,
@@ -509,14 +662,22 @@ async def search_rules(
         waited_for = "index" if stats.embedded else "model"
         if stats.service_asked:
             waited_for = "search_service"
+        if stats.rerank_asked:
+            waited_for = "reranker"
         logger.warning(
-            "search deadline passed: retriever_config=%s waited_for=%s",
+            "search deadline passed: retriever_config=%s waited_for=%s rerank_ms=%d",
             row.config.value,
             waited_for,
+            # Row `r4`: how long the reranker had been waited for; else 0.
+            stats.rerank_ms,
         )
         if stats.service_asked:
             raise DomainError(
                 ErrorCode.UPSTREAM_UNAVAILABLE, SEARCH_SERVICE_TOO_SLOW_MESSAGE
+            ) from None
+        if stats.rerank_asked:
+            raise DomainError(
+                ErrorCode.MODEL_UNAVAILABLE, RERANKER_TOO_SLOW_MESSAGE
             ) from None
         if stats.embedded:
             raise DomainError(
@@ -528,12 +689,15 @@ async def search_rules(
     # security rule 31: the row, counts and the timing, never the query.
     logger.info(
         "search: retriever_config=%s top_k=%d vector_candidates=%d "
-        "full_text_candidates=%d service_documents=%d left_out=%d "
-        "max_reranker_score=%s items=%d latency_ms=%d",
+        "full_text_candidates=%d reranked=%d rerank_ms=%d service_documents=%d "
+        "left_out=%d max_reranker_score=%s items=%d latency_ms=%d",
         row.config.value,
         request.top_k,
         stats.vector_candidates,
         stats.full_text_candidates,
+        # Row `r4`: the candidates its reranker was given, and its time.
+        stats.reranked,
+        stats.rerank_ms,
         stats.service_documents,
         stats.left_out,
         # A number only: the ranker's raw score, before it is divided.

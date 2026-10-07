@@ -124,8 +124,10 @@ class Settings(BaseSettings):
     # and `retrieval` answer (each names them by itself; a test outside
     # `services/` holds the three lists equal). `r5` is named only where
     # `retrieval` is given a search service
-    # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT), and then in `verdict`'s setting
-    # too (VERDICT_AVAILABLE_RETRIEVER_CONFIGS). A start, or a
+    # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT), `r4` only where it is given the
+    # chat deployment, its reranker (RETRIEVAL_CHAT_DEPLOYMENT), and each
+    # then in `verdict`'s setting too
+    # (VERDICT_AVAILABLE_RETRIEVER_CONFIGS). A start, or a
     # request for one more verdict run, that names another row is refused
     # with `retriever_not_available` at once, not after every stage and
     # decision.

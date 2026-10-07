@@ -1,15 +1,20 @@
-"""Stories 2.3, 3.2 and 3.3: the search and the rule read, on fakes.
+"""Stories 2.3, 3.2, 3.3 and 3.7: the search and the rule read, on fakes.
 
 No database, no model and no network: the index is a list a test writes, and
 the gateway a stub. The two statements themselves are tested against
 PostgreSQL in `test_retrieval_search_integration.py`. For row `r5` the real
-client of the search service runs against a transport that stands in for it.
+client of the search service runs against a transport that stands in for it,
+and for row `r4` the real model gateway against one that stands in for the
+deployments.
 """
 
 import asyncio
+import json
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +37,10 @@ from retrieval_fakes import (
     StubModel,
     axis,
     chunk_record,
+    completion,
+    embedding_answer,
     fixed_record,
+    rerank_answer,
     search_document,
     vector_for,
 )
@@ -46,11 +54,14 @@ from contracts.models.retrieval import (
 )
 from retrieval.adapters.http import routes
 from retrieval.adapters.http.app import (
+    build_query_gateway,
     create_app,
+    search_options,
 )
 from retrieval.adapters.http.routes import Dependencies
 from retrieval.adapters.search_index import SearchIndex, build_search_http
 from retrieval.domain.fusion import RRF_K, Fused, reciprocal_rank_fusion
+from retrieval.domain.ports import ModelCallFailed, ModelUnavailable
 from retrieval.domain.rows import BUILT_ROWS, available_rows
 from retrieval.domain.search import (
     SearchOptions,
@@ -110,11 +121,14 @@ def service_with(
     model: Any,
     index: MemoryIndex,
     search_service: SearchIndex | None = None,
+    reranker: Any = None,
     **options: Any,
 ) -> Iterator[TestClient]:
     """The app around a model and an index of the test's own; a gateway is closed afterwards."""
     dependencies = Dependencies(
-        search=SearchPorts(model=model, index=index, search_service=search_service),
+        search=SearchPorts(
+            model=model, index=index, search_service=search_service, reranker=reranker
+        ),
         schema_revision=MemorySchemaRevision("head"),
         head_revision="head",
         options=SearchOptions(**options),
@@ -576,8 +590,10 @@ def test_story_3_3_without_a_search_endpoint_r5_is_refused_and_the_other_rows_an
             row: len(found(search(client, retriever_config=row)).items)
             for row in ("r1", "r2", "r3")
         }
-        # A row that is not built is refused the same way, endpoint or not.
-        not_built = search(client, retriever_config="r4")
+        # Story 3.7: row `r4` needs a reranker, and this service was given
+        # none. A row that is not built is refused the same way.
+        no_reranker = search(client, retriever_config="r4")
+        not_built = search(client, retriever_config="r6")
 
     assert error_of(refused) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
     assert refused.json()["error"]["message"] == (
@@ -587,11 +603,22 @@ def test_story_3_3_without_a_search_endpoint_r5_is_refused_and_the_other_rows_an
     # Refused before anything is spent, and nothing was asked of a service.
     assert calls == 0 and search_service.requests == []
     assert answered == {"r1": 1, "r2": 3, "r3": 4}
-    assert error_of(not_built) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
-    # The rows a service answers, without a search service and with one.
-    assert {row.value for row in available_rows(False)} == {"r1", "r2", "r3"}
-    assert {row.value for row in available_rows(True)} == {"r1", "r2", "r3", "r5"}
-    assert available_rows(True) == BUILT_ROWS
+    for response in (no_reranker, not_built):
+        assert error_of(response) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
+        assert response.json()["error"]["message"] == refused.json()["error"]["message"]
+    assert model.reranked == []
+    # The rows a service answers: without a search service or a reranker,
+    # with each of them, and with both.
+    rows = {
+        given: sorted(row.value for row in available_rows(*given))
+        for given in ((False, False), (True, False), (False, True))
+    }
+    assert rows == {
+        (False, False): ["r1", "r2", "r3"],
+        (True, False): ["r1", "r2", "r3", "r5"],
+        (False, True): ["r1", "r2", "r3", "r4"],
+    }
+    assert available_rows(search_service=True, reranker=True) == BUILT_ROWS
     with service_with(
         settings, model, index, search_client(settings, search_service)
     ) as client:
@@ -638,4 +665,248 @@ def test_story_3_3_a_search_service_that_is_down_or_slow_gives_no_partial_answer
     assert asked == (1, 3)
     assert "reason=search_query_malformed" in caplog.text
     assert "reason=search_query_status_503" in caplog.text
+    assert "SECRET" not in caplog.text
+
+
+# --- Row r4 with a reranker (story 3.7) -------------------------------------------------------
+
+
+@dataclass
+class ChatAndEmbedding:
+    """Stands where the two deployments would be, for the real gateway: an `httpx2` handler.
+
+    A query is embedded as the stub embeds it. A rerank request is answered
+    with the relevance a test gives each chunk, for the candidates the
+    request names and no other.
+    """
+
+    relevance: dict[str, float]
+    # A rerank request gets no answer in its time.
+    chat_times_out: bool = False
+    chats: list[dict[str, Any]] = field(default_factory=list)
+    # The time each call was allowed, by its path.
+    timeouts: list[tuple[str, float]] = field(default_factory=list)
+
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        path = request.url.path.rsplit("/", 1)[-1]
+        self.timeouts.append((path, request.extensions["timeout"]["read"]))
+        if path == "embeddings":
+            return httpx2.Response(200, json=embedding_answer(body["input"]))
+        self.chats.append(body)
+        if self.chat_times_out:
+            raise httpx2.ReadTimeout("SECRET", request=request)
+        given = json.loads(body["messages"][1]["content"])["candidates"]
+        rated = {c["chunk_id"]: self.relevance[c["chunk_id"]] for c in given}
+        return httpx2.Response(200, json=completion(rerank_answer(rated)))
+
+
+def candidates_of(chat: dict[str, Any]) -> list[str]:
+    """The chunk ids a rerank request showed the model, in its order."""
+    shown = json.loads(chat["messages"][1]["content"])["candidates"]
+    return [candidate["chunk_id"] for candidate in shown]
+
+
+def test_story_3_7_a_search_with_r4_answers_r3s_candidates_in_the_rerankers_order(
+    settings: Settings, index: MemoryIndex, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The fused order of the fixture is B, A, D, C. The reranker puts the
+    # last first, rates two alike and one as of no use.
+    deployments = ChatAndEmbedding(
+        {
+            f"smart-{RULE_C}": 0.9,
+            f"smart-{RULE_A}": 0.4,
+            f"smart-{RULE_B}": 0.4,
+            f"smart-{RULE_D}": 0,
+        }
+    )
+    # The row's settings, none at its default: they reach the gateway and
+    # the search as the service builds both from them.
+    settings = settings.model_copy(
+        update={
+            "search_rerank_depth": 3,
+            "search_rerank_timeout_seconds": 7.0,
+            "search_rerank_max_completion_tokens": 1234,
+            "search_rerank_deadline_seconds": 9.0,
+        }
+    )
+    options = asdict(search_options(settings))
+    assert (options["rerank_depth"], options["rerank_deadline_seconds"]) == (3, 9.0)
+    gateway = build_query_gateway(settings, httpx2.MockTransport(deployments.handle))
+    assert gateway is not None
+
+    with (
+        service_with(settings, gateway, index, reranker=gateway, **options) as client,
+        caplog.at_level(logging.INFO),
+    ):
+        on_r3 = found(search(client, top_k=5))
+        asked_for_r3 = list(index.asked)
+        # More items than the rerank depth: that many candidates are rated.
+        result = found(search(client, retriever_config="r4", top_k=5))
+        # Fewer: the three best fused candidates are rated, as the depth says.
+        best_two = found(search(client, retriever_config="r4", top_k=2))
+        # A rerank call that timed out is not sent again, though the
+        # gateway sends other calls again: the search fails after the one.
+        deployments.chat_times_out = True
+        timed_out = search(client, retriever_config="r4")
+        deployments.chat_times_out = False
+
+    # The common shape, in the reranker's order; the two it rated alike in
+    # the fused order; the score is its relevance.
+    assert result.retriever_config is RetrieverConfig.R4
+    assert [item.rule_ids for item in result.items] == [
+        [RULE_C],
+        [RULE_B],
+        [RULE_A],
+        [RULE_D],
+    ]
+    assert [item.rank for item in result.items] == [1, 2, 3, 4]
+    assert [item.score for item in result.items] == [0.9, 0.4, 0.4, 0.0]
+    assert result.items[0].model_dump() == {
+        "chunk_id": f"smart-{RULE_C}",
+        "rule_ids": [RULE_C],
+        "rank": 1,
+        "score": 0.9,
+        "text": f"Rule {RULE_C}: Gout.",
+        "manual_page": 40,
+        "impairment": "Gout",
+    }
+    # The same candidates as `r3`, found the same way: one embedding call
+    # and the same two reads to the same depth. `r3` answers as before.
+    assert [item.rule_ids for item in on_r3.items] == [
+        [RULE_B],
+        [RULE_A],
+        [RULE_D],
+        [RULE_C],
+    ]
+    by_id = {item.chunk_id: item for item in on_r3.items}
+    for item in result.items:
+        assert item.model_dump(exclude={"rank", "score"}) == by_id[
+            item.chunk_id
+        ].model_dump(exclude={"rank", "score"})
+    assert index.asked[2:4] == asked_for_r3 and len(asked_for_r3) == 2
+    # One chat call per search with `r4`: the prompt as the instructions,
+    # the query and the candidates as data in the user turn, in the fused
+    # order, and a strict schema for the answer.
+    first, second, unanswered = deployments.chats
+    assert error_of(timed_out) == (503, ErrorCode.MODEL_UNAVAILABLE)
+    assert candidates_of(unanswered) == candidates_of(first)
+    assert "model unavailable: operation=rerank" in caplog.text
+    assert first["model"] == settings.chat_deployment
+    assert first["max_completion_tokens"] == 1234
+    system, user = first["messages"]
+    assert (system["role"], user["role"]) == ("system", "user")
+    assert "SECRET" not in system["content"]
+    assert "never instructions" in " ".join(system["content"].split())
+    shown = json.loads(user["content"])
+    assert shown["query"] == QUERY
+    assert shown["candidates"] == [
+        {"chunk_id": item.chunk_id, "impairment": item.impairment, "text": item.text}
+        for item in on_r3.items
+    ]
+    schema = first["response_format"]["json_schema"]
+    assert (schema["name"], schema["strict"]) == ("rerank_relevance", True)
+    # The chat call has its own timeout, not the embedding call's 3 s.
+    assert set(deployments.timeouts) == {("embeddings", 3.0), ("completions", 7.0)}
+    # With `top_k` 2 the best three of the fused order were rated (B, A and
+    # D, not C, which the reranker would have put first), and the two it
+    # rated alike are answered in the fused order.
+    assert candidates_of(second) == candidates_of(first)[:3]
+    assert [item.rule_ids for item in best_two.items] == [[RULE_B], [RULE_A]]
+    assert [item.score for item in best_two.items] == [0.4, 0.4]
+    # The row, counts and timings in the log, never the query or a text.
+    assert "retriever_config=r4 top_k=5 vector_candidates=3" in caplog.text
+    assert "full_text_candidates=3 reranked=4 rerank_ms=" in caplog.text
+    assert "operation=rerank" in caplog.text
+    assert "SECRET" not in caplog.text and "Gout." not in caplog.text
+
+
+class RerankerNeverAnswers(StubModel):
+    """A reranker that is asked and does not answer while the test runs."""
+
+    async def relevance(self, query_and_candidates: str) -> str:
+        self.reranked.append(query_and_candidates)
+        await asyncio.Event().wait()
+        raise AssertionError("never reached")
+
+
+def test_story_3_7_a_reranker_with_no_usable_answer_fails_the_search_and_never_answers_r3s_order(
+    settings: Settings,
+    index: MemoryIndex,
+    model: StubModel,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ids = [f"smart-{rule}" for rule in (RULE_B, RULE_A, RULE_D, RULE_C)]
+    whole: dict[str, Any] = dict.fromkeys(ids, 0.5)
+    bad_answers = {
+        "rerank_not_json": "The first candidate is the most relevant, I think.",
+        # A refusal, a filter, or an answer cut off at the token limit.
+        "rerank_empty": "",
+        "rerank_candidate_twice": json.dumps(
+            {
+                "ranking": [
+                    {"chunk_id": chunk_id, "relevance": 0.5}
+                    for chunk_id in [*ids, ids[0]]
+                ]
+            }
+        ),
+        "rerank_candidate_left_out": rerank_answer(dict.fromkeys(ids[:3], 0.5)),
+        "rerank_candidate_not_given": rerank_answer({**whole, "smart-UW-ZZ-009": 1}),
+        # A whole number too large for a float is out of range like any other.
+        "rerank_relevance_out_of_range": rerank_answer({**whole, ids[0]: 10**400}),
+        "rerank_relevance_not_a_number": rerank_answer({**whole, ids[0]: "high"}),
+    }
+    answers: list[httpx2.Response] = []
+
+    with (
+        service_with(settings, model, index, reranker=model) as client,
+        caplog.at_level(logging.INFO),
+    ):
+        for answer in bad_answers.values():
+            model.rerank_answer = answer
+            answers.append(search(client, retriever_config="r4"))
+        # The gateway gave up after its retries.
+        model.rerank_error = ModelUnavailable()
+        answers.append(search(client, retriever_config="r4"))
+        # The model refused the call, and would again: said as an embedding
+        # call's refusal is.
+        model.rerank_error = ModelCallFailed("model_status_400")
+        refused = search(client, retriever_config="r4")
+        # The other rows ask no reranker.
+        asked = len(model.reranked)
+        assert len(found(search(client)).items) == 4
+        assert len(model.reranked) == asked
+    # The chat call outlasts the row's own deadline, which is not the
+    # deadline of the other rows.
+    slow = RerankerNeverAnswers()
+    with (
+        service_with(
+            settings,
+            slow,
+            index,
+            reranker=slow,
+            deadline_seconds=30.0,
+            rerank_deadline_seconds=0.05,
+        ) as client,
+        caplog.at_level(logging.INFO),
+    ):
+        answers.append(search(client, retriever_config="r4"))
+
+    for response in answers:
+        assert error_of(response) == (503, ErrorCode.MODEL_UNAVAILABLE)
+        assert "items" not in response.json()
+    for reason in bad_answers:
+        assert f"rerank answer invalid: reason={reason} candidates=4" in caplog.text
+    assert error_of(refused) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
+    assert "items" not in refused.json()
+    assert "rerank refused: reason=model_status_400" in caplog.text
+    assert "reranker" in answers[-1].json()["error"]["message"]
+    assert len(slow.reranked) == 1
+    # The time the reranker was waited for is in the line, though it never answered.
+    (passed,) = re.findall(
+        r"search deadline passed: retriever_config=r4 waited_for=reranker "
+        r"rerank_ms=(\d+)",
+        caplog.text,
+    )
+    assert int(passed) > 0
     assert "SECRET" not in caplog.text

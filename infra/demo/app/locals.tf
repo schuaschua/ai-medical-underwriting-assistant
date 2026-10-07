@@ -111,6 +111,13 @@ locals {
     { name = "RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS", value = tostring(var.search_embedding_timeout_seconds) },
     { name = "RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES", value = tostring(var.search_embedding_max_retries) },
     { name = "RETRIEVAL_SEARCH_DEADLINE_SECONDS", value = tostring(var.search_deadline_seconds) },
+    # Spine AD-11, row r4: the reranker is the chat deployment named above
+    # (RETRIEVAL_CHAT_DEPLOYMENT). With it set, r4 belongs in
+    # var.available_retriever_configs. The row has a deadline of its own.
+    { name = "RETRIEVAL_SEARCH_RERANK_DEPTH", value = tostring(var.search_rerank_depth) },
+    { name = "RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS", value = tostring(var.search_rerank_timeout_seconds) },
+    { name = "RETRIEVAL_SEARCH_RERANK_MAX_COMPLETION_TOKENS", value = tostring(var.search_rerank_max_completion_tokens) },
+    { name = "RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS", value = tostring(var.search_rerank_deadline_seconds) },
     # Spine AD-11, row r5: the Azure AI Search service of the foundation
     # stack, reached with the service identity (there is no key). The job
     # loads the index from the stored chunks; the service queries it. With

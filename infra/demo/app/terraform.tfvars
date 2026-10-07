@@ -54,10 +54,11 @@ redaction_categories = [
 # it to triage. Only workflow is given it.
 gate_threshold = 0.90
 # The retrieval ladder rows built so far (spine AD-11): the two baselines,
-# the hybrid row and r5 on Azure AI Search, which retrieval answers because
-# it is given the search service's endpoint. A new row is added here when
-# retrieval and verdict can answer it.
-available_retriever_configs = ["r1", "r2", "r3", "r5"]
+# the hybrid row, r4 with a reranker, which retrieval answers because it is
+# given the chat deployment, and r5 on Azure AI Search, which it answers
+# because it is given the search service's endpoint. A new row is added
+# here when retrieval and verdict can answer it.
+available_retriever_configs = ["r1", "r2", "r3", "r4", "r5"]
 
 # Classification (spine AD-13): the LLM classifier's confidence is the share
 # of this many runs that agree. Whether the runs differ at all on the real
@@ -117,6 +118,15 @@ search_candidate_depth = 50
 search_embedding_timeout_seconds = 3
 search_embedding_max_retries     = 1
 search_deadline_seconds          = 8
+# Row r4 (spine AD-11): an LLM reranker on the chat deployment. The 20 best
+# fused candidates are rated in one chat call of up to 15 s, and a search
+# with r4 has 20 s in all, which every caller of a search outlasts
+# (verdict 25 s, web 30 s, the bake-off runner 30 s). Its answer may take
+# 4,000 tokens: an entry per candidate, and room for a model that reasons.
+search_rerank_depth                 = 20
+search_rerank_timeout_seconds       = 15
+search_rerank_deadline_seconds      = 20
+search_rerank_max_completion_tokens = 4000
 # The job's own deadline, and the platform's limit on one run of it, which
 # must be the longer by eight minutes or more: five for the search index
 # load that follows (its own deadline) and room for storing the result.

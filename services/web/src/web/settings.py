@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     upload_timeout_seconds: Annotated[float, Field(gt=0)] = 120.0
 
     # AD-11: the two ladder rows the Compare toggle shows side by side, and
-    # the pair it uses when a row of the first is not built here. Each is
+    # the pair it uses when a row of the first is not available here. Each is
     # set as a JSON list of two rows (`WEB_COMPARE_PAIR='["r4","r5"]'`).
     # `web` only answers them to the SPA: which rows can run is `workflow`'s
     # to say, by refusing one.

@@ -156,7 +156,7 @@ def test_story_2_5_post_verdict_runs_answers_the_stored_result_in_the_contracts_
     assert "SECRET" not in response.text
 
 
-@pytest.mark.parametrize("row", ["r4"])
+@pytest.mark.parametrize("row", ["r6"])
 def test_story_2_5_a_row_that_is_not_built_is_409_retriever_not_available(
     client: TestClient,
     facts: FakeFacts,
@@ -177,20 +177,24 @@ def test_story_2_5_a_row_that_is_not_built_is_409_retriever_not_available(
     )
     assert (repository.rows, agent.runs, facts.calls) == ({}, 0, 0)
     assert client.get(f"/cases/{case_id}/verdict-runs").json()["verdict_runs"] == []
-    # Story 3.3: `r5` needs a search service at `retrieval`. It is refused
-    # the same way unless the settings name it, and a row this build cannot
-    # run is no setting at all.
-    on_r5 = client.post("/verdict-runs", json=command(case_id, retriever_config="r5"))
-    assert (on_r5.status_code, error_code(on_r5)) == (
-        409,
-        ErrorCode.RETRIEVER_NOT_AVAILABLE,
-    )
-    assert "Rows r1, r2 and r3 can be used" in on_r5.json()["error"]["message"]
+    # Stories 3.3 and 3.7: `r5` needs a search service at `retrieval` and
+    # `r4` a reranker. Each is refused the same way unless the settings
+    # name it, and a row this build cannot run is no setting at all.
+    for needs_more in ("r4", "r5"):
+        other = client.post(
+            "/verdict-runs", json=command(case_id, retriever_config=needs_more)
+        )
+        assert (other.status_code, error_code(other)) == (
+            409,
+            ErrorCode.RETRIEVER_NOT_AVAILABLE,
+        )
+        assert "Rows r1, r2 and r3 can be used" in other.json()["error"]["message"]
     named = settings.model_copy(
-        update={"available_retriever_configs": ["r1", "r2", "r3", "r5"]}
+        update={"available_retriever_configs": ["r1", "r2", "r3", "r4", "r5"]}
     )
-    assert RetrieverConfig.R5 in run_options(named).retriever_configs
-    assert RetrieverConfig.R5 not in run_options(settings).retriever_configs
+    for config in (RetrieverConfig.R4, RetrieverConfig.R5):
+        assert config in run_options(named).retriever_configs
+        assert config not in run_options(settings).retriever_configs
     with pytest.raises(ValidationError):
         Settings(available_retriever_configs=[RetrieverConfig.R3, RetrieverConfig(row)])
 

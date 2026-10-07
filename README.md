@@ -456,9 +456,9 @@ Which two rows are shown is a setting of `web`: `WEB_COMPARE_PAIR` (default `["r
 does not know which rows are built. The screen asks for a run with each row of the default pair
 that the case has no run for; when `workflow` refuses a row as not available (409
 `retriever_not_available`), it does the same with the fallback pair, and when a row of that pair is
-refused too it reads "Compare is not available here" with the rows. So while `r4` is not built the
-pair shown is `r3` and `r5`, and once the three services list `r4` the default pair is shown with no
-change here. A run that exists, whatever its state, is shown as it is, and the screen sends one
+refused too it reads "Compare is not available here" with the rows. So where `r4` is not available
+the pair shown is `r3` and `r5`, and where the three services list `r4` (the local start and the
+deploy, since story 3.7) the default pair is shown with no change here. A run that exists, whatever its state, is shown as it is, and the screen sends one
 request for a row for as long as it is open (Compare turned off and on again asks for nothing
 more), because a repeat can make `workflow` schedule a run again. A run that was asked for and is
 not listed after about five minutes of reading (100 reads) is said not to have appeared; "Check
@@ -508,7 +508,10 @@ meet, and answers with one reason per rule. Five modes show what `verdict`'s own
 `--mode unseen_rule` (also cites a rule and a fact the run never saw: not stored), `--mode
 wrong_effect` (debits the rules do not say: not stored, and the case is referred), `--mode
 low_confidence` (confidence 0.6: referred) and `--mode invalid_answer` (a final answer that is not
-the JSON asked for: the run and the case fail). With `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
+the JSON asked for: the run and the case fail). For the reranker of retrieval row `r4` it rates each
+candidate by the share of the query's words it holds; `--mode rerank_incomplete` (one candidate
+left out) and `--mode rerank_slow` (an answer after 30 seconds) show a search with `r4` failing, as
+`--mode invalid` does. With `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
 (`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`). It is part of the same dev-only package, and
 `classification`, `extraction` and `verdict` refuse a plain-HTTP model endpoint that is not on this machine.
 Locally the audit trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT`,
@@ -664,15 +667,15 @@ curl -s 'http://localhost:8004/rules/UW-DM-003?retriever_config=r1'
 ```
 
 A case may be started with any of the available rows, or with all of them
-(`"retriever_configs": ["r1", "r2", "r3", "r5"]` in the start request): it gets one verdict run per row on
+(`"retriever_configs": ["r1", "r2", "r3", "r4", "r5"]` in the start request): it gets one verdict run per row on
 the same extracted facts and completes when each has its `verdict.suggested` event. The rows a case
 may run with are named in three places, which a test outside `services/` holds equal without any
 container (`packages/synthdata/tests/test_foundry_standin.py`): `retrieval`'s row table
 (`domain/rows.py`, `available_rows`: the built rows, less `r5` when the service has no search
-endpoint), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
+endpoint and less `r4` when it has no chat deployment), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
 `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS`. Both settings default to `r1`, `r2` and `r3`; `dapr.yaml`
-and the deploy (the one list of `infra/demo/app/terraform.tfvars`) add `r5`, because there
-`retrieval` is given a search service. A verdict run on `r1` reads its rules from the `fixed`
+and the deploy (the one list of `infra/demo/app/terraform.tfvars`) add `r4` and `r5`, because there
+`retrieval` is given the chat deployment and a search service. A verdict run on `r1` reads its rules from the `fixed`
 set. A reason's effect is then read from that rule's own definition inside the chunk, from its
 marker to the end of its paragraph; a definition the chunk cuts off before its rating bears out no
 debit and no decline, so that reason is dropped and the run refers. That is the baseline's honest
@@ -729,9 +732,55 @@ curl -s -X POST http://localhost:8004/searches -H 'content-type: application/jso
   -d '{"query": "Type 2 diabetes mellitus: HbA1c from 8.0 to below 9.0 %", "retriever_config": "r5"}'
 ```
 
-There is no reranker on pgvector, no query rewriting by a model and no cache. Rows `r4` and `r6` are named
-in one table (`domain/rows.py`) and refused with `retriever_not_available` (409) until their stories
-build them; a
+**Row `r4` with a reranker (story 3.7).** Row `r3` and one more step, so that the comparison can say
+what reranking alone is worth on pgvector. The order is the one thing that differs:
+
+- *The candidates* are `r3`'s, found by the same function (`domain/search.py`, `fused_candidates`):
+  the same embedding call, the same two searches to the same depth, the same fusion. `r3` itself
+  answers as before.
+- *The reranker* is an LLM reranker: one call to the shared chat deployment
+  (`RETRIEVAL_CHAT_DEPLOYMENT`), through the same model gateway and under its cap on concurrent
+  calls. It is shown the query and the 20 best fused candidates (`RETRIEVAL_SEARCH_RERANK_DEPTH`;
+  a search that asks for more items has that many rated), each with its `chunk_id`, impairment and
+  text, as one JSON object in the user turn: data, never instructions. The prompt is
+  `prompts/rerank.md`. The answer is structured (`rerank_relevance`): a relevance from 0 to 1 for
+  every candidate, by `chunk_id`. The items are the candidates by that relevance, largest first,
+  and candidates rated alike in the fused order; `score` is the relevance, comparable within the
+  row only. Cohere Rerank on Foundry, which the epic prefers if it can be deployed in West US 3,
+  could not be checked with Azure down: that check, and the owner's choice after it, are in
+  `deferred-work.md`. There is one reranker and no switch between two.
+- *No answer is no answer* (`domain/rerank.py`). An answer that is not the object asked for, leaves a
+  candidate out, names one it was not given or twice, or holds a relevance that is no number from 0
+  to 1, fails the search with `model_unavailable` (503), with the reason in the log
+  (`rerank answer invalid: reason=...`). The fused order is never answered in its place: that would
+  be `r3`'s answer under `r4`'s name.
+- *Its own budget.* A chat call does not fit the other rows' 8 seconds: the call has 15 seconds
+  (`RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS`) and a search with `r4` 20 in all
+  (`RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS`). Past that the search is `model_unavailable` and its
+  log line says `waited_for=reranker` and how long (`rerank_ms=`). A rerank call that timed out is
+  not sent again: a second one could not be answered inside the deadline. Its answer may take
+  4,000 tokens (`RETRIEVAL_SEARCH_RERANK_MAX_COMPLETION_TOKENS`); an empty answer, which is what a
+  refusal or a cut at that limit gives, is `reason=rerank_empty`. All four settings are set in
+  `dapr.yaml` and are variables of `infra/demo/app`. Rerank calls leave one slot of the gateway's
+  cap on concurrent calls free (`RETRIEVAL_MODEL_MAX_CONCURRENT_CALLS`), so the other rows' query
+  embeddings do not wait behind them. Every caller of a search waits longer: `verdict` 25 seconds
+  for one tool call (`VERDICT_UPSTREAM_TIMEOUT_SECONDS`, raised from 12), `web` 30 and the bake-off
+  runner 30; a test holds that. The search's log line and span carry the number of candidates rated
+  and the reranker's time (`reranked=`, `rerank_ms=`), never the query or a chunk's text.
+- *Availability.* A service that is told of no chat deployment refuses `r4` with
+  `retriever_not_available` (409), and the other rows work as before.
+
+```sh
+curl -s -X POST http://localhost:8004/searches -H 'content-type: application/json' \
+  -d '{"query": "Type 2 diabetes mellitus: HbA1c from 8.0 to below 9.0 %", "retriever_config": "r4"}'
+```
+
+Locally the reranker is the model stand-in, which counts shared words: `r4`'s figures on a local
+scoreboard prove the plumbing and say nothing of reranking.
+
+There is no query rewriting by a model and no cache. Row `r6` is named
+in the one table (`domain/rows.py`) and refused with `retriever_not_available` (409) until its story
+builds it; a
 `retriever_config` that is no row at all is `validation_failed` (422), as are a blank query and a
 `top_k` outside 1 to 50 or a query over 2,000 characters. A search has a short budget of its own,
 apart from the ingestion job's model settings: 3 seconds for the query's embedding call
