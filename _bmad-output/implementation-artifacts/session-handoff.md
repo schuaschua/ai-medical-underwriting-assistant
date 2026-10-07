@@ -16,21 +16,24 @@ Branch `architecture/spine-redaction-diagrams`, nothing pushed. Azure resource g
 | 2.5 and 2.6 verdict agent and refer rules; suite cut to 536 tests | done | `cc11e47` |
 | local run with real Dapr sidecars recorded | done | `12a74c8` |
 | 2.7 result view | done | `e3ebaae` |
-| 2.8 agent log | implemented, reviewed, review fixes applied; NOT committed. Verified on its own paths only | — |
-| 3.2 rows `r1` and `r2` | implemented, reviewed, review fixes applied; NOT committed. Cross-service tests over the real manual not rerun since the fixes | — |
-| 3.1 and 4.1 case set, page set, training set | implemented, reviewed; its review fixes were STILL BEING APPLIED by a background agent when this was written (answer key corrections: see the spec's Review Triage Log); NOT committed | — |
+| 2.8 agent log (closes Epic 2) | done | `26d5dd5` |
+| 3.2 rows `r1` and `r2` | done | `f34eb67` |
+| 3.1 and 4.1 case set (22 cases), scored page set, training set | done | `9bd6744` |
 | 3.3 row `r5` on Azure AI Search | spec written (`spec-3-3-...md`), not started | — |
 | 3.4 bake-off runner | spec written (`spec-3-4-...md`), not started | — |
 | 3.5 to 3.8, 4.2, 4.3 | not started; context in `epic-3-context.md` and `epic-4-context.md` | — |
 
-State of the working tree when this was written (2026-10-08): uncommitted changes of three stories share it. Before anything else:
+The working tree was clean at `9bd6744` and the last full run there was green: 536 Python tests (coverage 90%), 267 SPA tests, Terraform valid, images build. No background agent was running.
 
-1. Check that no background agent is still editing: `git status` twice a minute apart should show the same files, and `packages/synthdata` should pass `uv run pytest packages/synthdata/tests/test_synthetic_cases.py packages/synthdata/tests/test_underwriting_manual.py`. If the data fixes look half-done, read `spec-3-1-...md` (Review Triage Log) and finish them: every row marked `patch` there.
-2. Run the full checks once: `docker compose up -d --wait`, `uv sync`, `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy packages services`, `uv run pytest --cov`, the SPA checks (`npm --prefix services/web/spa run lint`, `typecheck`, `contracts:check`, `test -- --run`), `.work/bin/terraform -chdir=infra/demo/app fmt -check -recursive` and `validate`.
-3. Commit by path, one commit per story: 2.8 (`services/web`, `packages/contracts`, the step reads in `services/verdict/src/verdict/adapters`, `packages/synthdata/tests/test_agent_log_end_to_end.py`); 3.2 (`services/retrieval`, `services/verdict/src/verdict/domain`, `services/workflow`, `dapr.yaml`, `infra/demo/app`, `tools/`); 3.1 and 4.1 (`packages/synthdata`, `data/`). Shared files (`README.md`, `deferred-work.md`, `infra/bootstrap/README.md`) go with whichever commit comes first. Set each spec's `status` to `done` and its line in `sprint-status.yaml` to `review`.
-4. Then: a look at the result view and the agent log in a real browser against `./tools/dev.sh` (never done), story 3.3, story 3.4, and the rest in order.
+Next, in order: 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 4.2, 4.3. The two written specs have `status: 'ready-for-dev'` and no baseline yet: set the baseline commit and `in-progress`, then implement. Stories 3.3 and 3.4 touch different folders (`services/retrieval` with a search stand-in; `evals/` with two routes in `web`) and can be built at the same time if their test runs are kept apart.
 
-If the working tree holds uncommitted changes when you start, they belong to the stories marked "being implemented". Their implementers ran as background agents of the earlier session and may not have finished. For each: read the spec (its task boxes and Implementation Notes show how far it got), run the spec's Verification commands, review, fix, then commit by path (2.7: `services/web`; 3.1 and 4.1: `packages/synthdata`, `data/`; 3.2: `services/retrieval`, `services/verdict`, `services/workflow`, plus their lines in `dapr.yaml` and `infra/demo/app`).
+Still to do once, when the tree is quiet: look at the result view and the agent log in a real browser against `./tools/dev.sh` (never done; the tests use a stand-in for the PDF renderer).
+
+Things the reviews of the last stories found that a later story must respect:
+
+- On `r1` a rule's definition can be cut in two by the fixed-size cut; the agent then cites nothing and the run is `standard` with no reasons. That is the baseline's weakness and the bake-off should show it, not hide it.
+- The local stand-in's vectors count shared words, so local recall and ranking figures mean nothing; tests hold only shapes and loose floors. Real figures come from the Azure session.
+- The answer key follows the manual, including its invented "which reading counts" rules; `verdict` still refers a run that cites two bands of one measure.
 
 ## How each story is built
 
