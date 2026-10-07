@@ -5,7 +5,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
-from contracts.enums import CaseStatus
+from contracts.enums import CaseStatus, ClassifierContender
+from contracts.models.classification import ClassificationResult
 from contracts.models.intake import RedactionResult
 from contracts.models.workflow import AuditTrail, CaseProgress
 from workflow.domain.entities import CaseRecord
@@ -83,4 +84,20 @@ class StageServices(Protocol):
         trace_context: Mapping[str, str],
     ) -> RedactionResult:
         """AD-21: have `intake` redact the case's document and split it into pages."""
+        ...
+
+    async def classify_page(
+        self,
+        case_id: str,
+        page_id: str,
+        contender: ClassifierContender,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> ClassificationResult:
+        """AD-13: have `classification` say what one page is, with the case's contender.
+
+        Besides the errors above it raises `validation_failed` when the
+        stage cannot run that contender; like `not_found`, no repeat mends it.
+        """
         ...

@@ -458,7 +458,11 @@ def test_story_1_5_a_malformed_traceparent_is_not_passed_on(
     response = client.post(
         "/api/cases",
         content=case_pdf,
-        headers={**CUSTOMER, "traceparent": traceparent.encode("latin-1")},
+        # As bytes throughout: the value need not be text a header may hold.
+        headers=[
+            *((name.encode(), value.encode()) for name, value in CUSTOMER.items()),
+            (b"traceparent", traceparent.encode("latin-1")),
+        ],
     )
 
     assert response.status_code == 201

@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-import httpx
+import httpx2
 import psycopg
 import pytest
 from alembic import command
@@ -39,15 +39,18 @@ KEY = "3f2b8a52-6c1d-4c43-9d0e-0a8f5a1b2c3d"
 OTHER_KEY = "7d0c2f1e-55aa-4b7e-8c11-2e9d6f3a4b5c"
 
 
-def upload(client: TestClient, content: bytes, key: str | None = KEY) -> httpx.Response:
+def upload(
+    client: TestClient, content: bytes, key: str | None = KEY
+) -> httpx2.Response:
     headers = dict(PDF)
     if key is not None:
         headers["Idempotency-Key"] = key
-    response: httpx.Response = client.post("/cases", content=content, headers=headers)
+    # The test client answers with its own HTTP library's response (httpx2).
+    response: httpx2.Response = client.post("/cases", content=content, headers=headers)
     return response
 
 
-def error_code(response: httpx.Response) -> str:
+def error_code(response: httpx2.Response) -> str:
     return ErrorBody.model_validate(response.json()).error.code.value
 
 

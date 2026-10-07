@@ -43,6 +43,21 @@ output "workflow_database_role" {
   value       = local.workflow_identity.name
 }
 
+output "classification_container_app_name" {
+  description = "Name of the classification Container App."
+  value       = module.classification.name
+}
+
+output "classification_container_app_id" {
+  description = "Resource id of the classification Container App."
+  value       = module.classification.resource_id
+}
+
+output "classification_database_role" {
+  description = "Name of the PostgreSQL role the classification service signs in as; the database bootstrap creates it (infra/bootstrap/README.md)."
+  value       = local.classification_identity.name
+}
+
 output "image_tag" {
   description = "Image tag the services run."
   value       = var.image_tag

@@ -18,6 +18,7 @@ from opentelemetry import trace
 
 from intake.adapters.credential import azure_credential
 from intake.adapters.db import EntraToken
+from intake.adapters.telemetry import adapter_span
 from intake.domain.entities import JobOutput
 from intake.domain.ports import RedactionJobError
 from intake.settings import APP_ID, Settings
@@ -135,7 +136,7 @@ class LanguageRedaction:
                 }
             ],
         }
-        with tracer.start_as_current_span("intake.language.submit"):
+        with adapter_span(tracer, "intake.language.submit"):
             for attempt in range(SUBMIT_RETRIES + 1):
                 try:
                     response = await self._http.post(
@@ -167,7 +168,7 @@ class LanguageRedaction:
 
     async def output(self, job_id: str, case_id: str) -> JobOutput:
         """Look at the job until it has ended; the caller's deadline bounds the wait."""
-        with tracer.start_as_current_span("intake.language.wait"):
+        with adapter_span(tracer, "intake.language.wait"):
             while True:
                 job = await self._job(job_id)
                 status = str(job.get("status", "")).lower() if job is not None else ""
@@ -233,7 +234,7 @@ class LanguageRedaction:
         return name
 
     async def cancel(self, job_id: str) -> None:
-        with tracer.start_as_current_span("intake.language.cancel"):
+        with adapter_span(tracer, "intake.language.cancel"):
             response = await self._http.post(
                 f"{JOBS_PATH}/{job_id}:cancel",
                 params=self._parameters,

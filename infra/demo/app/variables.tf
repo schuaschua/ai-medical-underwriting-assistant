@@ -84,6 +84,61 @@ variable "workflow_ready_path" {
   type        = string
 }
 
+variable "classification_port" {
+  description = "Port the classification container listens on."
+  type        = number
+}
+
+variable "classification_health_path" {
+  description = "Path of the classification service's health route, the target of its startup and liveness probes."
+  type        = string
+}
+
+variable "classification_ready_path" {
+  description = "Path of the classification service's readiness route, which fails until the database schema is at the migration head bundled in the image."
+  type        = string
+}
+
+variable "classifier_runs" {
+  description = "How often the LLM classifier runs the model on one page; its confidence is the share of those runs that agree (spine AD-13)."
+  type        = number
+
+  validation {
+    condition     = var.classifier_runs == floor(var.classifier_runs) && var.classifier_runs >= 1 && var.classifier_runs <= 25
+    error_message = "classifier_runs must be a whole number from 1 to 25."
+  }
+}
+
+variable "classifier_max_concurrent_runs" {
+  description = "How many of one page's classifier runs are under way at once."
+  type        = number
+
+  validation {
+    condition     = var.classifier_max_concurrent_runs == floor(var.classifier_max_concurrent_runs) && var.classifier_max_concurrent_runs >= 1 && var.classifier_max_concurrent_runs <= 25
+    error_message = "classifier_max_concurrent_runs must be a whole number from 1 to 25."
+  }
+}
+
+variable "model_max_concurrent_calls" {
+  description = "The most calls to the chat deployment the classification service has under way at once, however many pages are being classified. Lower it if the deployment's token rate limit is hit."
+  type        = number
+
+  validation {
+    condition     = var.model_max_concurrent_calls == floor(var.model_max_concurrent_calls) && var.model_max_concurrent_calls >= 1 && var.model_max_concurrent_calls <= 100
+    error_message = "model_max_concurrent_calls must be a whole number from 1 to 100."
+  }
+}
+
+variable "model_max_retries" {
+  description = "How often a model call answered 429 or 5xx is sent again before the model counts as unavailable (spine AD-16: three)."
+  type        = number
+
+  validation {
+    condition     = var.model_max_retries == floor(var.model_max_retries) && var.model_max_retries >= 0 && var.model_max_retries <= 10
+    error_message = "model_max_retries must be a whole number from 0 to 10."
+  }
+}
+
 variable "otel_sampling_ratio" {
   description = "Share of requests each service traces, from 0 to 1."
   type        = number

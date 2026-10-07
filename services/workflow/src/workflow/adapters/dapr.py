@@ -12,10 +12,14 @@ import httpx
 from opentelemetry import propagate, trace
 from pydantic import ValidationError
 
-from contracts.enums import Service
+from contracts.base import ContractModel
+from contracts.enums import ClassifierContender, Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
+from contracts.models._stage import StageResult
+from contracts.models.classification import ClassificationResult, ClassifyCommand
 from contracts.models.intake import RedactionCommand, RedactionResult
-from contracts.operations import get_operation
+from contracts.operations import Operation, get_operation
+from workflow.adapters.telemetry import adapter_span
 from workflow.settings import APP_ID, Settings
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,7 @@ tracer = trace.get_tracer(APP_ID)
 
 UPSTREAM_UNAVAILABLE_MESSAGE = "A stage service is not available right now."
 WRONG_CASE_MESSAGE = "The stage answered about another case."
+WRONG_PAGE_MESSAGE = "The stage answered about another page or classifier."
 
 # What a stage may say that is an answer in itself, passed on with its code:
 # the stage is still working on the same command (AD-6), or it does not hold
@@ -100,11 +105,68 @@ class StageClient:
         call is `upstream_unavailable`.
         """
         operation = get_operation("redact_document")
-        command = RedactionCommand(eval_run_id=eval_run_id)
+        return await self._command(
+            operation,
+            operation.path.format(case_id=case_id),
+            RedactionCommand(eval_run_id=eval_run_id),
+            RedactionResult,
+            case_id,
+            trace_context,
+        )
+
+    async def classify_page(
+        self,
+        case_id: str,
+        page_id: str,
+        contender: ClassifierContender,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> ClassificationResult:
+        """`POST /classifications` on `classification` (AD-13): one page, one contender.
+
+        Idempotent on case, page and contender. The answer is the stored
+        result, done or failed. `in_progress`, `not_found` (the page is not
+        the case's) and `validation_failed` (the contender cannot be run) are
+        raised with their own codes; any other failure of the call is
+        `upstream_unavailable`.
+        """
+        operation = get_operation("classify_page")
+        result = await self._command(
+            operation,
+            operation.path,
+            # Ids only (AD-6): the stage reads the page from `intake` itself.
+            ClassifyCommand(
+                case_id=case_id,
+                page_id=page_id,
+                contender=contender,
+                eval_run_id=eval_run_id,
+            ),
+            ClassificationResult,
+            case_id,
+            trace_context,
+        )
+        if result.page_id != page_id or result.contender is not contender:
+            # Recording it would move another page, or route this one on
+            # another classifier's reading.
+            raise DomainError(ErrorCode.VALIDATION_FAILED, WRONG_PAGE_MESSAGE)
+        return result
+
+    async def _command[R: StageResult](
+        self,
+        operation: Operation,
+        path: str,
+        command: ContractModel,
+        result_model: type[R],
+        case_id: str,
+        trace_context: Mapping[str, str],
+    ) -> R:
+        """Send one stage command through the sidecar and read the stored result."""
         # The call belongs to the trace of the activity that makes it. That
         # context was read on the activity's thread; this coroutine runs on
         # the service's loop, which does not see it.
-        with tracer.start_as_current_span(
+        with adapter_span(
+            tracer,
             f"workflow.stage.{operation.name}",
             context=propagate.extract(trace_context),
         ):
@@ -118,9 +180,7 @@ class StageClient:
                 async with asyncio.timeout(self._stage_timeout):
                     response = await self._http.request(
                         operation.method.value,
-                        invoke_path(
-                            operation.owner, operation.path.format(case_id=case_id)
-                        ),
+                        invoke_path(operation.owner, path),
                         json=command.model_dump(mode="json"),
                         headers=headers,
                         timeout=self._stage_timeout,
@@ -138,7 +198,7 @@ class StageClient:
         if not response.is_success:
             raise self._refusal(response, operation.owner, operation.name, case_id)
         try:
-            result = RedactionResult.model_validate_json(response.content)
+            result = result_model.model_validate_json(response.content)
         except ValidationError:
             logger.error(
                 "stage call failed: service=%s operation=%s case_id=%s status=%d "

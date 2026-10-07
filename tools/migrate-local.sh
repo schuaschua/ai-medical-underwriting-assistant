@@ -36,3 +36,14 @@ export WORKFLOW_DATABASE_ENTRA_AUTH=false
 
 uv run python -m workflow.local_setup
 uv run alembic -c services/workflow/alembic.ini upgrade head
+
+# classification (schema `classification`). Like intake it runs as the
+# container's own user locally; in Azure it has a role of its own
+# (infra/bootstrap/README.md, section 6).
+export CLASSIFICATION_DATABASE_HOST=127.0.0.1
+export CLASSIFICATION_DATABASE_PORT=5432
+export CLASSIFICATION_DATABASE_NAME=aiuw
+export CLASSIFICATION_DATABASE_USER=aiuw
+export CLASSIFICATION_DATABASE_ENTRA_AUTH=false
+
+uv run alembic -c services/classification/alembic.ini upgrade head

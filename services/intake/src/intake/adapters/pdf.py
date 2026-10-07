@@ -9,6 +9,7 @@ import asyncio
 import pymupdf
 from opentelemetry import trace
 
+from intake.adapters.telemetry import adapter_span
 from intake.domain.entities import PageReading, Word
 from intake.domain.ports import RedactionJobError
 from intake.settings import APP_ID
@@ -111,6 +112,6 @@ class PdfPageSplitter:
         self._limits = (thumbnail_width_px, thumbnail_max_height_px, max_pages)
 
     async def split(self, pdf: bytes) -> list[PageReading]:
-        with tracer.start_as_current_span("intake.pdf.split_pages"):
+        with adapter_span(tracer, "intake.pdf.split_pages"):
             # Rendering is CPU work: off the event loop.
             return await asyncio.to_thread(read_pages, pdf, *self._limits)

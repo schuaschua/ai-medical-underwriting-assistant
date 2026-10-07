@@ -19,17 +19,20 @@ from durabletask.client import OrchestrationState, OrchestrationStatus
 from durabletask.internal import orchestrator_service_pb2 as pb
 from durabletask.worker import ConcurrencyOptions
 
-from contracts.enums import CaseStatus, StageStatus
+from contracts.enums import CaseStatus, ClassifierContender, StageStatus
 from contracts.errors import DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from workflow.adapters.credential import azure_credential
 from workflow.adapters.dapr import trace_headers
 from workflow.adapters.orchestration import (
     CASE_LIFECYCLE,
+    CASE_STATUS,
+    CLASSIFY_PAGE,
     CONFIRM_CASE_STARTED,
     MARK_CASE_FAILED,
     OK,
     OUTCOME,
+    PAGE_IDS,
     REDACT_DOCUMENT,
     REFUSED,
     activity_retry_policy,
@@ -263,13 +266,15 @@ class Activities:
 
     def redact_document(
         self, context: task.ActivityContext, command: dict[str, str | None]
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """AD-21: have `intake` redact the document, and record the result it stored.
 
         One call to the stage, then the one recording path. `in_progress`, or
         no answer, fails the activity and the engine sends the command again
         (AD-6): `intake` answers a repeat with its stored result. A case
-        `intake` does not hold is answered as refused, not retried.
+        `intake` does not hold is answered as refused, not retried. A done
+        redaction's answer hands the ids of its pages on to the orchestration,
+        in document order: ids only (AD-6).
         """
         case_id = str(command["case_id"])
         try:
@@ -287,18 +292,73 @@ class Activities:
             outcome = self.record(REDACT_DOCUMENT, result)
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}
+        answer = self._stage_answer(REDACT_DOCUMENT, result, outcome)
+        if answer.get(CASE_STATUS) == CaseStatus.RUNNING.value:
+            return {**answer, PAGE_IDS: list(result.page_ids)}
+        return answer
+
+    def classify_page(
+        self, context: task.ActivityContext, command: dict[str, str | None]
+    ) -> dict[str, str]:
+        """AD-13: have `classification` classify one page, and record the result it stored.
+
+        As for redaction: one call to the stage, then the one recording path;
+        `in_progress`, or no answer, fails the activity and the engine sends
+        the command again. A page that is not the case's, or a contender the
+        stage cannot run, is answered as refused, not retried. A done result
+        moves its page to `classified`; a failed one fails the page and the
+        case (AD-8). Nothing here routes the page (AD-7).
+        """
+        case_id = str(command["case_id"])
+        page_id = str(command["page_id"])
+        try:
+            # The contender the case was started with, as the start stored it.
+            contender = ClassifierContender(str(command.get("contender")))
+        except ValueError:
+            logger.error(
+                "activity failed: activity=%s case_id=%s reason=unknown_contender "
+                "retry=False",
+                CLASSIFY_PAGE,
+                case_id,
+            )
+            return {OUTCOME: REFUSED, "reason": ErrorCode.VALIDATION_FAILED.value}
+        try:
+            result = self._run(
+                CLASSIFY_PAGE,
+                case_id,
+                self._stages.classify_page(
+                    case_id,
+                    page_id,
+                    contender,
+                    eval_run_id=command.get("eval_run_id"),
+                    # Read here, on the activity's thread, where its trace is.
+                    trace_context=trace_headers(),
+                ),
+                self._stage_timeout_seconds + _STAGE_CALL_SLACK_SECONDS,
+            )
+            outcome = self.record(CLASSIFY_PAGE, result)
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        return self._stage_answer(CLASSIFY_PAGE, result, outcome)
+
+    @staticmethod
+    def _stage_answer(
+        activity: str, result: StageResult, outcome: RecordOutcome
+    ) -> dict[str, str]:
+        """What a stage activity answers the orchestration with, once its result is recorded."""
         if outcome is RecordOutcome.CASE_FAILED or (
             result.status is StageStatus.FAILED and outcome in _IN_THE_TRAIL
         ):
-            # The failed result failed the case, with its `stage.failed` event.
-            return {OUTCOME: OK, "case_status": CaseStatus.FAILED.value}
+            # The failed result failed the case, with its `stage.failed`
+            # event; or the case had failed before this result came.
+            return {OUTCOME: OK, CASE_STATUS: CaseStatus.FAILED.value}
         if outcome in _IN_THE_TRAIL:
-            return {OUTCOME: OK, "case_status": CaseStatus.RUNNING.value}
+            return {OUTCOME: OK, CASE_STATUS: CaseStatus.RUNNING.value}
         # The result contradicts what is stored: the case cannot go on.
         logger.error(
             "stage result not recorded: activity=%s case_id=%s outcome=%s",
-            REDACT_DOCUMENT,
-            case_id,
+            activity,
+            result.case_id,
             outcome.value,
         )
         return {OUTCOME: REFUSED, "reason": outcome.value}
@@ -398,5 +458,6 @@ def build_worker(
     )
     worker.add_activity(activities.confirm_case_started)
     worker.add_activity(activities.redact_document)
+    worker.add_activity(activities.classify_page)
     worker.add_activity(activities.mark_case_failed)
     return worker

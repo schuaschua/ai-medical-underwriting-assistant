@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from contracts.audit import AuditRecord
-from contracts.enums import CaseStatus, PageStatus
+from contracts.enums import CaseStatus, ClassifierContender, PageStatus
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.classification import ClassificationResult
@@ -300,7 +300,10 @@ def classification_done(
 
 
 def classification_failed(
-    case_id: str, page_id: str, error_code: str = "model_unavailable"
+    case_id: str,
+    page_id: str,
+    error_code: str = "model_unavailable",
+    **audit_changes: Any,
 ) -> ClassificationResult:
     classification_id = new_id()
     return ClassificationResult.model_validate(
@@ -314,6 +317,7 @@ def classification_failed(
                 actor="classification:chat-main",
                 page_id=page_id,
                 ref=classification_id,
+                **audit_changes,
             ),
             "classification_id": classification_id,
             "page_id": page_id,
@@ -371,9 +375,10 @@ def verdict_done(case_id: str) -> VerdictRunResult:
 
 @dataclass
 class FakeStages:
-    """Stands in for the stage services: `intake` answers a redaction as it would.
+    """Stands in for the stage services: each answers its command as it would.
 
-    A case is redacted once; every repeat gets the stored result (AD-6).
+    A case is redacted once and a page is classified once; every repeat gets
+    the stored result (AD-6).
     """
 
     # What the stage does with a case it has no result for: "done" or "failed".
@@ -386,6 +391,19 @@ class FakeStages:
     script: list[str] = field(default_factory=list)
     results: dict[str, RedactionResult] = field(default_factory=dict)
     calls: list[tuple[str, str | None, dict[str, str]]] = field(default_factory=list)
+    # Classification (story 1.8). What the stage does with a page it has no
+    # result for: "done" or "failed"; or, by page number, for some pages only.
+    classification: str = "done"
+    classification_error_code: str = "model_unavailable"
+    failing_page_numbers: frozenset[int] = frozenset()
+    # As `script`, for the next classify commands.
+    classify_script: list[str] = field(default_factory=list)
+    classifications: dict[tuple[str, str], ClassificationResult] = field(
+        default_factory=dict
+    )
+    classify_calls: list[tuple[str, str, str, str | None, dict[str, str]]] = field(
+        default_factory=list
+    )
 
     async def redact_document(
         self,
@@ -395,15 +413,7 @@ class FakeStages:
         trace_context: Mapping[str, str],
     ) -> RedactionResult:
         self.calls.append((case_id, eval_run_id, dict(trace_context)))
-        step = self.script.pop(0) if self.script else "answer"
-        if step == "in_progress":
-            raise DomainError(ErrorCode.IN_PROGRESS, "Still being redacted.")
-        if step == "down":
-            raise DomainError(ErrorCode.UPSTREAM_UNAVAILABLE, "Not available.")
-        if step == "invalid":
-            raise DomainError(ErrorCode.VALIDATION_FAILED, "The request is not valid.")
-        if step == "not_found":
-            raise DomainError(ErrorCode.NOT_FOUND, "That case could not be found.")
+        self._follow(self.script, "That case could not be found.")
         if case_id not in self.results:
             self.results[case_id] = (
                 redaction_done(
@@ -416,19 +426,75 @@ class FakeStages:
             )
         return self.results[case_id]
 
+    async def classify_page(
+        self,
+        case_id: str,
+        page_id: str,
+        contender: ClassifierContender,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> ClassificationResult:
+        self.classify_calls.append(
+            (case_id, page_id, contender.value, eval_run_id, dict(trace_context))
+        )
+        self._follow(self.classify_script, "That page could not be found.")
+        if contender is not ClassifierContender.LLM:
+            # Story 4.2 builds the second contender; until then it is refused.
+            raise DomainError(
+                ErrorCode.VALIDATION_FAILED, "That classifier is not available."
+            )
+        redacted = self.results.get(case_id)
+        if redacted is None or page_id not in redacted.page_ids:
+            raise DomainError(ErrorCode.NOT_FOUND, "That page could not be found.")
+        key = (case_id, page_id)
+        if key not in self.classifications:
+            page_number = redacted.page_ids.index(page_id) + 1
+            failing = (
+                page_number in self.failing_page_numbers
+                if self.failing_page_numbers
+                else self.classification != "done"
+            )
+            self.classifications[key] = (
+                classification_failed(
+                    case_id,
+                    page_id,
+                    self.classification_error_code,
+                    eval_run_id=eval_run_id,
+                )
+                if failing
+                else classification_done(case_id, page_id, eval_run_id=eval_run_id)
+            )
+        return self.classifications[key]
+
+    @staticmethod
+    def _follow(script: list[str], not_found_message: str) -> None:
+        """Do what the script says for this call, if it says anything."""
+        step = script.pop(0) if script else "answer"
+        if step == "in_progress":
+            raise DomainError(ErrorCode.IN_PROGRESS, "Still being worked on.")
+        if step == "down":
+            raise DomainError(ErrorCode.UPSTREAM_UNAVAILABLE, "Not available.")
+        if step == "invalid":
+            raise DomainError(ErrorCode.VALIDATION_FAILED, "The request is not valid.")
+        if step == "not_found":
+            raise DomainError(ErrorCode.NOT_FOUND, not_found_message)
+
 
 _REDACTION_PATH = re.compile(
     r"/v1\.0/invoke/intake/method/cases/(?P<case_id>[0-9a-f-]{36})/redaction"
 )
+_CLASSIFICATION_PATH = "/v1.0/invoke/classification/method/classifications"
 
 
 @dataclass
 class SidecarStandIn:
-    """Stands in for `workflow`'s Dapr sidecar, with `intake` behind it.
+    """Stands in for `workflow`'s Dapr sidecar, with the stage services behind it.
 
     An `httpx` transport handler: `httpx.MockTransport(stand_in.handle)`. It
-    answers the redaction command as `intake` does, over HTTP and in the
-    contracts' shapes, so the real client module is what the test runs.
+    answers the redaction command as `intake` does and the classify command
+    as `classification` does, over HTTP and in the contracts' shapes, so the
+    real client module is what the test runs.
     """
 
     stages: FakeStages = field(default_factory=FakeStages)
@@ -442,20 +508,40 @@ class SidecarStandIn:
         """How often redaction was commanded for one case."""
         return sum(case_id in request.url.path for request in self.requests)
 
+    def classify_commands(self, case_id: str) -> list[dict[str, Any]]:
+        """The classify commands sent for one case, in the order they came."""
+        commands = [
+            json.loads(request.content)
+            for request in self.requests
+            if request.url.path == _CLASSIFICATION_PATH
+        ]
+        return [command for command in commands if command["case_id"] == case_id]
+
     async def handle(self, request: httpx.Request) -> httpx.Response:
         with self._lock:
             self.requests.append(request)
         match = _REDACTION_PATH.fullmatch(request.url.path)
-        if match is None or request.method != "POST":
+        classify = request.url.path == _CLASSIFICATION_PATH
+        if (match is None and not classify) or request.method != "POST":
             # As the sidecar answers for an app or a method it cannot reach.
             return httpx.Response(500, json={"errorCode": "ERR_DIRECT_INVOKE"})
         command = json.loads(request.content)
+        result: RedactionResult | ClassificationResult
         try:
-            result = await self.stages.redact_document(
-                match["case_id"],
-                eval_run_id=command.get("eval_run_id"),
-                trace_context=dict(request.headers),
-            )
+            if match is not None:
+                result = await self.stages.redact_document(
+                    match["case_id"],
+                    eval_run_id=command.get("eval_run_id"),
+                    trace_context=dict(request.headers),
+                )
+            else:
+                result = await self.stages.classify_page(
+                    command["case_id"],
+                    command["page_id"],
+                    ClassifierContender(command["contender"]),
+                    eval_run_id=command.get("eval_run_id"),
+                    trace_context=dict(request.headers),
+                )
         except DomainError as error:
             return httpx.Response(
                 error.http_status,

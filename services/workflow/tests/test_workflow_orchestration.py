@@ -74,12 +74,16 @@ class RecordingContext:
 
     def call_activity(self, activity: str, **options: Any) -> object:
         self.asked.append({"activity": activity, **options})
-        return object()
+        # A task of the engine's own kind: the orchestrator may wait for
+        # several of them together (story 1.8).
+        return task.CompletableTask[Any]()
 
 
 CONFIRMED = {"outcome": "ok", "case_status": "running"}
 # Story 1.7: redaction, the first stage, is done and its result recorded.
-REDACTED = {"outcome": "ok", "case_status": "running"}
+# Story 1.8: it hands on the id of its one page, which is then classified.
+REDACTED = {"outcome": "ok", "case_status": "running", "page_ids": [new_id()]}
+CLASSIFIED = [{"outcome": "ok", "case_status": "running"}]
 
 
 def run_lifecycle(
@@ -111,7 +115,7 @@ def run_lifecycle(
 def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
     case_id: str,
 ) -> None:
-    asked, result = run_lifecycle(case_id, [CONFIRMED, REDACTED])
+    asked, result = run_lifecycle(case_id, [CONFIRMED, REDACTED, CLASSIFIED])
 
     # The first activity, retried on failure (AD-6); ids only go in and out.
     # What follows it is redaction, the first stage (story 1.7).
@@ -125,8 +129,8 @@ def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
 
 def test_story_1_6_the_orchestrator_is_deterministic(case_id: str) -> None:
     # Replayed from history, the same answers must lead to the same requests.
-    assert run_lifecycle(case_id, [CONFIRMED, REDACTED]) == run_lifecycle(
-        case_id, [CONFIRMED, REDACTED]
+    assert run_lifecycle(case_id, [CONFIRMED, REDACTED, CLASSIFIED]) == run_lifecycle(
+        case_id, [CONFIRMED, REDACTED, CLASSIFIED]
     )
     failed = task.TaskFailedError("failed", RuntimeError("x"))
     assert run_lifecycle(case_id, [failed, {}]) == run_lifecycle(case_id, [failed, {}])

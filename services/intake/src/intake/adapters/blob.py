@@ -8,6 +8,7 @@ from opentelemetry import trace
 
 from contracts.operations import PDF
 from intake.adapters.credential import azure_credential
+from intake.adapters.telemetry import adapter_span
 from intake.settings import APP_ID, Settings
 
 tracer = trace.get_tracer(APP_ID)
@@ -40,7 +41,7 @@ class BlobOriginalStore:
 
     async def put(self, blob_name: str, content: bytes) -> None:
         """Store a new original; an existing blob of that name is an error."""
-        with tracer.start_as_current_span("intake.blob.put_original"):
+        with adapter_span(tracer, "intake.blob.put_original"):
             # The SDK's client blocks, so it runs on a worker thread. A thread
             # cannot be cancelled: if the caller is, the write goes on, and
             # `delete` waits for it.
@@ -53,7 +54,7 @@ class BlobOriginalStore:
 
     async def delete(self, blob_name: str) -> None:
         """Remove an original; one that is already gone is not an error."""
-        with tracer.start_as_current_span("intake.blob.delete_original"):
+        with adapter_span(tracer, "intake.blob.delete_original"):
             write = self._writing.get(blob_name)
             if write is not None:
                 # Deleting first would let the write land afterwards.
@@ -110,19 +111,19 @@ class BlobCaseFiles:
         self._container = service.get_container_client(container)
 
     async def read(self, blob_name: str) -> bytes:
-        with tracer.start_as_current_span("intake.blob.read_case_file"):
+        with adapter_span(tracer, "intake.blob.read_case_file"):
             return await asyncio.to_thread(self._read, blob_name)
 
     async def put(self, blob_name: str, content: bytes, content_type: str) -> None:
-        with tracer.start_as_current_span("intake.blob.put_case_file"):
+        with adapter_span(tracer, "intake.blob.put_case_file"):
             await asyncio.to_thread(self._put, blob_name, content, content_type)
 
     async def delete(self, blob_name: str) -> None:
-        with tracer.start_as_current_span("intake.blob.delete_case_file"):
+        with adapter_span(tracer, "intake.blob.delete_case_file"):
             await asyncio.to_thread(self._delete, blob_name)
 
     async def delete_all(self, prefix: str) -> None:
-        with tracer.start_as_current_span("intake.blob.delete_case_files"):
+        with adapter_span(tracer, "intake.blob.delete_case_files"):
             await asyncio.to_thread(self._delete_all, prefix)
 
     def _read(self, blob_name: str) -> bytes:

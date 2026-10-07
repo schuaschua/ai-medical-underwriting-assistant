@@ -19,6 +19,7 @@ from intake.adapters.db import (
     redaction_table,
     word_box_table,
 )
+from intake.adapters.telemetry import adapter_span
 from intake.domain.entities import Document, NewPage, PageRecord, Redaction, Word
 from intake.settings import APP_ID
 
@@ -32,7 +33,7 @@ class SqlRedactionRepository:
         self._database = database
 
     async def document_of_case(self, case_id: str) -> Document | None:
-        with tracer.start_as_current_span("intake.db.document_of_case"):
+        with adapter_span(tracer, "intake.db.document_of_case"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(document_table)
@@ -59,7 +60,7 @@ class SqlRedactionRepository:
         self, case_id: str, document_id: str, started_at: datetime
     ) -> Redaction | None:
         """Insert the key row as running; the primary key settles calls that race."""
-        with tracer.start_as_current_span("intake.db.begin_redaction"):
+        with adapter_span(tracer, "intake.db.begin_redaction"):
             async with self._database.begin() as connection:
                 inserted = await connection.execute(
                     pg_insert(redaction_table)
@@ -87,7 +88,7 @@ class SqlRedactionRepository:
         )
 
     async def note_job(self, case_id: str, job_id: str) -> None:
-        with tracer.start_as_current_span("intake.db.note_redaction_job"):
+        with adapter_span(tracer, "intake.db.note_redaction_job"):
             async with self._database.begin() as connection:
                 await connection.execute(
                     update(redaction_table)
@@ -106,7 +107,7 @@ class SqlRedactionRepository:
         status = (
             StageStatus.DONE if redacted_blob_name is not None else StageStatus.FAILED
         )
-        with tracer.start_as_current_span("intake.db.finish_redaction"):
+        with adapter_span(tracer, "intake.db.finish_redaction"):
             async with self._database.begin() as connection:
                 settled = await connection.execute(
                     update(redaction_table)
@@ -176,7 +177,7 @@ class SqlRedactionRepository:
     # --- Reads ---------------------------------------------------------------
 
     async def pages_of_case(self, case_id: str) -> list[PageRecord] | None:
-        with tracer.start_as_current_span("intake.db.pages_of_case"):
+        with adapter_span(tracer, "intake.db.pages_of_case"):
             async with self._database.connect() as connection:
                 known = await connection.execute(
                     select(case_table.c.case_id).where(case_table.c.case_id == case_id)
@@ -191,7 +192,7 @@ class SqlRedactionRepository:
                 return [_page(row) for row in result]
 
     async def page(self, page_id: str) -> PageRecord | None:
-        with tracer.start_as_current_span("intake.db.page"):
+        with adapter_span(tracer, "intake.db.page"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(page_table).where(page_table.c.page_id == page_id)
@@ -200,7 +201,7 @@ class SqlRedactionRepository:
         return _page(row) if row is not None else None
 
     async def page_text(self, page_id: str) -> str | None:
-        with tracer.start_as_current_span("intake.db.page_text"):
+        with adapter_span(tracer, "intake.db.page_text"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(page_text_table.c.text).where(
@@ -211,7 +212,7 @@ class SqlRedactionRepository:
         return str(row.text) if row is not None else None
 
     async def page_words(self, page_id: str) -> list[Word]:
-        with tracer.start_as_current_span("intake.db.page_words"):
+        with adapter_span(tracer, "intake.db.page_words"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(word_box_table)
@@ -231,7 +232,7 @@ class SqlRedactionRepository:
                 ]
 
     async def redacted_blob_of(self, document_id: str) -> tuple[bool, str | None]:
-        with tracer.start_as_current_span("intake.db.redacted_blob_of"):
+        with adapter_span(tracer, "intake.db.redacted_blob_of"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(redaction_table.c.redacted_blob_name)

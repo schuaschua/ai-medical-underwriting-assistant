@@ -1,4 +1,4 @@
-"""Fixtures of the tests that put the Language stand-in behind the real services (story 1.7).
+"""Fixtures of the tests that put the stand-ins behind the real services (stories 1.7 and 1.8).
 
 These tests live here, with the stand-in, and not under `services/`: nothing
 there may name the generator's package or the answer key (spine AD-17).
@@ -17,16 +17,25 @@ import pytest
 from alembic import command
 from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import ContainerClient
+from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from psycopg import sql
 from pydantic import SecretStr
+from synthdata_stack import LocalClassification, LocalIntake
 from workflow_local import as_service
 
+from classification.adapters.migrations import (
+    alembic_config as classification_alembic_config,
+)
+from classification.settings import Settings as ClassificationSettings
 from intake.adapters.blob import build_blob_service, ensure_local_containers
 from intake.adapters.migrations import alembic_config as intake_alembic_config
 from intake.settings import Settings as IntakeSettings
+from synthdata.foundry_standin import DEFAULT_PORT as MODEL_PORT
+from synthdata.foundry_standin import LOCAL_DEPLOYMENT, FoundryStandIn
 from synthdata.language_standin import DEFAULT_PORT, EMULATOR, LanguageStandIn
 from workflow.adapters.local_role import ensure_local_service_role
 from workflow.adapters.migrations import alembic_config as workflow_alembic_config
+from workflow.adapters.scheduler import build_client
 from workflow.settings import Settings as WorkflowSettings
 
 # The task hub of compose.yaml that only tests use.
@@ -158,3 +167,59 @@ def workflow_admin(
 def workflow_service_settings(workflow_admin: WorkflowSettings) -> WorkflowSettings:
     """What the running `workflow` uses against that database: its own role."""
     return as_service(workflow_admin)
+
+
+@pytest.fixture
+def scheduler_client(
+    workflow_service_settings: WorkflowSettings,
+) -> Iterator[DurableTaskSchedulerClient]:
+    """A client of the test's own, to look at what `workflow` did in the scheduler."""
+    client = build_client(workflow_service_settings)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def intake(migrated_database: IntakeSettings, stand_in: LanguageStandIn) -> LocalIntake:
+    """`intake` on this test's database and blob containers, with the stand-in behind it."""
+    return LocalIntake(migrated_database, stand_in)
+
+
+# --- classification and the model stand-in (story 1.8) -------------------------------
+
+
+@pytest.fixture
+def model_stand_in() -> FoundryStandIn:
+    """The stand-in for the Foundry chat deployment."""
+    return FoundryStandIn()
+
+
+@pytest.fixture
+def classification_settings(
+    migrated_database: IntakeSettings,
+) -> ClassificationSettings:
+    """`classification`'s settings for the same database, with its migrations applied."""
+    settings = ClassificationSettings(
+        applicationinsights_connection_string=None,
+        database_name=migrated_database.database_name,
+        # Where the stand-in listens when it runs as a process. Most tests
+        # hand the app a transport to it and never use the network.
+        model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
+        chat_deployment=LOCAL_DEPLOYMENT,
+        # A throttled call is sent again at once.
+        model_retry_seconds=0.01,
+    )
+    command.upgrade(classification_alembic_config(settings), "head")
+    return settings
+
+
+@pytest.fixture
+def classification(
+    classification_settings: ClassificationSettings,
+    model_stand_in: FoundryStandIn,
+    intake: LocalIntake,
+) -> LocalClassification:
+    """`classification` on this test's database, with the model stand-in behind it."""
+    return LocalClassification(classification_settings, model_stand_in, intake)

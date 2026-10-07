@@ -197,7 +197,8 @@ def service(
     """The service as it really runs: its own role, its worker, the emulator.
 
     Its Dapr sidecar is a stand-in behind which `intake` redacts every case
-    (story 1.7): a started case runs on to a done redaction.
+    (story 1.7) and `classification` classifies every page (story 1.8): a
+    started case runs on until its pages are classified.
     """
     with TestClient(
         create_app(service_settings, sidecar=SidecarStandIn().transport()),
@@ -270,9 +271,12 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     )
     assert len(rows_before) == 1
     # Nothing was run a second time: the trail holds the one event of the
-    # one redaction (story 1.7), and no more.
+    # one redaction (story 1.7) and one for each of its two pages'
+    # classification (story 1.8), and no more.
     assert [row[0] for row in audit_rows(service_settings, case_id)] == [
-        "document.redacted"
+        "document.redacted",
+        "page.classified",
+        "page.classified",
     ]
 
 
@@ -338,11 +342,16 @@ def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
     trail = AuditTrail.model_validate(service.get(f"/cases/{case_id}/audit").json())
     assert progress.case_status is CaseStatus.RUNNING
     # Story 1.7: redaction is done, and its pages and its event are there.
+    # Story 1.8: each page is classified, with an event of its own.
     assert [page.page_status.value for page in progress.pages] == [
-        "uploaded",
-        "uploaded",
+        "classified",
+        "classified",
     ]
-    assert [event.action.value for event in trail.events] == ["document.redacted"]
+    assert sorted(event.action.value for event in trail.events) == [
+        "document.redacted",
+        "page.classified",
+        "page.classified",
+    ]
 
 
 @dataclass

@@ -110,7 +110,9 @@ def test_story_1_7_a_started_case_is_redacted_and_its_pages_are_tracked_as_uploa
         "case_id": case_id,
         "case_status": "running",
     }
-    # Redaction is done, and each page of the result is tracked as `uploaded`.
+    # Redaction is done, and each page of the result is tracked: as
+    # `uploaded` first, and by now, the lifecycle having run on, as
+    # `classified` (story 1.8, test_workflow_classification_integration.py).
     assert (progress.case_status.value, progress.redaction_status.value) == (
         "running",
         "done",
@@ -119,15 +121,18 @@ def test_story_1_7_a_started_case_is_redacted_and_its_pages_are_tracked_as_uploa
     assert [(page.page_id, page.page_number) for page in progress.pages] == [
         (page_id, number) for number, page_id in enumerate(result.page_ids, 1)
     ]
-    assert {page.page_status.value for page in progress.pages} == {"uploaded"}
+    assert {page.page_status.value for page in progress.pages} == {"classified"}
     # One `document.redacted` event whose detail is a count per category.
-    (event,) = trail.events
-    assert event.action.value == "document.redacted"
+    (event,) = (
+        event for event in trail.events if event.action.value == "document.redacted"
+    )
     assert event.actor == "intake:azure-ai-language"
     assert event.detail == {"Person": 2, "PhoneNumber": 1}
     assert event.eval_run_id == eval_run_id
-    # Commanded once, through the sidecar, with the run id the case was started with.
-    (request,) = sidecar.requests
+    # Commanded once, through the sidecar, with the run id the case was
+    # started with, and before anything else was commanded.
+    assert sidecar.redactions(case_id) == 1
+    request = sidecar.requests[0]
     assert request.url.path == f"/v1.0/invoke/intake/method/cases/{case_id}/redaction"
     assert json.loads(request.content) == {"eval_run_id": eval_run_id}
 
@@ -196,9 +201,10 @@ def test_story_1_7_in_progress_is_retried_until_the_stage_answers(
 
     assert sidecar.redactions(case_id) == 4
     assert case_row(service_settings, case_id) == ("running", "done")
-    assert [row[0] for row in audit_rows(service_settings, case_id)] == [
+    # One redaction event, however often the command was sent.
+    assert [row[0] for row in audit_rows(service_settings, case_id)].count(
         "document.redacted"
-    ]
+    ) == 1
 
 
 def test_story_1_7_when_intake_never_answers_the_case_is_marked_failed(

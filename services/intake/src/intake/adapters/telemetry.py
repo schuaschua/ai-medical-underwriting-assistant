@@ -3,12 +3,14 @@
 import logging
 import re
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.trace import StatusCode, TracerProvider
+from opentelemetry.trace import Span, StatusCode, Tracer, TracerProvider
 
 from intake.adapters.credential import azure_credential
 from intake.settings import APP_ID, HEALTH_PATH, READY_PATH, Settings
@@ -101,6 +103,25 @@ def record_error_on_span(error: BaseException) -> None:
         },
     )
     span.set_status(StatusCode.ERROR)
+
+
+@contextmanager
+def adapter_span(tracer: Tracer, name: str, **options: Any) -> Iterator[Span]:
+    """Open a span of an adapter's own, the current one while its block runs.
+
+    The tracing library would put a raised error's message on the span by
+    itself, and a database error's message holds the statement that failed.
+    That is switched off here: an error is marked as `record_error_on_span`
+    marks it, by its type and where it was raised (security rule 31).
+    """
+    with tracer.start_as_current_span(
+        name, record_exception=False, set_status_on_exception=False, **options
+    ) as span:
+        try:
+            yield span
+        except Exception as error:
+            record_error_on_span(error)
+            raise
 
 
 def current_trace_id(traceparent: str | None) -> str | None:

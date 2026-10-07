@@ -770,3 +770,35 @@ def test_story_1_5_logging_is_configured_at_start_up(
     assert logging.getLogger("azure.core.pipeline").getEffectiveLevel() == (
         logging.WARNING
     )
+
+
+def test_story_1_8_an_error_inside_an_adapters_span_leaves_its_type_and_no_message() -> (
+    None
+):
+    # Found in the review of story 1.8, for every service: the tracing
+    # library puts a raised error's message on the span by itself, and a
+    # database error's message holds the statement that failed.
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    with (
+        pytest.raises(RuntimeError),
+        telemetry.adapter_span(provider.get_tracer("test"), "intake.db.add_case"),
+    ):
+        raise RuntimeError("INSERT INTO document VALUES ('SECRET-VALUE')")
+
+    (span,) = exporter.get_finished_spans()
+    (event,) = span.events
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description is None
+    assert event.name == "exception"
+    assert set(event.attributes or {}) == {"exception.type", "exception.stacktrace"}
+    assert (event.attributes or {})["exception.type"] == "RuntimeError"
+    assert "SECRET" not in repr(dict(event.attributes or {}))
+    # The engine's own errors never carry the values of a statement either.
+    assert db.build_database(Settings()).engine.sync_engine.hide_parameters is True
+    # No adapter opens a span any other way.
+    for source in Path(telemetry.__file__).parent.rglob("*.py"):
+        if source.name != "telemetry.py":
+            assert "start_as_current_span" not in source.read_text(), source.name

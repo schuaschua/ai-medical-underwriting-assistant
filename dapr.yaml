@@ -65,3 +65,27 @@ apps:
       # AD-3: this service's own sidecar (daprHTTPPort above), through which
       # it commands the stage services.
       WORKFLOW_DAPR_HTTP_PORT: "3502"
+  - appID: classification
+    appDirPath: ./services/classification
+    appProtocol: http
+    appPort: 8003
+    daprHTTPPort: 3503
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "classification"]
+    env:
+      CLASSIFICATION_HOST: "127.0.0.1"
+      CLASSIFICATION_PORT: "8003"
+      # The PostgreSQL of compose.yaml, which has no password.
+      CLASSIFICATION_DATABASE_HOST: "127.0.0.1"
+      CLASSIFICATION_DATABASE_NAME: "aiuw"
+      CLASSIFICATION_DATABASE_USER: "aiuw"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it reads each page from intake.
+      CLASSIFICATION_DAPR_HTTP_PORT: "3503"
+      # The chat deployment is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata): the Azure environment is down while coding. It
+      # takes no credential, and it exists only on a developer machine. The
+      # deployment name is what the audit trail then names as the model.
+      CLASSIFICATION_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      CLASSIFICATION_CHAT_DEPLOYMENT: "local-stand-in"

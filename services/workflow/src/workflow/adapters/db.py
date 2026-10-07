@@ -50,6 +50,7 @@ from contracts.enums import (
 from contracts.ids import new_id
 from contracts.models.workflow import AuditTrail, CaseProgress, PageProgress
 from workflow.adapters.credential import azure_credential
+from workflow.adapters.telemetry import adapter_span
 from workflow.domain.entities import CaseRecord, StartParameters
 from workflow.domain.recording import Recording, RecordOutcome
 from workflow.domain.transitions import (
@@ -280,6 +281,9 @@ def build_database(settings: Settings) -> Database:
     engine = create_async_engine(
         database_url(settings),
         pool_pre_ping=True,
+        # security rule 31: an error of the driver never carries the values
+        # a statement was run with, into a log or onto a span.
+        hide_parameters=True,
         # How long a request waits for a free connection.
         pool_timeout=settings.database_pool_timeout_seconds,
         # A fixed number of connections: the worker's concurrency is sized
@@ -381,7 +385,7 @@ class SqlCaseStore:
     async def start(self, case: CaseRecord) -> CaseRecord:
         """Insert the case unless its id is taken; return the stored case either way."""
         parameters = case.parameters
-        with tracer.start_as_current_span("workflow.db.start_case"):
+        with adapter_span(tracer, "workflow.db.start_case"):
             async with self._database.begin() as connection:
                 await connection.execute(
                     upsert(case_status_table)
@@ -414,7 +418,7 @@ class SqlCaseStore:
 
     async def status(self, case_id: str) -> CaseStatus | None:
         """The case's status, or None if the case is unknown."""
-        with tracer.start_as_current_span("workflow.db.read_case_status"):
+        with adapter_span(tracer, "workflow.db.read_case_status"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(case_status_table.c.case_status).where(
@@ -428,7 +432,7 @@ class SqlCaseStore:
         self, recording: Recording, recorded_at: datetime
     ) -> RecordOutcome:
         """Write the status changes and the audit event in one transaction, or neither."""
-        with tracer.start_as_current_span("workflow.db.record"):
+        with adapter_span(tracer, "workflow.db.record"):
             try:
                 async with self._database.begin() as connection:
                     await self._record(connection, recording, recorded_at)
@@ -570,7 +574,7 @@ class SqlCaseStore:
 
     async def progress(self, case_id: str) -> CaseProgress | None:
         """The case's status and its tracked pages, by page number."""
-        with tracer.start_as_current_span("workflow.db.read_progress"):
+        with adapter_span(tracer, "workflow.db.read_progress"):
             async with self._database.connect() as connection:
                 found = await connection.execute(
                     select(
@@ -606,7 +610,7 @@ class SqlCaseStore:
 
     async def audit_trail(self, case_id: str) -> AuditTrail | None:
         """The case's audit events, oldest first."""
-        with tracer.start_as_current_span("workflow.db.read_audit_trail"):
+        with adapter_span(tracer, "workflow.db.read_audit_trail"):
             async with self._database.connect() as connection:
                 found = await connection.execute(
                     select(case_status_table.c.case_id).where(
@@ -650,7 +654,7 @@ class SqlTrailGuard:
             "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
             "WHERE n.nspname = :schema AND c.relname = :table"
         )
-        with tracer.start_as_current_span("workflow.db.check_trail_rights"):
+        with adapter_span(tracer, "workflow.db.check_trail_rights"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     table, {"schema": SCHEMA, "table": AUDIT_EVENT_TABLE}
@@ -672,7 +676,7 @@ class SqlSchemaRevision:
         other error, such as permission denied, is raised: the caller reports
         "not ready", and the SQLSTATE is logged here.
         """
-        with tracer.start_as_current_span("workflow.db.read_revision"):
+        with adapter_span(tracer, "workflow.db.read_revision"):
             try:
                 async with self._database.connect() as connection:
                     result = await connection.execute(

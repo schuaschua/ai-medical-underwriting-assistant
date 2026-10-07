@@ -85,7 +85,9 @@ class RecordingContext:
 
     def call_activity(self, activity: str, **options: Any) -> object:
         self.asked.append({"activity": activity, **options})
-        return object()
+        # A task of the engine's own kind: the orchestrator may wait for
+        # several of them together (story 1.8).
+        return task.CompletableTask[Any]()
 
 
 def run_lifecycle(
@@ -115,12 +117,17 @@ def test_story_1_7_redaction_is_the_first_stage_the_orchestration_commands(
     started = {"case_id": case_id, "eval_run_id": eval_run_id}
 
     asked, result = run_lifecycle(
-        started, [CONFIRMED, {"outcome": "ok", "case_status": "running"}]
+        started,
+        [
+            CONFIRMED,
+            {"outcome": "ok", "case_status": "running", "page_ids": [new_id()]},
+            [{"outcome": "ok", "case_status": "running"}],
+        ],
     )
 
-    # Right after the confirm step, and nothing after it for now. Ids only go
-    # in (AD-6), and the command is retried with the stage policy.
-    assert [step["activity"] for step in asked] == [
+    # Right after the confirm step. Ids only go in (AD-6), and the command is
+    # retried with the stage policy.
+    assert [step["activity"] for step in asked[:2]] == [
         CONFIRM_CASE_STARTED,
         REDACT_DOCUMENT,
     ]
@@ -129,7 +136,8 @@ def test_story_1_7_redaction_is_the_first_stage_the_orchestration_commands(
         "input": {"case_id": case_id, "eval_run_id": eval_run_id},
         "retry_policy": STAGE_RETRY,
     }
-    # A done redaction ends the orchestration for now, with the case running.
+    # A done redaction leaves the case running. What follows it, one classify
+    # command per page, is story 1.8's (test_workflow_classification.py).
     assert result == {"case_id": case_id, "case_status": "running"}
 
 
@@ -185,7 +193,11 @@ def test_story_1_7_stop_after_names_no_stage_at_or_before_redaction(
 
     asked, _ = run_lifecycle(
         {"case_id": case_id, "stop_after": "gate"},
-        [CONFIRMED, {"outcome": "ok", "case_status": "running"}],
+        [
+            CONFIRMED,
+            {"outcome": "ok", "case_status": "running", "page_ids": [new_id()]},
+            [{"outcome": "ok", "case_status": "running"}],
+        ],
     )
 
     assert asked[1]["activity"] == REDACT_DOCUMENT
@@ -254,7 +266,7 @@ def start(store: MemoryCaseStore, case_id: str) -> None:
 
 def redact(
     store: MemoryCaseStore, stages: FakeStages, case_id: str, times: int = 1
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     command: dict[str, str | None] = {"case_id": case_id, "eval_run_id": None}
     with service_loop() as loop:
         activities = Activities(store, loop, 5.0, stages, 5.0)
@@ -274,11 +286,17 @@ def test_story_1_7_a_done_redaction_is_recorded_with_its_pages_and_one_event(
     # stored result, and recording it again writes nothing new.
     answers = redact(store, stages, case_id, times=2)
 
-    assert answers == [{"outcome": "ok", "case_status": "running"}] * 2
+    # The answer hands the page ids on to the orchestration (story 1.8): ids
+    # only, in document order, and the same on the repeat.
+    result = stages.results[case_id]
+    assert (
+        answers
+        == [{"outcome": "ok", "case_status": "running", "page_ids": result.page_ids}]
+        * 2
+    )
     case = store.cases[case_id]
     assert (case.case_status.value, case.redaction_status.value) == ("running", "done")
     # The pages are tracked as `uploaded`, numbered in the order of the result.
-    result = stages.results[case_id]
     assert [
         (page_id, store.pages[page_id].page_number, store.pages[page_id].page_status)
         for page_id in result.page_ids
@@ -320,7 +338,7 @@ def test_story_1_7_the_redaction_activity_waits_the_stage_timeout_not_the_genera
         )
 
     # Waited for with the stage's 200 s setting (here 5 s), so it is heard.
-    assert answer == {"outcome": "ok", "case_status": "running"}
+    assert (answer["outcome"], answer["case_status"]) == ("ok", "running")
     assert len(store.events) == 1
 
 
@@ -366,7 +384,7 @@ def test_story_1_7_in_progress_fails_the_activity_so_the_engine_sends_the_comman
         f"activity failed: activity=redact_document case_id={case_id} "
         "reason=in_progress retry=True"
     ) in caplog.text
-    assert answer == {"outcome": "ok", "case_status": "running"}
+    assert (answer["outcome"], answer["case_status"]) == ("ok", "running")
     assert len(stages.calls) == 3
     assert len(store.events) == 1
 

@@ -5,17 +5,25 @@ name = "aiunderwriter"
 version = "0.0.0"
 description = "AI Medical Underwriting Assistant POC: workspace root"
 requires-python = "==3.13.*"
-dependencies = ["contracts", "intake", "web", "workflow"]
+dependencies = ["classification", "contracts", "intake", "web", "workflow"]
 
 [dependency-groups]
 dev = [
+    # The test client of the web framework (starlette) is built on httpx2
+    # whenever that library is installed, and it is: the model client of
+    # `classification` brings it (story 1.8). Tests that name the type of a
+    # test client's response name this library's. Same version as uv.lock
+    # resolved for the model client.
+    "httpx2==2.13.1",
     "mypy==2.4.0",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "ruff==0.16.10",
     # The synthetic data generator is a dev tool: `uv run python -m synthdata`.
     # It also holds the local stand-in for Azure AI Language (story 1.7),
-    # `uv run python -m synthdata.language_standin`; no service depends on it.
+    # `uv run python -m synthdata.language_standin`, and the one for the
+    # Foundry chat deployment (story 1.8),
+    # `uv run python -m synthdata.foundry_standin`; no service depends on it.
     "synthdata",
 ]
 
@@ -26,6 +34,7 @@ package = false
 members = ["packages/*", "services/*"]
 
 [tool.uv.sources]
+classification = { workspace = true }
 contracts = { workspace = true }
 intake = { workspace = true }
 web = { workspace = true }
@@ -57,6 +66,10 @@ explicit_package_bases = true
 mypy_path = [
     "packages/contracts/src",
     "packages/synthdata/src",
+    # Helpers shared by the tests that run the services against the stand-ins.
+    "packages/synthdata/tests/support",
+    "services/classification/src",
+    "services/classification/tests/support",
     "services/intake/src",
     # Test doubles shared by a service's tests (also on pytest's pythonpath).
     "services/intake/tests/support",
@@ -79,17 +92,23 @@ addopts = "--import-mode=importlib --strict-markers"
 # With importlib mode a test cannot import a module beside it. Test doubles a
 # service's tests share live in its tests/support folder, named here; module
 # names in it start with the service's name so that they stay unique.
-pythonpath = ["services/intake/tests/support", "services/workflow/tests/support"]
+pythonpath = [
+    "packages/synthdata/tests/support",
+    "services/classification/tests/support",
+    "services/intake/tests/support",
+    "services/workflow/tests/support",
+]
 markers = [
     # Needs the containers of compose.yaml: `docker compose up --detach --wait`.
-    # Where a test needs Azure AI Language it runs the stand-in of
-    # packages/synthdata, a dev dependency of this workspace (story 1.7).
-    "integration: uses the local PostgreSQL, blob emulator, scheduler emulator or Language stand-in",
+    # Where a test needs Azure AI Language or the Foundry chat deployment it
+    # runs the stand-ins of packages/synthdata, a dev dependency of this
+    # workspace (stories 1.7 and 1.8).
+    "integration: uses the local PostgreSQL, blob emulator, scheduler emulator or a stand-in",
 ]
 
 [tool.coverage.run]
 # What `uv run pytest --cov` measures; each service adds its package here.
-source_pkgs = ["contracts", "intake", "synthdata", "web", "workflow"]
+source_pkgs = ["classification", "contracts", "intake", "synthdata", "web", "workflow"]
 
 [tool.coverage.report]
 # coding-style.md rule 25: the one place the threshold lives. Never lower it; add tests.

@@ -377,6 +377,124 @@ Then the `workflow` app's latest revision becomes ready within a minute or so, a
 
 **Upgrading an environment that is already set up.** Also not yet run. When `workflow` ships a new migration and the database was bootstrapped before, do not repeat the whole section. Run step 0, then step 2 alone, with `WORKFLOW_DATABASE_SERVICE_ROLE` set as there: the migrations bring the schema to the new head and grant the service role its rights on anything they add. Run step 3 again when a migration added a table, sequence or function while you, not the pipeline's role, ran it; the step takes whatever the schema holds and is safe to run again. Finish with step 4. Until the migration step has run, `workflow` reports "not ready", and its worker does not start, because its image carries a newer head than the database.
 
+## 6. Database role for `classification`
+
+Added by story 1.8. Not yet run: the environment was down while the story was built, so these steps are written from sections 4 and 5, which have been run, and are on the list for the final test session (`_bmad-output/implementation-artifacts/deferred-work.md`). Add each run to the log below.
+
+`classification` owns schema `classification`: one table that holds the key row of each classification and, once it is done, what the page was classified as (spine AD-4, AD-6, AD-13). As for `intake`, an operator does these steps once after the `foundation` stack is up, and again after every teardown. Until this section is done, `classification` reports "not ready", and a started case fails once its document is redacted, because no page can be classified.
+
+The steps are those of section 4 with this service's names: its migrations create the schema and the table and grant nothing, so step 3 grants the service role its rights and hands the schema to the pipeline's role. Run them in this order, in one shell, from the repository root.
+
+**Step 0. Set up the shell, and open the firewall for your address.** The `trap` removes the firewall rule and the token when the shell exits, also after a failed step; `set -e` stops at the first error.
+
+```bash
+set -euo pipefail
+
+SERVER="$(terraform -chdir=infra/demo/foundation output -raw postgresql_server_name)"
+HOST="$(terraform -chdir=infra/demo/foundation output -raw postgresql_fqdn)"
+DATABASE="$(terraform -chdir=infra/demo/foundation output -raw postgresql_database_name)"
+ME="$(az ad signed-in-user show --query id -o tsv)"   # your database role is named after your object id
+SERVICE_ROLE="id-aiuw-demo-wus3-classification"       # must equal: terraform -chdir=infra/demo/app output classification_database_role
+DEPLOY_ROLE="id-aiuw-demo-wus3-deploy"                # the pipeline's role, which will run migrations later
+
+cleanup() {
+  # Always: the temporary firewall rule (azure.md rule 13) and the token.
+  az postgres flexible-server firewall-rule delete -g rg-aiuw-demo-wus3 -n "$SERVER" \
+    --rule-name operator-bootstrap --yes || true
+  unset PGPASSWORD
+}
+trap cleanup EXIT
+
+az postgres flexible-server firewall-rule create -g rg-aiuw-demo-wus3 -n "$SERVER" \
+  --rule-name operator-bootstrap --start-ip-address "$(curl -s https://api.ipify.org)"
+
+# An Entra token is the password. It lasts about an hour.
+export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+```
+
+**Step 1. Roles.** Principals are created in the `postgres` database; the service's role is named after its identity. Your own role is made a member of the pipeline's role, which step 3 needs; if section 4 was done in this bring-up it is one already, and that statement changes nothing.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
+-- Created only if it is not there yet, so this step can be run again.
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_ROLE') THEN
+    PERFORM pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+  END IF;
+END
+\$\$;
+GRANT "$DEPLOY_ROLE" TO "$ME";
+SQL
+```
+
+The step is safe to run again: the role is created only when it is missing, and the grant changes nothing the second time. After a teardown the identity is new but the database is new as well, so the role is missing and is created.
+
+**Step 2. Schema and migrations.** The service never migrates at start-up, and its readiness probe fails until the schema is at the migration head bundled in its image. This creates schema `classification`, its one table and its version table. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
+
+```bash
+CLASSIFICATION_DATABASE_HOST="$HOST" CLASSIFICATION_DATABASE_NAME="$DATABASE" CLASSIFICATION_DATABASE_USER="$ME" \
+CLASSIFICATION_DATABASE_ENTRA_AUTH=true \
+  uv run alembic -c services/classification/alembic.ini upgrade head
+```
+
+**Step 3. Grants.** The service role gets data rights on its own schema and nothing else: no `CREATE`, because only migrations change the schema, and read-only on the version table, so the service can check its revision but never change it. Sequences are included for tables that later get one. The schema and its tables are handed to the pipeline's role, so that it owns them as the spine's conventions say and its later migrations need no further grant.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
+-- Hand the schema and everything in it to the pipeline's role.
+ALTER SCHEMA classification OWNER TO "$DEPLOY_ROLE";
+-- Every table and every sequence in the schema, whatever migrations have
+-- added since this was written. A sequence that belongs to a table column
+-- follows its table and is left out.
+DO \$\$
+DECLARE item record;
+BEGIN
+  FOR item IN
+    SELECT c.relname, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'classification' AND c.relkind IN ('r', 'p', 'S')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i') AND c.relkind = 'S'
+      )
+    ORDER BY c.relkind DESC
+  LOOP
+    EXECUTE format(
+      'ALTER %s classification.%I OWNER TO %I',
+      CASE WHEN item.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+      item.relname, '$DEPLOY_ROLE'
+    );
+  END LOOP;
+END
+\$\$;
+
+GRANT USAGE ON SCHEMA classification TO "$SERVICE_ROLE";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA classification TO "$SERVICE_ROLE";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA classification TO "$SERVICE_ROLE";
+-- The version table is read-only for the service.
+REVOKE INSERT, UPDATE, DELETE ON classification.alembic_version FROM "$SERVICE_ROLE";
+
+-- Tables and sequences that later migrations add, run by the pipeline's role.
+-- This needs membership of that role, granted in step 1.
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA classification
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "$SERVICE_ROLE";
+ALTER DEFAULT PRIVILEGES FOR ROLE "$DEPLOY_ROLE" IN SCHEMA classification
+  GRANT USAGE, SELECT ON SEQUENCES TO "$SERVICE_ROLE";
+SQL
+```
+
+**Step 4. Close up and check.** Leaving the shell runs the `trap`; to stay in the shell, run it now.
+
+```bash
+cleanup; trap - EXIT
+az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
+```
+
+Then the `classification` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run. Its other access, to the chat deployment, is the Azure role Foundry User on the Foundry project, which the `app` stack assigns; nothing is done for it here.
+
+**Upgrading an environment that is already set up.** Not yet run. When `classification` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2 alone: the migrations bring the schema to the new head, and the default privileges of step 3 already cover tables and sequences that the pipeline's role creates. Run step 3 again only when a migration added objects while you, not the pipeline's role, ran it: the step hands every table and sequence in the schema over and repeats the grants, and is safe to run again. Finish with step 4. Until the migration step has run, `classification` reports "not ready", because its image carries a newer head than the database.
+
 ## Out-of-band log
 
 Every command that changed Azure or GitHub outside the pipeline, newest last (`terraform.md` rule 29).

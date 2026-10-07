@@ -22,13 +22,17 @@ holds the ruff, mypy and pytest settings for every member.
   audit record, enums, the error catalogue, the `rule_id` patterns, the page type mapping, the eval
   query builder and text normalisation. It imports only the standard library and pydantic. A change to
   it is one pull request that updates every affected service.
-- `services/` holds the seven services. So far there are three. `services/web/` is the FastAPI service
+- `services/` holds the seven services. So far there are four. `services/web/` is the FastAPI service
   that serves the React app in `services/web/spa/` and every `/api` route from one origin.
   `services/intake/` owns cases, documents and the stored PDFs: database schema `intake` and the blob
   containers `originals` and `cases`. `services/workflow/` owns the case lifecycle: one orchestration
   per case on Azure Durable Task Scheduler, case and page status, and the append-only audit trail
-  (database schema `workflow`). `web` calls the other two through its Dapr sidecar: it asks `intake` to
-  create a case from an upload, then asks `workflow` to start it. No service imports another service's code.
+  (database schema `workflow`). `services/classification/` says what each page is, with a confidence
+  and a reason (database schema `classification`); its prompt is in
+  `services/classification/src/classification/prompts/`. `web` calls `intake` and `workflow` through
+  its Dapr sidecar: it asks `intake` to create a case from an upload, then asks `workflow` to start
+  it. `workflow` commands `intake` and `classification`, and `classification` reads each page from
+  `intake`. No service imports another service's code.
 
 ### Install and check
 
@@ -70,8 +74,9 @@ One command starts everything:
 
 It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
 containers (`compose.yaml`), applies the database migrations, builds the SPA, starts a stand-in for
-Azure AI Language (see below), and runs the `web`, `intake` and `workflow` services, each with its
-Dapr sidecar (`dapr.yaml`; each later service is added to that file).
+Azure AI Language and one for the Foundry chat deployment (see below), and runs the `web`, `intake`,
+`workflow` and `classification` services, each with its Dapr sidecar (`dapr.yaml`; each later service
+is added to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
 its API share that one address: `/api/health` answers without a role, and every other `/api` route
 needs the `X-Demo-Role` header the role switcher sends. As the customer, "Upload a document" takes a
@@ -86,6 +91,20 @@ of record and splits it into pages, each with its text, a box per word and a thu
 only the redacted PDF is read; no route serves the original. If redaction fails or takes longer than
 180 seconds the case is shown as failed, with a message asking for the document to be uploaded again.
 
+Once a case is redacted, every page is classified: `workflow` sends `classification` one command per
+page, all at once, with the classifier the case was started with (`llm`; a case started with
+`doc-intelligence` fails, because that classifier is not built yet). `classification` reads the page's
+text and thumbnail from `intake`, runs the chat model on it five times
+(`CLASSIFICATION_CLASSIFIER_RUNS`), and stores the page type most runs named, whether that type is
+medical (from the one mapping in the contracts package, never from the model), the share of runs that
+agreed as the confidence, and one of the agreeing runs' one-line reasons. A tie goes to the type that
+comes first in the contracts' list of page types. The page then shows as `classified`, and the audit
+trail holds a `page.classified` event naming the service and the model deployment. If the model's
+answer is not what was asked for, or the model cannot be had after three retries, or 180 seconds pass,
+that page and its case are shown as failed. Nothing routes a page yet: after classification the case
+stays `running` (the gate is story 1.9). `GET /cases/<case_id>/classifications` on the service lists
+what was stored; no screen shows it yet.
+
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
 the service's REST job routes, reads the original from the blob emulator and writes the redacted PDF
@@ -96,8 +115,20 @@ Language endpoint that is not on this machine. Start it with `--mode fail` or `-
 failed case. What the real service does is checked in the final Azure test session
 (`_bmad-output/implementation-artifacts/deferred-work.md`).
 
-The services never run migrations when they start, here or in Azure, and `intake` and `workflow` each
-report "not ready" (`/ready`) until their schema is at the newest migration they ship with. Locally, one script stands in
+The chat model is a stand-in too: `uv run python -m synthdata.foundry_standin` (started by
+`./tools/dev.sh` on port 5101). It answers the one route the model gateway calls
+(`POST /openai/v1/chat/completions`) in the shape of a chat completion. It is not a model: it tells
+the page types apart by the headings on the synthetic pages and does not look at the picture, so its
+runs always agree and every confidence is 1.0. Start it with `--mode disagree` (three of five runs
+agree, so 0.6), `--mode invalid` (an answer that is not the JSON asked for) or `--mode throttled`
+(every call answered 429) to see the other outcomes. It is part of the same dev-only package, and
+`classification` refuses a plain-HTTP model endpoint that is not on this machine. Locally the audit
+trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT` in `dapr.yaml`); in
+Azure that setting is the name of the real deployment.
+
+The services never run migrations when they start, here or in Azure, and `intake`, `workflow` and
+`classification` each report "not ready" (`/ready`) until their schema is at the newest migration they
+ship with. Locally, one script stands in
 for the pipeline's migration step. `./tools/dev.sh` runs it for you; run it yourself after pulling a
 change that adds a migration:
 
@@ -110,7 +141,9 @@ database (`uv run alembic -c services/intake/alembic.ini upgrade head`, pointed 
 creates the blob containers `originals` and `cases` in the emulator. For `workflow` it creates the
 database role `workflow` and applies that service's migrations
 (`uv run alembic -c services/workflow/alembic.ini upgrade head`, with
-`WORKFLOW_DATABASE_SERVICE_ROLE=workflow`), which grant the role its rights. It can be run again safely.
+`WORKFLOW_DATABASE_SERVICE_ROLE=workflow`), which grant the role its rights. For `classification` it
+applies that service's migrations (`uv run alembic -c services/classification/alembic.ini upgrade head`).
+It can be run again safely.
 
 `workflow` runs as that role, not as the database's own user, so the rule that the audit trail is
 append-only holds on your machine as it does in Azure: the role may read `workflow.audit_event` and
@@ -123,6 +156,8 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | `intake` (`/health`, `/ready`, `POST /cases`, `POST /cases/<case_id>/redaction`, `GET /cases/<case_id>/pages`, `GET /pages/<page_id>/text`, `/boxes` and `/thumbnail`, `GET /documents/<document_id>/file`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
 | Stand-in for Azure AI Language (this machine only) | `http://localhost:5100` |
 | `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
+| `classification` (`/health`, `/ready`, `POST /classifications`, `GET /cases/<case_id>/classifications`), and its Dapr sidecar | `http://localhost:8003`, `http://localhost:3503` |
+| Stand-in for the Foundry chat deployment (this machine only) | `http://localhost:5101` |
 | PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
 | Durable Task Scheduler emulator (task hubs `default` and, for tests, `aiuw-test`), and its dashboard | `localhost:8080`, <http://localhost:8082/> |
@@ -136,6 +171,10 @@ and to Azure AI Language as well (`INTAKE_LANGUAGE_ENDPOINT` is the account's en
 `INTAKE_LANGUAGE_ENTRA_AUTH=true`; there is no key). Language reads the original and writes the
 redacted PDF with its own identity. `workflow` commands `intake` through its own Dapr sidecar
 (`WORKFLOW_DAPR_HTTP_PORT`).
+`classification` reads pages from `intake` through its own sidecar (`CLASSIFICATION_DAPR_HTTP_PORT`);
+in Azure it signs in to PostgreSQL and to the chat deployment with its managed identity
+(`CLASSIFICATION_MODEL_ENDPOINT` is the Foundry account's endpoint there, with
+`CLASSIFICATION_MODEL_ENTRA_AUTH=true`; there is no key).
 `workflow` reaches the scheduler emulator without a credential; in Azure it signs in to the Durable Task
 Scheduler and PostgreSQL with its managed identity. The emulator keeps its state in memory, so
 orchestrations are gone after `docker compose stop`, while case status and the audit trail stay in
@@ -153,6 +192,7 @@ docker run --rm -p 8000:8000 aiuw-web:dev
 
 docker build -f services/intake/Dockerfile -t aiuw-intake:dev .
 docker build -f services/workflow/Dockerfile -t aiuw-workflow:dev .
+docker build -f services/classification/Dockerfile -t aiuw-classification:dev .
 ```
 
 ### Contract types
@@ -171,21 +211,24 @@ and `npm --prefix services/web/spa run contracts:check` compares the TypeScript 
 ### Deploy
 
 The demo environment is two Terraform stacks, applied in order: `infra/demo/foundation` (see
-`infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds three Container Apps: `web`, the
-only one reachable from the internet, and `intake` and `workflow`, with internal ingress only.
-`workflow` is held at one replica and holds Durable Task Data Contributor on the task hub. For
-redaction `intake` holds Cognitive Services User on Azure AI Language, and Language's own identity may
-read the `originals` container and write the `cases` container.
+`infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds four Container Apps: `web`, the
+only one reachable from the internet, and `intake`, `workflow` and `classification`, with internal
+ingress only. `workflow` is held at one replica and holds Durable Task Data Contributor on the task
+hub. For redaction `intake` holds Cognitive Services User on Azure AI Language, and Language's own
+identity may read the `originals` container and write the `cases` container. `classification` is held
+at one replica and holds Foundry User on the Foundry project, for the chat deployment.
 
 The `deploy` workflow (`.github/workflows/deploy.yml`) is started by hand on `main` and deploys only
-the commit `main` is at. It builds the `web`, `intake` and `workflow` images in the registry, plans
-`app`, refuses a plan that destroys or replaces a resource, applies it, waits until the new `web`
-revision is the one serving, fails unless the latest revisions of `intake` and `workflow` run the same
-commit's image, checks `/api/health` and the SPA's page, and ends by saying whether `intake` and
-`workflow` are ready. It does not run database migrations yet: the database roles and migrations of
-`intake` and `workflow` are a manual step (`infra/bootstrap/README.md`, sections 4 and 5). Until it is
-done for `intake`, that service stays "not ready" and an upload is answered with 502; until it is done
-for `workflow`, an uploaded case is shown as received but not started. It needs:
+the commit `main` is at. It builds the `web`, `intake`, `workflow` and `classification` images in the
+registry, plans `app`, refuses a plan that destroys or replaces a resource, applies it, waits until the
+new `web` revision is the one serving, fails unless the latest revisions of `intake`, `workflow` and
+`classification` run the same commit's image, checks `/api/health` and the SPA's page, and ends by
+saying whether `intake`, `workflow` and `classification` are ready. It does not run database migrations
+yet: the database roles and migrations of `intake`, `workflow` and `classification` are a manual step
+(`infra/bootstrap/README.md`, sections 4, 5 and 6). Until it is done for `intake`, that service stays
+"not ready" and an upload is answered with 502; until it is done for `workflow`, an uploaded case is
+shown as received but not started; until it is done for `classification`, a started case fails once
+its document is redacted. It needs:
 
 | What | Set by |
 | --- | --- |

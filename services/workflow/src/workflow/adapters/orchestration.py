@@ -17,6 +17,7 @@ from workflow.settings import Settings
 CASE_LIFECYCLE = "case_lifecycle"
 CONFIRM_CASE_STARTED = "confirm_case_started"
 REDACT_DOCUMENT = "redact_document"
+CLASSIFY_PAGE = "classify_page"
 MARK_CASE_FAILED = "mark_case_failed"
 
 # What an activity answers with. An error that no retry can mend is an
@@ -24,6 +25,10 @@ MARK_CASE_FAILED = "mark_case_failed"
 OUTCOME = "outcome"
 OK = "ok"
 REFUSED = "refused"
+# The case status an activity left the case in, and the pages a done redaction made.
+CASE_STATUS = "case_status"
+PAGE_IDS = "page_ids"
+FAILED = "failed"
 
 CaseLifecycle = task.Orchestrator[dict[str, Any], dict[str, str]]
 
@@ -88,12 +93,12 @@ def build_case_lifecycle(
             yield context.call_activity(
                 MARK_CASE_FAILED, input=about, retry_policy=retry_policy
             )
-            return {"case_id": case_id, "case_status": "failed"}
+            return {"case_id": case_id, CASE_STATUS: FAILED}
 
         # AD-21: redaction is the first stage. Nothing else reads the document
         # before it is done.
         try:
-            redacted: dict[str, str] | None = yield context.call_activity(
+            redacted: dict[str, Any] | None = yield context.call_activity(
                 REDACT_DOCUMENT, input=about, retry_policy=stage_policy
             )
         except task.TaskFailedError:
@@ -104,11 +109,53 @@ def build_case_lifecycle(
             yield context.call_activity(
                 MARK_CASE_FAILED, input=about, retry_policy=retry_policy
             )
-            return {"case_id": case_id, "case_status": "failed"}
-        # A failed redaction has failed the case already, in the recording of
-        # its result (AD-8): the lifecycle ends, and the customer uploads again.
-        # A done one leaves the case `running`. The lifecycle ends here for
-        # now: classification of each page is added at this point (story 1.8).
-        return {"case_id": case_id, "case_status": redacted["case_status"]}
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        if redacted[CASE_STATUS] == FAILED:
+            # A failed redaction has failed the case already, in the recording
+            # of its result (AD-8): the lifecycle ends, and the customer
+            # uploads again.
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+
+        # AD-13: every page is classified, each by a command of its own, all
+        # at once, with the one contender the case was started with. Ids only
+        # go in (AD-6): the stage reads the page from `intake` itself.
+        classifying: list[task.Task[dict[str, str]]] = [
+            context.call_activity(
+                CLASSIFY_PAGE,
+                input={
+                    **about,
+                    "page_id": page_id,
+                    "contender": started.get("classifier_contender"),
+                },
+                retry_policy=stage_policy,
+            )
+            for page_id in redacted.get(PAGE_IDS, [])
+        ]
+        # A redaction that is done and names no page leaves nothing to
+        # classify and nothing that would ever move the case on.
+        classified: list[dict[str, str]] | None = None
+        if classifying:
+            try:
+                # Waits for every page, also when one of them has failed.
+                classified = yield task.when_all(classifying)
+            except task.TaskFailedError:
+                # Every retry of at least one page failed.
+                classified = None
+        if classified is None or any(
+            answer.get(OUTCOME) != OK for answer in classified
+        ):
+            # There is no page; or a page's classification was refused, never
+            # answered or could not be recorded: the case cannot go on.
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        if any(answer[CASE_STATUS] == FAILED for answer in classified):
+            # A failed classification has failed its page and the case, in
+            # the recording of its result (AD-8).
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        # Every page is `classified` and the case is `running`. The lifecycle
+        # ends here for now: the gate routes each page from this point (story 1.9).
+        return {"case_id": case_id, CASE_STATUS: redacted[CASE_STATUS]}
 
     return case_lifecycle

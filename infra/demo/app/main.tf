@@ -139,6 +139,45 @@ resource "time_sleep" "workflow_role_propagation" {
   }
 }
 
+# The classification identity holds these roles and no others (azure.md,
+# "Runtime roles"). Its PostgreSQL role is not an Azure role: the database
+# bootstrap creates it (infra/bootstrap/README.md).
+resource "azurerm_role_assignment" "classification_acr_pull" {
+  scope                = local.foundation.container_registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = local.classification_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "classification_metrics_publisher" {
+  scope                = local.foundation.application_insights_id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = local.classification_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the Foundry project, not to the account (azure.md rule 9): the
+# service calls the shared chat deployment with its own identity (spine
+# AD-16). There is no key.
+resource "azurerm_role_assignment" "classification_foundry_user" {
+  scope                = local.foundation.foundry_project_id
+  role_definition_name = "Foundry User"
+  principal_id         = local.classification_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# As for intake: classification waits for all of its own role assignments, so
+# its first revision can pull its image, call the model and send telemetry.
+resource "time_sleep" "classification_role_propagation" {
+  create_duration = var.role_propagation_wait
+
+  triggers = {
+    acr_pull_id          = azurerm_role_assignment.classification_acr_pull.id
+    metrics_publisher_id = azurerm_role_assignment.classification_metrics_publisher.id
+    foundry_user_id      = azurerm_role_assignment.classification_foundry_user.id
+  }
+}
+
 # --- web ---------------------------------------------------------------------
 
 # The only service reachable from the internet (spine AD-18). There is no
@@ -500,5 +539,135 @@ module "workflow" {
   # and Azure has to have spread them.
   depends_on = [
     time_sleep.workflow_role_propagation,
+  ]
+}
+
+# --- classification ------------------------------------------------------------
+
+# Internal ingress only (spine AD-18): reachable from inside the environment,
+# and called only through Dapr service invocation (AD-3), by workflow (the
+# classify command) and by web (reads). It reads each page from intake
+# through its own sidecar, and is held at exactly one replica.
+module "classification" {
+  source  = "Azure/avm-res-app-containerapp/azurerm"
+  version = "0.9.0"
+
+  name                                  = local.names.classification
+  resource_group_name                   = local.foundation.resource_group_name
+  resource_group_id                     = local.foundation.resource_group_id
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+  revision_mode                         = "Single"
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.classification_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.classification_identity.id
+  }]
+
+  secrets = {
+    appi = {
+      name  = local.appi_secret_name
+      value = local.foundation.application_insights_connection_string
+    }
+  }
+
+  ingress = {
+    external_enabled           = false
+    allow_insecure_connections = false
+    target_port                = var.classification_port
+    transport                  = "auto"
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+
+  # Service invocation only (AD-3). Commands carry ids, and a page's text and
+  # thumbnail are well under the sidecar's default request limit.
+  dapr = {
+    enabled      = true
+    app_id       = "classification"
+    app_port     = var.classification_port
+    app_protocol = "http"
+  }
+
+  template = {
+    min_replicas = local.classification_replicas
+    max_replicas = local.classification_replicas
+
+    containers = [{
+      name   = "classification"
+      image  = "${local.image_repositories.classification}:${var.image_tag}"
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      # No password and no model key: the database and the chat deployment
+      # are reached with the service identity (azure.md rule 7). The model
+      # endpoint is the Foundry account's and the deployment name comes from
+      # the foundation stack (spine AD-16); the local stand-in exists only on
+      # a developer machine.
+      env = [
+        { name = "CLASSIFICATION_HOST", value = "0.0.0.0" },
+        { name = "CLASSIFICATION_PORT", value = tostring(var.classification_port) },
+        { name = "CLASSIFICATION_AZURE_CLIENT_ID", value = local.classification_identity.client_id },
+        { name = "CLASSIFICATION_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
+        { name = "CLASSIFICATION_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
+        { name = "CLASSIFICATION_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
+        { name = "CLASSIFICATION_DATABASE_NAME", value = local.foundation.postgresql_database_name },
+        { name = "CLASSIFICATION_DATABASE_USER", value = local.classification_identity.name },
+        { name = "CLASSIFICATION_DATABASE_ENTRA_AUTH", value = "true" },
+        { name = "CLASSIFICATION_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
+        { name = "CLASSIFICATION_MODEL_ENDPOINT", value = local.foundation.foundry_endpoint },
+        { name = "CLASSIFICATION_MODEL_ENTRA_AUTH", value = "true" },
+        { name = "CLASSIFICATION_CHAT_DEPLOYMENT", value = local.foundation.model_deployment_names["chat"] },
+        { name = "CLASSIFICATION_CLASSIFIER_RUNS", value = tostring(var.classifier_runs) },
+        { name = "CLASSIFICATION_CLASSIFIER_MAX_CONCURRENT_RUNS", value = tostring(var.classifier_max_concurrent_runs) },
+        { name = "CLASSIFICATION_MODEL_MAX_CONCURRENT_CALLS", value = tostring(var.model_max_concurrent_calls) },
+        { name = "CLASSIFICATION_MODEL_MAX_RETRIES", value = tostring(var.model_max_retries) },
+      ]
+
+      # azure.md rule 22. Startup and liveness ask the process; readiness
+      # also asks the database, and fails unless its schema revision equals
+      # the migration head bundled in the image.
+      startup_probes = [{
+        transport               = "HTTP"
+        port                    = var.classification_port
+        path                    = var.classification_health_path
+        interval_seconds        = 5
+        timeout                 = 2
+        failure_count_threshold = 10
+      }]
+      readiness_probes = [{
+        transport               = "HTTP"
+        port                    = var.classification_port
+        path                    = var.classification_ready_path
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }]
+      liveness_probes = [{
+        transport               = "HTTP"
+        port                    = var.classification_port
+        path                    = var.classification_health_path
+        interval_seconds        = 30
+        timeout                 = 2
+        failure_count_threshold = 3
+      }]
+    }]
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
+  # The first revision needs every one of the identity's role assignments,
+  # and Azure has to have spread them.
+  depends_on = [
+    time_sleep.classification_role_propagation,
   ]
 }

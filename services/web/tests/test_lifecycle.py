@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -107,7 +108,7 @@ def client(settings: Settings, sidecar: FakeSidecar) -> Iterator[TestClient]:
         yield test_client
 
 
-def error_of(response: httpx.Response) -> tuple[str, str]:
+def error_of(response: httpx2.Response) -> tuple[str, str]:
     detail = ErrorBody.model_validate(response.json()).error
     return detail.code.value, detail.message
 

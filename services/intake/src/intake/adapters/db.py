@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from intake.adapters.credential import azure_credential
+from intake.adapters.telemetry import adapter_span
 from intake.domain.entities import Case, Document
 from intake.domain.ports import DuplicateUpload
 from intake.settings import APP_ID, SCHEMA, Settings
@@ -299,6 +300,9 @@ def build_database(settings: Settings) -> Database:
     engine = create_async_engine(
         database_url(settings),
         pool_pre_ping=True,
+        # security rule 31: an error of the driver never carries the values
+        # a statement was run with, into a log or onto a span.
+        hide_parameters=True,
         # How long a request waits for a free connection.
         pool_timeout=settings.database_pool_timeout_seconds,
         # The server ends any statement that runs longer than this. Migrations
@@ -336,7 +340,7 @@ class SqlCaseRepository:
 
     async def add(self, case: Case, document: Document) -> None:
         """Insert both rows in one transaction, so a failure leaves neither."""
-        with tracer.start_as_current_span("intake.db.add_case"):
+        with adapter_span(tracer, "intake.db.add_case"):
             try:
                 async with self._database.begin() as connection:
                     await connection.execute(
@@ -363,7 +367,7 @@ class SqlCaseRepository:
 
     async def find_by_idempotency_key(self, idempotency_key: str) -> Document | None:
         """The document an earlier upload with this key recorded, if there is one."""
-        with tracer.start_as_current_span("intake.db.find_by_idempotency_key"):
+        with adapter_span(tracer, "intake.db.find_by_idempotency_key"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(document_table).where(
@@ -385,7 +389,7 @@ class SqlCaseRepository:
 
     async def document_exists(self, document_id: str) -> bool:
         """Whether the document's row is in the database."""
-        with tracer.start_as_current_span("intake.db.document_exists"):
+        with adapter_span(tracer, "intake.db.document_exists"):
             try:
                 async with self._database.connect() as connection:
                     result = await connection.execute(
@@ -414,7 +418,7 @@ class SqlSchemaRevision:
         other error, such as permission denied, is raised: the caller reports
         "not ready", and the SQLSTATE is logged here.
         """
-        with tracer.start_as_current_span("intake.db.read_revision"):
+        with adapter_span(tracer, "intake.db.read_revision"):
             try:
                 async with self._database.connect() as connection:
                     result = await connection.execute(
