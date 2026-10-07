@@ -1135,6 +1135,43 @@
       "title": "FactSetResult",
       "type": "object"
     },
+    "FailedSearch": {
+      "additionalProperties": false,
+      "description": "An eval search that got no answer: counted as a miss for its row.",
+      "properties": {
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fact_number": {
+          "minimum": 1,
+          "title": "Fact Number",
+          "type": "integer"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        }
+      },
+      "required": [
+        "retriever_config",
+        "case_key",
+        "fact_number",
+        "error_code"
+      ],
+      "title": "FailedSearch",
+      "type": "object"
+    },
     "Health": {
       "additionalProperties": false,
       "description": "Response of every service's health and readiness routes.",
@@ -1590,6 +1627,34 @@
       "title": "RedactionCommand",
       "type": "object"
     },
+    "RedactionLeak": {
+      "additionalProperties": false,
+      "description": "A planted identifier found in a stored page text. Never the value itself.",
+      "properties": {
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "category": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Category",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "case_key",
+        "page_number",
+        "category"
+      ],
+      "title": "RedactionLeak",
+      "type": "object"
+    },
     "RedactionResult": {
       "additionalProperties": false,
       "properties": {
@@ -1648,6 +1713,303 @@
         "redaction_counts"
       ],
       "title": "RedactionResult",
+      "type": "object"
+    },
+    "RedactionScoreboard": {
+      "additionalProperties": false,
+      "description": "The file `redaction.json`: whether redaction left a planted identifier behind.",
+      "properties": {
+        "cases_checked": {
+          "minimum": 0,
+          "title": "Cases Checked",
+          "type": "integer"
+        },
+        "cases_not_checked": {
+          "items": {
+            "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+            "type": "string"
+          },
+          "title": "Cases Not Checked",
+          "type": "array"
+        },
+        "clean": {
+          "title": "Clean",
+          "type": "boolean"
+        },
+        "identifiers_checked": {
+          "minimum": 0,
+          "title": "Identifiers Checked",
+          "type": "integer"
+        },
+        "leaks": {
+          "items": {
+            "$ref": "#/$defs/RedactionLeak"
+          },
+          "title": "Leaks",
+          "type": "array"
+        },
+        "may_also_be_redacted": {
+          "minimum": 0,
+          "title": "May Also Be Redacted",
+          "type": "integer"
+        },
+        "may_also_be_redacted_masked": {
+          "minimum": 0,
+          "title": "May Also Be Redacted Masked",
+          "type": "integer"
+        },
+        "pages_checked": {
+          "minimum": 0,
+          "title": "Pages Checked",
+          "type": "integer"
+        },
+        "run": {
+          "$ref": "#/$defs/ScoreboardRun"
+        }
+      },
+      "required": [
+        "run",
+        "clean",
+        "cases_checked",
+        "pages_checked",
+        "identifiers_checked",
+        "leaks",
+        "may_also_be_redacted",
+        "may_also_be_redacted_masked",
+        "cases_not_checked"
+      ],
+      "title": "RedactionScoreboard",
+      "type": "object"
+    },
+    "RetrievalRowScore": {
+      "additionalProperties": false,
+      "description": "One ladder row on the retrieval scoreboard.\n\nA row that answered \"not available\" is not measured: it is listed with\nwhat it is and carries no figure and no count. A measured row carries\nthe counts behind each figure; a figure is null when its count is 0.",
+      "properties": {
+        "cases": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cases"
+        },
+        "chunk_set": {
+          "$ref": "#/$defs/ChunkSet"
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatedFigure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatedFigure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latency_ms_median": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Latency Ms Median"
+        },
+        "latency_ms_p95": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Latency Ms P95"
+        },
+        "latency_searches": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Latency Searches"
+        },
+        "measured": {
+          "title": "Measured",
+          "type": "boolean"
+        },
+        "method": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Method",
+          "type": "string"
+        },
+        "recall_hits": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recall Hits"
+        },
+        "recall_searches": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recall Searches"
+        },
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        },
+        "right_runs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Right Runs"
+        },
+        "rule_recall": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rule Recall"
+        },
+        "store": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Store",
+          "type": "string"
+        },
+        "verdict_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Verdict Accuracy"
+        }
+      },
+      "required": [
+        "retriever_config",
+        "store",
+        "chunk_set",
+        "method",
+        "measured",
+        "rule_recall",
+        "recall_hits",
+        "recall_searches",
+        "verdict_accuracy",
+        "right_runs",
+        "cases",
+        "latency_ms_median",
+        "latency_ms_p95",
+        "latency_searches",
+        "cost",
+        "effort"
+      ],
+      "title": "RetrievalRowScore",
+      "type": "object"
+    },
+    "RetrievalScoreboard": {
+      "additionalProperties": false,
+      "description": "The file `retrieval.json`: every ladder row, scored on the same cases.",
+      "properties": {
+        "failed_searches": {
+          "items": {
+            "$ref": "#/$defs/FailedSearch"
+          },
+          "title": "Failed Searches",
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/RetrievalRowScore"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "run": {
+          "$ref": "#/$defs/ScoreboardRun"
+        },
+        "top_k": {
+          "minimum": 1,
+          "title": "Top K",
+          "type": "integer"
+        },
+        "unscored_cases": {
+          "items": {
+            "$ref": "#/$defs/UnscoredCase"
+          },
+          "title": "Unscored Cases",
+          "type": "array"
+        },
+        "winner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetrieverConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "top_k",
+        "rows",
+        "winner",
+        "failed_searches",
+        "unscored_cases"
+      ],
+      "title": "RetrievalScoreboard",
       "type": "object"
     },
     "RetrieverConfig": {
@@ -1805,6 +2167,45 @@
         }
       },
       "title": "RunStepQuery",
+      "type": "object"
+    },
+    "ScoreboardRun": {
+      "additionalProperties": false,
+      "description": "When and where a bake-off run was made.",
+      "properties": {
+        "eval_run_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Eval Run Id",
+          "type": "string"
+        },
+        "finished_at": {
+          "format": "date-time",
+          "title": "Finished At",
+          "type": "string"
+        },
+        "stand_ins": {
+          "title": "Stand Ins",
+          "type": "boolean"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "web_address": {
+          "pattern": "\\S",
+          "title": "Web Address",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eval_run_id",
+        "started_at",
+        "finished_at",
+        "web_address",
+        "stand_ins"
+      ],
+      "title": "ScoreboardRun",
       "type": "object"
     },
     "SearchItem": {
@@ -2093,6 +2494,34 @@
       "title": "StartCaseRequest",
       "type": "object"
     },
+    "StatedFigure": {
+      "additionalProperties": false,
+      "description": "A figure the runner cannot measure: stated by hand, with where it comes from.",
+      "properties": {
+        "amount": {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)",
+          "title": "Amount",
+          "type": "string"
+        },
+        "source": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Source",
+          "type": "string"
+        },
+        "unit": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount",
+        "unit",
+        "source"
+      ],
+      "title": "StatedFigure",
+      "type": "object"
+    },
     "StepOutcome": {
       "description": "How one tool call of the verdict agent ended (AD-15).",
       "enum": [
@@ -2249,6 +2678,68 @@
         "has_more"
       ],
       "title": "TriageQueue",
+      "type": "object"
+    },
+    "UnscoredCase": {
+      "additionalProperties": false,
+      "description": "A case that counts as wrong for every row, and why.",
+      "properties": {
+        "case_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Case Id"
+        },
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "case_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaseStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": [
+            "case_failed",
+            "not_final_in_time",
+            "wait_without_label",
+            "request_failed"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_key",
+        "case_id",
+        "case_status",
+        "reason",
+        "error_code"
+      ],
+      "title": "UnscoredCase",
       "type": "object"
     },
     "UploadedCase": {

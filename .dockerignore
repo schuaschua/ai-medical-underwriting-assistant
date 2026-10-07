@@ -13,6 +13,8 @@ _bmad
 _bmad-output
 data
 docs
+# The bake-off runner is a dev tool: it is in no image (spine AD-17).
+evals
 infra
 **/__pycache__
 **/node_modules

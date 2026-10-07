@@ -17,8 +17,14 @@ from contracts.enums import PageStatus, Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
 from contracts.models.classification import ClassificationList
 from contracts.models.extraction import FactList
-from contracts.models.intake import CaseCreated, PageBoxes, PageBoxesQuery, PageList
-from contracts.models.retrieval import RuleText
+from contracts.models.intake import (
+    CaseCreated,
+    PageBoxes,
+    PageBoxesQuery,
+    PageList,
+    PageText,
+)
+from contracts.models.retrieval import RuleText, SearchRequest, SearchResponse
 from contracts.models.verdict import (
     AgentStepList,
     AgentStepQuery,
@@ -86,6 +92,12 @@ _NO_REFUSAL: frozenset[ErrorCode] = frozenset()
 # document also that there is no redacted file yet (AD-21).
 _UNKNOWN_RESOURCE = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
 _NO_FILE = _UNKNOWN_RESOURCE | {ErrorCode.NOT_REDACTED}
+# AD-17: what `retrieval` may say about an eval search that is the caller's
+# to know: the request is not valid, or the ladder row cannot be searched
+# with here. The bake-off runner records such a row as not measured.
+_SEARCH_REFUSALS = frozenset(
+    {ErrorCode.VALIDATION_FAILED, ErrorCode.RETRIEVER_NOT_AVAILABLE}
+)
 
 
 def sidecar_base_url(settings: Settings) -> str:
@@ -373,6 +385,34 @@ class ServiceClient:
             get_operation("read_rule"),
             {"rule_id": rule_id},
             RuleText,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+        )
+
+    async def search_rules(
+        self, search: SearchRequest, *, traceparent: str | None
+    ) -> SearchResponse:
+        """`POST /searches` on `retrieval`: the eval search of the bake-off runner (AD-17).
+
+        The search as it was asked, with the row it names; nothing is stored.
+        """
+        return await self._call(
+            get_operation("search_rules"),
+            {},
+            SearchResponse,
+            passed_on=_SEARCH_REFUSALS,
+            traceparent=traceparent,
+            body=search.model_dump(mode="json"),
+        )
+
+    async def read_page_text(
+        self, page_id: str, *, traceparent: str | None
+    ) -> PageText:
+        """`GET /pages/{page_id}/text` on `intake`: the stored text of a redacted page."""
+        return await self._call(
+            get_operation("read_page_text"),
+            {"page_id": page_id},
+            PageText,
             passed_on=_UNKNOWN_RESOURCE,
             traceparent=traceparent,
         )

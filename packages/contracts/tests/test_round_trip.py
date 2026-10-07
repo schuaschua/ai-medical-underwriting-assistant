@@ -139,6 +139,58 @@ VERDICT_RUN = {
 }
 
 # One valid payload per model, keyed by class name.
+SCOREBOARD_RUN = {
+    "eval_run_id": EVAL,
+    "started_at": WHEN,
+    "finished_at": "2026-10-06T12:20:00Z",
+    "web_address": "http://localhost:8000",
+    "stand_ins": True,
+}
+STATED_FIGURE = {
+    "amount": "2.50",
+    "unit": "stories built",
+    "source": "epics.md, stories 2.2 and 2.3",
+}
+ROW_SCORE = {
+    "retriever_config": "r1",
+    "store": "pgvector",
+    "chunk_set": "fixed",
+    "method": "Vector only",
+    "measured": True,
+    "rule_recall": 0.6667,
+    "recall_hits": 2,
+    "recall_searches": 3,
+    "verdict_accuracy": 0.5,
+    "right_runs": 1,
+    "cases": 2,
+    "latency_ms_median": 21,
+    "latency_ms_p95": 40,
+    "latency_searches": 3,
+    "cost": None,
+    "effort": STATED_FIGURE,
+}
+UNMEASURED_ROW = {
+    **dict.fromkeys(ROW_SCORE),
+    "store": "pgvector",
+    "chunk_set": "smart",
+    "method": "Hybrid",
+    "measured": False,
+}
+FAILED_SEARCH = {
+    "retriever_config": "r1",
+    "case_key": "case-002",
+    "fact_number": 4,
+    "error_code": "upstream_unavailable",
+}
+UNSCORED_CASE = {
+    "case_key": "case-002",
+    "case_id": CASE,
+    "case_status": "failed",
+    "reason": "case_failed",
+    "error_code": "stage_failed",
+}
+LEAK = {"case_key": "case-002", "page_number": 3, "category": "person_name"}
+
 SAMPLES: dict[str, dict[str, Any]] = {
     "ErrorDetail": {
         "code": "in_progress",
@@ -295,6 +347,37 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "CaseSummary": CASE_SUMMARY,
     "CaseList": {"cases": [CASE_SUMMARY], "has_more": True},
     "TriagePage": TRIAGE_PAGE,
+    "ScoreboardRun": SCOREBOARD_RUN,
+    "StatedFigure": STATED_FIGURE,
+    "RetrievalRowScore": ROW_SCORE,
+    "FailedSearch": FAILED_SEARCH,
+    "UnscoredCase": UNSCORED_CASE,
+    "RetrievalScoreboard": {
+        "run": SCOREBOARD_RUN,
+        "top_k": 5,
+        "rows": [
+            ROW_SCORE,
+            *(
+                {**UNMEASURED_ROW, "retriever_config": row}
+                for row in ("r2", "r3", "r4", "r5", "r6")
+            ),
+        ],
+        "winner": "r1",
+        "failed_searches": [FAILED_SEARCH],
+        "unscored_cases": [UNSCORED_CASE],
+    },
+    "RedactionLeak": LEAK,
+    "RedactionScoreboard": {
+        "run": SCOREBOARD_RUN,
+        "clean": False,
+        "cases_checked": 2,
+        "pages_checked": 9,
+        "identifiers_checked": 18,
+        "leaks": [LEAK],
+        "may_also_be_redacted": 30,
+        "may_also_be_redacted_masked": 4,
+        "cases_not_checked": ["case-003"],
+    },
     "TriageQueue": {
         "pages": [
             TRIAGE_PAGE,

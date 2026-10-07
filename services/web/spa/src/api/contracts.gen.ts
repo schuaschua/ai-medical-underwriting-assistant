@@ -155,6 +155,7 @@ export interface Contracts {
   Fact: Fact;
   FactList: FactList;
   FactSetResult: FactSetResult;
+  FailedSearch: FailedSearch;
   Health: Health;
   HttpMethod: HttpMethod;
   JsonValue: JsonValue;
@@ -176,12 +177,17 @@ export interface Contracts {
   Reason: Reason;
   ReasonEffect: ReasonEffect;
   RedactionCommand: RedactionCommand;
+  RedactionLeak: RedactionLeak;
   RedactionResult: RedactionResult;
+  RedactionScoreboard: RedactionScoreboard;
+  RetrievalRowScore: RetrievalRowScore;
+  RetrievalScoreboard: RetrievalScoreboard;
   RetrieverConfig: RetrieverConfig;
   RouteDetail: RouteDetail;
   RuleReadQuery: RuleReadQuery;
   RuleText: RuleText;
   RunStepQuery: RunStepQuery;
+  ScoreboardRun: ScoreboardRun;
   SearchItem: SearchItem;
   SearchRequest: SearchRequest;
   SearchResponse: SearchResponse;
@@ -190,12 +196,14 @@ export interface Contracts {
   StageStatus: StageStatus;
   StartCaseOptions: StartCaseOptions;
   StartCaseRequest: StartCaseRequest;
+  StatedFigure: StatedFigure;
   StepOutcome: StepOutcome;
   StopAfter: StopAfter;
   SystemReason: SystemReason;
   ToolName: ToolName;
   TriagePage: TriagePage;
   TriageQueue: TriageQueue;
+  UnscoredCase: UnscoredCase;
   UploadedCase: UploadedCase;
   Verdict: Verdict;
   VerdictDetail: VerdictDetail;
@@ -489,6 +497,15 @@ export interface FactSetResult {
   unverified_count: number;
 }
 /**
+ * An eval search that got no answer: counted as a miss for its row.
+ */
+export interface FailedSearch {
+  case_key: string;
+  error_code: ErrorCode | null;
+  fact_number: number;
+  retriever_config: RetrieverConfig;
+}
+/**
  * Response of every service's health and readiness routes.
  */
 export interface Health {
@@ -608,6 +625,14 @@ export interface Reason {
 export interface RedactionCommand {
   eval_run_id?: string | null;
 }
+/**
+ * A planted identifier found in a stored page text. Never the value itself.
+ */
+export interface RedactionLeak {
+  case_key: string;
+  category: string;
+  page_number: number;
+}
 export interface RedactionResult {
   audit: AuditRecord;
   case_id: string;
@@ -622,6 +647,88 @@ export interface RedactionResult {
     [k: string]: number;
   };
   status: StageStatus;
+}
+/**
+ * The file `redaction.json`: whether redaction left a planted identifier behind.
+ */
+export interface RedactionScoreboard {
+  cases_checked: number;
+  cases_not_checked: string[];
+  clean: boolean;
+  identifiers_checked: number;
+  leaks: RedactionLeak[];
+  may_also_be_redacted: number;
+  may_also_be_redacted_masked: number;
+  pages_checked: number;
+  run: ScoreboardRun;
+}
+/**
+ * When and where a bake-off run was made.
+ */
+export interface ScoreboardRun {
+  eval_run_id: string;
+  finished_at: string;
+  stand_ins: boolean;
+  started_at: string;
+  web_address: string;
+}
+/**
+ * One ladder row on the retrieval scoreboard.
+ *
+ * A row that answered "not available" is not measured: it is listed with
+ * what it is and carries no figure and no count. A measured row carries
+ * the counts behind each figure; a figure is null when its count is 0.
+ */
+export interface RetrievalRowScore {
+  cases: number | null;
+  chunk_set: ChunkSet;
+  cost: StatedFigure | null;
+  effort: StatedFigure | null;
+  latency_ms_median: number | null;
+  latency_ms_p95: number | null;
+  latency_searches: number | null;
+  measured: boolean;
+  method: string;
+  recall_hits: number | null;
+  recall_searches: number | null;
+  retriever_config: RetrieverConfig;
+  right_runs: number | null;
+  rule_recall: number | null;
+  store: string;
+  verdict_accuracy: number | null;
+}
+/**
+ * A figure the runner cannot measure: stated by hand, with where it comes from.
+ */
+export interface StatedFigure {
+  amount: string;
+  source: string;
+  unit: string;
+}
+/**
+ * The file `retrieval.json`: every ladder row, scored on the same cases.
+ */
+export interface RetrievalScoreboard {
+  failed_searches: FailedSearch[];
+  rows: RetrievalRowScore[];
+  run: ScoreboardRun;
+  top_k: number;
+  unscored_cases: UnscoredCase[];
+  winner: RetrieverConfig | null;
+}
+/**
+ * A case that counts as wrong for every row, and why.
+ */
+export interface UnscoredCase {
+  case_id: string | null;
+  case_key: string;
+  case_status: CaseStatus | null;
+  error_code: ErrorCode | null;
+  reason:
+    | "case_failed"
+    | "not_final_in_time"
+    | "wait_without_label"
+    | "request_failed";
 }
 /**
  * Query of `GET /rules/{rule_id}`; without the parameter the `smart` chunk is returned.

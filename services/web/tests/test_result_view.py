@@ -1,9 +1,10 @@
-"""Stories 2.7 and 2.8: `web` passes the result view's six reads, and the two reads of the agent's log, on to the services that own them.
+"""Stories 2.7, 2.8 and 3.4: `web` passes the result view's six reads, the two reads of the agent's log and the bake-off runner's page text and eval search on to the services that own them.
 
 The Dapr sidecar is a fake here: a transport that records what `web` sent and
 answers as `extraction`, `verdict`, `retrieval` and `intake` would.
 """
 
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,7 +17,7 @@ from contracts.errors import DomainError, ErrorBody, ErrorCode
 from contracts.ids import new_id
 from contracts.models.extraction import FactList
 from contracts.models.intake import PageBoxes, PageList
-from contracts.models.retrieval import RuleText
+from contracts.models.retrieval import RuleText, SearchResponse
 from contracts.models.verdict import SUGGESTION_LABEL, VerdictRunList
 from web.adapters.http.app import create_app
 from web.settings import Settings
@@ -28,6 +29,23 @@ TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
 # The first bytes of any PDF file; the rest is no document and need not be.
 REDACTED_PDF = b"%PDF-1.7\nsynthetic redacted document"
 RULE_ID = "UW-DM-002"
+# Story 3.4: the eval search, as the bake-off runner sends it and `retrieval` answers it.
+SEARCH = {"query": "HbA1c 7.4 %", "retriever_config": "r1", "top_k": 5}
+SEARCH_ANSWER = {
+    "retriever_config": "r1",
+    "latency_ms": 17,
+    "items": [
+        {
+            "chunk_id": "fixed-0031",
+            "rule_ids": [RULE_ID],
+            "rank": 1,
+            "score": 0.81,
+            "text": f"Rule {RULE_ID}: HbA1c from 7.0 % to 7.9 %: +50 %.",
+            "manual_page": 31,
+            "impairment": "Type 2 diabetes mellitus",
+        }
+    ],
+}
 
 
 def refusal(code: ErrorCode, message: str, status: int | None = None) -> httpx.Response:
@@ -155,6 +173,12 @@ class Result:
             ("intake", f"/documents/{self.document_id}/file"): httpx.Response(
                 200, content=REDACTED_PDF, headers={"Content-Type": "application/pdf"}
             ),
+            ("intake", f"/pages/{self.page_id}/text"): {
+                "page_id": self.page_id,
+                "page_number": 1,
+                "text": "Applicant: [Person]\nHbA1c\n7.4\n%",
+            },
+            ("retrieval", "/searches"): SEARCH_ANSWER,
         }
 
 
@@ -224,6 +248,10 @@ def routes(result: Result) -> dict[tuple[str, str], str]:
             f"/api/cases/{result.case_id}/agent-steps?tool=search_rules"
             f"&after_verdict_run_id={result.run_id}&after_step_no=2"
         ),
+        # Story 3.4: a page's stored text, for the runner's redaction check.
+        ("intake", f"/pages/{result.page_id}/text"): (
+            f"/api/pages/{result.page_id}/text"
+        ),
     }
 
 
@@ -274,6 +302,23 @@ def test_story_2_7_the_underwriter_reads_each_part_of_a_result_from_its_owner_an
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["content-security-policy"]
     assert len(sidecar.requests) == len(routes(result))
+
+    # Story 3.4: the eval search is `retrieval`'s search passed through, with
+    # the row it names, for the underwriter only.
+    assert error_of(client.post("/api/searches", json=SEARCH, headers=CUSTOMER)) == (
+        403,
+        "role_not_allowed",
+    )
+    assert len(sidecar.requests) == len(routes(result))
+    searched = client.post("/api/searches", json=SEARCH, headers=UNDERWRITER)
+    asked = sidecar.requests.pop()
+    assert (asked.method, asked.url.path) == (
+        "POST",
+        "/v1.0/invoke/retrieval/method/searches",
+    )
+    assert json.loads(asked.content) == SEARCH
+    assert searched.status_code == 200 and searched.json() == SEARCH_ANSWER
+    assert SearchResponse.model_validate(searched.json()).latency_ms == 17
 
     # Each answer is the contract's shape, and the verdict carries its label.
     read = {
@@ -330,6 +375,31 @@ def test_story_2_7_an_owners_refusal_of_the_request_is_passed_on_and_anything_el
         "validation_failed",
     )
 
+    # Story 3.4: a ladder row that cannot be searched with is the runner's to
+    # know ("not measured"); a model that is down is not passed on as such.
+    for refused, expected in (
+        (
+            refusal(ErrorCode.RETRIEVER_NOT_AVAILABLE, "Row r4 is not available."),
+            (409, "retriever_not_available"),
+        ),
+        (
+            refusal(ErrorCode.MODEL_UNAVAILABLE, "The model is not available."),
+            (502, "upstream_unavailable"),
+        ),
+    ):
+        sidecar.answers["retrieval", "/searches"] = refused
+        assert (
+            error_of(client.post("/api/searches", json=SEARCH, headers=UNDERWRITER))
+            == expected
+        )
+    asked_so_far = len(sidecar.requests)
+    for body in ({**SEARCH, "retriever_config": "r9"}, {**SEARCH, "top_k": 0}):
+        assert (
+            error_of(client.post("/api/searches", json=body, headers=UNDERWRITER))[0]
+            == 422
+        )
+    assert len(sidecar.requests) == asked_so_far
+
     # Not the caller's own request: a fault of the service, a code this
     # read should never get, an unreachable sidecar, and a success that is
     # not the contract's shape.
@@ -355,6 +425,7 @@ def test_story_2_7_an_owners_refusal_of_the_request_is_passed_on_and_anything_el
         "/api/rules/UW-dm-2",
         "/api/rules/..%2Fcases",
         "/api/documents/not-a-document/file",
+        "/api/pages/not-a-page/text",
         f"/api/pages/{result.page_id}/boxes?quote_start=5",
         f"/api/pages/{result.page_id}/boxes?quote_start=9&quote_end=5",
         f"/api/pages/{result.page_id}/boxes?quote_start=-1&quote_end=5",

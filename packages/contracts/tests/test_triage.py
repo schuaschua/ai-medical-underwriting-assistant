@@ -39,7 +39,9 @@ def triage_page(**changes: Any) -> dict[str, Any]:
     }
 
 
-def test_story_1_11_the_queue_takes_a_known_status_and_says_whether_more_wait() -> None:
+def test_story_1_11_the_queue_takes_a_known_status_says_whether_more_wait_and_how_a_page_got_there() -> (
+    None
+):
     queue = PageQueue.model_validate({"pages": [queued_page()], "has_more": True})
 
     assert queue.has_more is True
@@ -55,10 +57,7 @@ def test_story_1_11_the_queue_takes_a_known_status_and_says_whether_more_wait() 
         with pytest.raises(ValidationError):
             PageQueueQuery.model_validate(query)
 
-
-def test_story_1_11_a_queued_page_names_its_cases_classifier_and_how_it_got_there() -> (
-    None
-):
+    # A queued page names its case's classifier and how it got there.
     by_gate = QueuedPage.model_validate(queued_page(queued_by="gate"))
     unsaid = QueuedPage.model_validate(queued_page())
 

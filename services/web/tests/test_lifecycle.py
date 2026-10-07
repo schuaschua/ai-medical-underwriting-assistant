@@ -180,7 +180,7 @@ def test_story_1_6_the_customer_may_not_set_a_start_option(
         assert sidecar.requests == []
 
 
-def test_story_1_6_starting_twice_gives_the_same_answer(
+def test_story_1_6_starting_twice_gives_the_same_answer_and_the_underwriter_may_start_with_or_without_options(
     client: TestClient, sidecar: FakeSidecar
 ) -> None:
     case_id = new_id()
@@ -192,10 +192,7 @@ def test_story_1_6_starting_twice_gives_the_same_answer(
     assert second.json() == first.json()
     assert list(sidecar.started) == [case_id]
 
-
-def test_story_1_6_the_underwriter_may_start_a_case_with_or_without_options(
-    client: TestClient, sidecar: FakeSidecar
-) -> None:
+    # The underwriter may start a case too, and say how it runs.
     plain = client.post(f"/api/cases/{new_id()}/start", headers=UNDERWRITER)
     with_options = client.post(
         f"/api/cases/{new_id()}/start", json={"stop_after": "gate"}, headers=UNDERWRITER

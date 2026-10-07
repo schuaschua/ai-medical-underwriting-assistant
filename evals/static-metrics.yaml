@@ -1,0 +1,76 @@
+# What the retrieval scoreboard prints beside each row and the bake-off runner
+# cannot measure (spine AD-17): what the row is, and its stated cost and effort.
+#
+# Rules for this file:
+# - A figure is stated only with its source: where a reader can check it.
+#   `amount` is a decimal number written as text, `unit` says what it counts.
+# - A figure nobody has checked is left as `null`, and the scoreboard then
+#   shows none. Never enter a figure from memory.
+# - Keep the figures few: one cost and one effort per row.
+#
+# Store, chunk set and method repeat `services/retrieval/src/retrieval/domain/rows.py`
+# in the words of `bake-offs.md`; a test of the runner holds the chunk sets and
+# the stores equal to that table.
+#
+# Cost: not stated yet. The unit to state it in is USD per 1,000 searches, from
+# the Azure price list of the day the bake-off is run in Azure, with the list's
+# address and that date as the source (see deferred-work.md, story 3.4).
+#
+# Effort: the stories of `_bmad-output/planning-artifacts/epics.md` that had to
+# be built before the row could answer a search. It counts stories, not their
+# size: the epics give stories no size.
+rows:
+  r1:
+    store: pgvector
+    chunk_set: fixed
+    method: Vector only
+    cost: null
+    effort:
+      amount: "3"
+      unit: stories built
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (search) and 3.2 (fixed chunks, vector-only search)"
+  r2:
+    store: pgvector
+    chunk_set: smart
+    method: Vector only
+    cost: null
+    effort:
+      amount: "3"
+      unit: stories built
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (search) and 3.2 (vector-only search)"
+  r3:
+    store: pgvector
+    chunk_set: smart
+    method: "Hybrid: vector and PostgreSQL full-text search, fused by rank"
+    cost: null
+    effort:
+      amount: "2"
+      unit: stories built
+      source: "epics.md: stories 2.2 (ingestion) and 2.3 (hybrid search)"
+  r4:
+    store: pgvector
+    chunk_set: smart
+    method: Hybrid and a reranker
+    cost: null
+    effort:
+      amount: "3"
+      unit: stories built
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (hybrid search) and 3.7 (reranker, not built yet)"
+  r5:
+    store: Azure AI Search
+    chunk_set: smart
+    method: Hybrid and the semantic ranker
+    cost: null
+    effort:
+      amount: "3"
+      unit: stories built
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (search operation) and 3.3 (Azure AI Search index and query)"
+  r6:
+    store: Azure AI Search
+    chunk_set: smart
+    method: Agentic retrieval (knowledge base with LLM query planning)
+    cost: null
+    effort:
+      amount: "4"
+      unit: stories built
+      source: "epics.md: stories 2.2, 2.3, 3.3 and 3.8 (agentic retrieval, not built yet)"

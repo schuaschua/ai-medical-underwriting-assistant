@@ -77,7 +77,9 @@ def role_probe_app() -> FastAPI:
     return app
 
 
-def test_story_1_3_wrong_role_for_a_route_is_403_role_not_allowed() -> None:
+def test_story_1_3_wrong_role_for_a_route_is_403_and_invalid_input_is_422_without_echoing_it() -> (
+    None
+):
     client = TestClient(role_probe_app())
 
     response = client.get("/api/underwriter-only", headers={"X-Demo-Role": "customer"})
@@ -91,10 +93,7 @@ def test_story_1_3_wrong_role_for_a_route_is_403_role_not_allowed() -> None:
         == 403
     )
 
-
-def test_story_1_3_invalid_input_is_422_without_echoing_the_input() -> None:
-    client = TestClient(role_probe_app())
-
+    # Input that is not valid is 422, and is not echoed.
     response = client.get("/api/number/not-a-number")
 
     assert response.status_code == 422

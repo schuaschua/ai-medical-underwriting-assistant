@@ -42,7 +42,8 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check
-        run: uv run mypy packages services
+        # `evals` is the bake-off runner: a workspace member that is no service.
+        run: uv run mypy packages services evals
 
       - name: Start PostgreSQL, the blob emulator and the scheduler emulator
         # The integration tests need a real database, a blob store and, for
@@ -241,6 +242,18 @@ jobs:
           fi
           if [[ "$(docker exec "$WEB_CONTAINER" id -u)" == "0" ]]; then
             echo "::error::The web container runs as root."
+            exit 1
+          fi
+          # AD-17: the bake-off runner and the answer key are in no image,
+          # and `web` is the service the runner talks to.
+          if docker exec "$WEB_CONTAINER" python -c "import bakeoff" 2>/dev/null; then
+            echo "::error::The web image holds the bake-off runner."
+            exit 1
+          fi
+          if [[ -n "$(docker exec "$WEB_CONTAINER" find / -xdev \
+            \( -name 'answer-key' -o -name 'static-metrics.yaml' -o -name 'rule-table.json' \) \
+            -print -quit 2>/dev/null)" ]]; then
+            echo "::error::The web image holds a file of the answer key or of the runner."
             exit 1
           fi
 

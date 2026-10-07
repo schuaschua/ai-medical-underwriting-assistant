@@ -7,6 +7,7 @@ members = [
     "aiunderwriter",
     "classification",
     "contracts",
+    "evals",
     "extraction",
     "intake",
     "retrieval",
@@ -64,12 +65,14 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "evals" },
     { name = "httpx2" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "synthdata" },
+    { name = "types-pyyaml" },
 ]
 
 [package.metadata]
@@ -86,12 +89,14 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "evals", editable = "evals" },
     { name = "httpx2", specifier = "==2.13.1" },
     { name = "mypy", specifier = "==2.4.0" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-cov", specifier = "==7.1.0" },
     { name = "ruff", specifier = "==0.16.10" },
     { name = "synthdata", editable = "packages/synthdata" },
+    { name = "types-pyyaml", specifier = "==6.0.12.20250915" },
 ]
 
 [[package]]
@@ -546,6 +551,27 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ac/ed/4e6020f6fd1bc6b91eb50c423fab37a20065b2eef369a4741c6f6fdd90ba/durabletask_azuremanaged-1.11.0.tar.gz", hash = "sha256:f295ecba06ca5804b40d901f6f15a3ad69c42ec397396f7e009afbd6f61369b3", size = 22645, upload-time = "2026-09-29T18:46:38.805Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/f3/13b047effea85a0cd90cddc2f4695d8fc003b371c87ceaef8a948a2e2d05/durabletask_azuremanaged-1.11.0-py3-none-any.whl", hash = "sha256:4fbe34b104c23c9a6e878ee91ab1b040754a2a6e19b4ec93eacfb3ab25fa02b8", size = 30135, upload-time = "2026-09-29T18:46:39.815Z" },
+]
+
+[[package]]
+name = "evals"
+version = "0.1.0"
+source = { editable = "evals" }
+dependencies = [
+    { name = "contracts" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "contracts", editable = "packages/contracts" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "pydantic", specifier = "==2.13.5" },
+    { name = "pydantic-settings", specifier = "==2.15.0" },
+    { name = "pyyaml", specifier = "==6.0.3" },
 ]
 
 [[package]]
@@ -1707,6 +1733,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/53/a3/1585216310e344e8102c22482f6060c7a6ea0322b63e026372e6dcefcfd6/truststore-0.10.4.tar.gz", hash = "sha256:9d91bd436463ad5e4ee4aba766628dd6cd7010cf3e2461756b3303710eebc301", size = 26169, upload-time = "2025-08-12T18:49:02.73Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/19/97/56608b2249fe206a67cd573bc93cd9896e1efb9e98bce9c163bcdc704b88/truststore-0.10.4-py3-none-any.whl", hash = "sha256:adaeaecf1cbb5f4de3b1959b42d41f6fab57b2b1666adb59e89cb0b53361d981", size = 18660, upload-time = "2025-08-12T18:49:01.46Z" },
+]
+
+[[package]]
+name = "types-pyyaml"
+version = "6.0.12.20250915"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/69/3c51b36d04da19b92f9e815be12753125bd8bc247ba0470a982e6979e71c/types_pyyaml-6.0.12.20250915.tar.gz", hash = "sha256:0f8b54a528c303f0e6f7165687dd33fafa81c807fcac23f632b63aa624ced1d3", size = 17522, upload-time = "2025-09-15T03:01:00.728Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/e0/1eed384f02555dde685fff1a1ac805c1c7dcb6dd019c916fe659b1c1f9ec/types_pyyaml-6.0.12.20250915-py3-none-any.whl", hash = "sha256:e7d4d9e064e89a3b3cae120b4990cd370874d2bf12fa5f46c97018dd5d3c9ab6", size = 20338, upload-time = "2025-09-15T03:00:59.218Z" },
 ]
 
 [[package]]

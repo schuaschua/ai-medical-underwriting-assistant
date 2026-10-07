@@ -1,4 +1,4 @@
-"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage and the result view's reads.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage, the result view's reads and the bake-off runner's two.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
 to `intake`, asks `workflow` to start the case, reads progress, the audit
@@ -20,6 +20,11 @@ and the page list, a page's word boxes and the document file (`intake`).
 The agent's log (story 2.8) is read through two more, both `verdict`'s: the
 steps of a run, and the steps of a case. `web` never writes to that log.
 
+The bake-off runner (story 3.4, AD-17) drives the system through these same
+routes, and through two more that exist for it: the eval search, which is
+`retrieval`'s search passed through, and a page's stored text, which its
+redaction check reads. `web` scores nothing and never sees the expected answers.
+
 The uploaded original is never served by any service (AD-21). The one
 document file served is the redacted PDF, and the one image a page's
 thumbnail, which `intake` makes from that PDF.
@@ -35,8 +40,8 @@ from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
 from contracts.models.classification import ClassificationList
 from contracts.models.extraction import FactList
-from contracts.models.intake import PageBoxes, PageBoxesQuery, PageList
-from contracts.models.retrieval import RuleText
+from contracts.models.intake import PageBoxes, PageBoxesQuery, PageList, PageText
+from contracts.models.retrieval import RuleText, SearchRequest, SearchResponse
 from contracts.models.verdict import (
     AgentStepList,
     AgentStepQuery,
@@ -372,6 +377,39 @@ async def list_case_agent_steps(
 ) -> AgentStepList:
     return await _services(request).list_case_agent_steps(
         case_id, query, traceparent=request.headers.get("traceparent")
+    )
+
+
+# --- The bake-off runner's two reads (story 3.4) --------------------------------------
+#
+# AD-17: the runner talks to `web` only. Both are for the underwriter only
+# (AD-9) and are passed on as they are: `web` works out no score.
+
+
+# The eval search: one search of the manual with the ladder row the body
+# names, answered as `retrieval` answers it, with its own `latency_ms`. A row
+# that cannot be searched with here is 409 `retriever_not_available`.
+@role_checked.post(get_operation("search_rules").path)
+async def search_rules(
+    search: SearchRequest,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> SearchResponse:
+    return await _services(request).search_rules(
+        search, traceparent=request.headers.get("traceparent")
+    )
+
+
+# AD-21: the text of a page is the redacted page's, the only one stored. The
+# runner's redaction check reads it to see that no planted identifier is left.
+@role_checked.get(get_operation("read_page_text").path)
+async def read_page_text(
+    page_id: PageIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> PageText:
+    return await _services(request).read_page_text(
+        page_id, traceparent=request.headers.get("traceparent")
     )
 
 

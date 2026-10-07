@@ -44,6 +44,10 @@ holds the ruff, mypy and pytest settings for every member.
   manual's rules at `retrieval`, both through its Dapr sidecar, and every tool call it makes is kept
   in an append-only step log (database schema `verdict`); its prompt is in
   `services/verdict/src/verdict/prompts/`. No service imports another service's code.
+- `evals/` is the bake-off runner, a dev tool that is in no image: one command that drives the running
+  system through `web`, as a user would, over the synthetic cases and their answer key, and writes the
+  scoreboard files (see "The bake-off" below and `evals/README.md`). It is the only code besides the
+  generator's tests that reads `data/answer-key/`.
 
 ### Install and check
 
@@ -52,7 +56,7 @@ Install uv 0.11.8 and Node.js 24.21.0, then from the repository root:
 ```sh
 uv sync
 uv run ruff format --check . && uv run ruff check .
-uv run mypy packages services
+uv run mypy packages services evals
 docker compose up --detach --wait                    # for the integration tests
 uv run pytest --cov
 
@@ -811,6 +815,36 @@ docker build -f services/extraction/Dockerfile -t aiuw-extraction:dev .
 docker build -f services/verdict/Dockerfile -t aiuw-verdict:dev .
 docker build -f services/retrieval/Dockerfile -t aiuw-retrieval:dev .   # the service, and the job: python -m retrieval.ingest
 ```
+
+### The bake-off
+
+The retrieval rows are scored by one runner (`evals/`, story 3.4). With the local start running
+(`./tools/dev.sh`), from the repository root:
+
+```sh
+uv run python -m bakeoff
+```
+
+It talks to `web` only, with a demo role on every call, and measures two things apart. **Rule
+recall**: for every expected fact of the answer key that meets a rule, one search per row with the
+query the contracts' query builder makes from the fact's statement; a hit is an expected rule among
+the top 5. **Verdict accuracy**: every case is uploaded once and started once with every row that
+answers and one `eval_run_id`; the runner answers the human waits from the answer key's page labels
+and compares each row's suggested verdict (and loading) with the expected one. In the same run it
+reads every page's text and fails (exit status 1) if a planted identifier, or a part of a planted
+name, is left in it. It writes `retrieval.json` (one line per ladder row with store, chunk set,
+method, rule recall, verdict accuracy, latency, the counts behind them, the stated cost and effort
+from `evals/static-metrics.yaml`, and the winner) and `redaction.json`. Both shapes are contract
+models (`RetrievalScoreboard`, `RedactionScoreboard`).
+
+A row that answers "not available" is recorded as not measured; a case that fails or does not finish
+counts as wrong for every row and is listed. Figures from a local run are **not results**: the
+stand-in's vectors count shared words and its agent is scripted, so they prove the plumbing only.
+Such a run writes under `.work/scoreboards/` and its files say `"stand_ins": true`. Only a run
+against the deployed environment (`--deployed`) writes `data/scoreboards/`. For this, `web` has two
+routes for the underwriter that no screen uses yet: `POST /api/searches` (the search operation of
+`retrieval`, passed through) and `GET /api/pages/<page_id>/text` (the redacted page's stored text).
+Cases the runner starts are in neither the triage queue nor the case list.
 
 ### Contract types
 

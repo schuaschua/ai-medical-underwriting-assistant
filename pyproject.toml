@@ -1,5 +1,6 @@
 # Workspace root: one place for tool configuration (ruff, mypy, pytest).
-# Members are the shared contracts package and, later, the seven services.
+# Members are the shared contracts package, the synthetic data generator, the
+# seven services and the bake-off runner (`evals`, which is no service).
 [project]
 name = "aiunderwriter"
 version = "0.0.0"
@@ -27,17 +28,23 @@ dev = [
     # Intelligence's layout model (story 2.2),
     # `uv run python -m synthdata.layout_standin`; no service depends on it.
     "synthdata",
+    # The bake-off runner (story 3.4), `uv run python -m bakeoff`: a dev tool
+    # too. It is in no image and no service depends on it.
+    "evals",
+    # Type hints for the YAML library the runner reads static-metrics.yaml with.
+    "types-pyyaml==6.0.12.20250915",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["packages/*", "services/*"]
+members = ["packages/*", "services/*", "evals"]
 
 [tool.uv.sources]
 classification = { workspace = true }
 contracts = { workspace = true }
+evals = { workspace = true }
 extraction = { workspace = true }
 intake = { workspace = true }
 retrieval = { workspace = true }
@@ -49,7 +56,7 @@ synthdata = { workspace = true }
 [tool.ruff]
 target-version = "py313"
 # Lets import sorting tell first-party packages from third-party ones.
-src = ["packages/*/src", "services/*/src"]
+src = ["packages/*/src", "services/*/src", "evals/src"]
 # BMad and Claude Code tooling is vendored, not project code.
 extend-exclude = ["_bmad", "_bmad-output", ".claude"]
 
@@ -69,6 +76,9 @@ strict = true
 explicit_package_bases = true
 # One entry per package and service: where its importable code starts.
 mypy_path = [
+    # The bake-off runner and the fake `web` its tests share.
+    "evals/src",
+    "evals/tests/support",
     "packages/contracts/src",
     "packages/synthdata/src",
     # Helpers shared by the tests that run the services against the stand-ins.
@@ -96,7 +106,7 @@ module = ["grpc", "grpc.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["packages", "services"]
+testpaths = ["packages", "services", "evals"]
 # Every service will have its own tests/ folder; importlib mode lets test
 # modules in different folders share a file name.
 addopts = "--import-mode=importlib --strict-markers"
@@ -104,6 +114,7 @@ addopts = "--import-mode=importlib --strict-markers"
 # service's tests share live in its tests/support folder, named here; module
 # names in it start with the service's name so that they stay unique.
 pythonpath = [
+    "evals/tests/support",
     "packages/synthdata/tests/support",
     "services/classification/tests/support",
     "services/extraction/tests/support",
@@ -124,6 +135,8 @@ markers = [
 # What `uv run pytest --cov` measures; each service adds its package here.
 source_pkgs = [
     "classification",
+    # The bake-off runner: the code of the workspace member `evals`.
+    "bakeoff",
     "contracts",
     "extraction",
     "intake",

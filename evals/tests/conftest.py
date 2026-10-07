@@ -1,8 +1,9 @@
-"""The fixtures of the tests that put the stand-ins behind the real services.
+"""The system the runner's whole-path test drives: the real services with the stand-ins behind them.
 
-They are defined in `support/synthdata_fixtures.py`, which the bake-off
-runner's tests share (story 3.4), and imported here by name so that pytest
-finds them for this folder.
+The fixtures are those of the cross-service tests
+(`packages/synthdata/tests/support/synthdata_fixtures.py`), imported here by
+name so that pytest finds them for this folder. They need the containers of
+compose.yaml: `docker compose up --detach --wait`.
 """
 
 from synthdata_fixtures import (

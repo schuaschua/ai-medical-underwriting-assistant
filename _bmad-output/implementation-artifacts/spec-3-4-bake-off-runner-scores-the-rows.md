@@ -2,7 +2,8 @@
 title: 'Story 3.4: Bake-off runner scores the rows'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'b9ac3245921fdc5cacaf51c0e54bd4bcdcbd65c7'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -73,12 +74,12 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `packages/contracts/` -- the scoreboard models (retrieval and redaction), with tests inside the budget; exported schema and SPA types
-- [ ] `services/web/` -- the eval search and the page text routes, underwriter only; tests inside the budget
-- [ ] `evals/` -- the runner as a small package: its settings (address of `web`, concurrency, deadlines, where to write), the client of `web`, the answer-key reader, recall, verdict accuracy with the answering of human waits, the redaction check, the winner rule, the writers; `static-metrics.yaml` with a source for every figure; a command line entry; a README on how to run it locally and against the deployed environment
-- [ ] `pyproject.toml`, `CLAUDE.md` (the budget line for `evals`), `.github/workflows/ci.yml` -- the new member in the checks
-- [ ] Tests, at most 15 cases in `evals`: the pure parts (recall counting, the verdict comparison, the winner rule, the leak check on normalised text, answering a wait from the key) and one whole-path run of two or three cases against the in-process system with the stand-ins, writing both files
-- [ ] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; the Azure run of the bake-off as a step of the final session
+- [x] `packages/contracts/` -- the scoreboard models (retrieval and redaction), with tests inside the budget; exported schema and SPA types
+- [x] `services/web/` -- the eval search and the page text routes, underwriter only; tests inside the budget
+- [x] `evals/` -- the runner as a small package: its settings (address of `web`, concurrency, deadlines, where to write), the client of `web`, the answer-key reader, recall, verdict accuracy with the answering of human waits, the redaction check, the winner rule, the writers; `static-metrics.yaml` with a source for every figure; a command line entry; a README on how to run it locally and against the deployed environment
+- [x] `pyproject.toml`, `CLAUDE.md` (the budget line for `evals`), `.github/workflows/ci.yml` -- the new member in the checks
+- [x] Tests, at most 15 cases in `evals`: the pure parts (recall counting, the verdict comparison, the winner rule, the leak check on normalised text, answering a wait from the key) and one whole-path run of two or three cases against the in-process system with the stand-ins, writing both files
+- [x] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; the Azure run of the bake-off as a step of the final session
 
 **Acceptance Criteria:**
 - Given the local system with the stand-ins, when the runner runs over the case set, then it writes both files with recall, accuracy and latency for `r1`, `r2` and `r3`, the rows that are not built as not measured, a winner, and a clean redaction report, all marked as stand-in figures.
@@ -87,9 +88,56 @@ context:
 
 ## Implementation Notes
 
+- The runner is the workspace member `evals` and is imported as `bakeoff` (`uv run python -m bakeoff`): pytest names the test modules of that folder `evals.tests...`, which hides a package called `evals` while the tests run.
+- Modules (`evals/src/bakeoff/`): `settings` (one settings object, `EVALS_` variables, the refusals), `client` (the calls to `web`, a demo role on each, retries), `answer_key` (the reader), `recall`, `verdicts` (the comparison, the answering of waits, one case from upload to runs), `redaction`, `scoreboard` (the figures, the winner, the writers), `state` (which case was uploaded as which case id, for a resume), `static_metrics`, `runner`, `__main__`.
+- Contracts: `ScoreboardRun`, `StatedFigure`, `RetrievalRowScore`, `FailedSearch`, `UnscoredCase`, `RetrievalScoreboard`, `RedactionLeak`, `RedactionScoreboard` in `contracts/models/web.py`; schema and SPA types regenerated. Nothing under `packages/contracts/` or `services/` names the answer key.
+- `web`: `POST /api/searches` and `GET /api/pages/{page_id}/text`, both for the underwriter only; `retriever_not_available` is passed on for a search.
+- Whether the AI services were stand-ins is said by the operator (`--deployed`); nothing read from `web` says it.
+- `evals/static-metrics.yaml`: every `cost` is `null` (no price is held in the project and none was entered from memory); effort is the number of stories of `epics.md` each row needed.
+- The cross-service fixtures moved to `packages/synthdata/tests/support/synthdata_fixtures.py`, so that `evals/tests` can drive the same in-process system.
+- Proven locally on 2026-10-08 with `./tools/dev.sh` (real Dapr sidecars, stand-ins): all 22 cases, 94 pages, `r1`, `r2`, `r3` and `r5` measured, `r4` and `r6` not measured, a winner, redaction clean, files under `.work/scoreboards/` marked as stand-in figures; the run started again with its id uploaded nothing. The stack was stopped afterwards.
+- Open items are in `deferred-work.md` under this spec: the Azure run, the cost figures, the choices to confirm.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 1 (2026-10-08): blind hunter (B), edge-case hunter (E), verification-gap (V). No intent gap, no bad spec.
+
+| # | Finding | Verdict | Route | Evidence |
+| --- | --- | --- | --- | --- |
+| B1, E8, E9, E19, V-other 4 | `redaction.json` says `clean: true` and the command exits 0 when cases, or all of them, were never checked | high | patch | `clean=not check.leaks`; a case with one unreadable page, or a run where no row answered, is only listed in `cases_not_checked`. A privacy check may not call clean what it did not read. |
+| B2, E11 | A run that scored no case names a winner and exits 0 | medium | patch | The winner rule is the spec's (a case that failed is wrong for every row, then recall decides) and stays; the exit status of a run with unscored or unchecked cases joins B1's patch so the operator is told. |
+| B3, E4, E5, E6, E7, V-other 1, V-other 2 | A failure that is no `WebError` in one case ends the whole run, is printed as "refused", and an uncaught error exits 1 like a leak | medium | patch | `CaseRunner.run` catches `WebError` only; `read_bytes`, the state write and `yaml.YAMLError` go through `gather` to `main`. |
+| B4 | A planted identifier left in another format (a phone number with other punctuation, half an address) is not found | maybe-false | defer | The check is the spec's: the normalised value, and parts of names. Whether real Azure AI Language masks partially is unknown; would be medium. To the owner and the Azure session. |
+| B5 | Name parts are split on white space only | low | reject | No hyphenated planted name is shown to exist; ordinary-word name parts are already recorded in `deferred-work.md`. |
+| B6 | The check reads stored page text only; the quote count of AD-17 is not built | low | reject | The frozen block names stored page text; the dropped quote count is already in `deferred-work.md` for the owner. |
+| B7, E2, E20 | A resumed run with other rows than its first start scores the new rows as wrong, unlisted | medium | patch | A case that has progress is not started again; nothing compares the rows. |
+| B8, E12 | The state file does not say which system it belongs to | low | patch | Resuming an id against another address makes every case `request_failed`; one field beside B7's. |
+| B9, E3 | A row's failed or missing verdict run is counted like a wrong verdict and listed nowhere | medium | defer | Real: `run_is_right` is false for both. The fix is one more count on the scoreboard model, which story 3.5 reads; carried into that story. |
+| B10 | The scoreboard has no per-case or per-fact results | low | reject | The spec lists the file's content: counts and the listed failures. |
+| B11 | `--deployed --cases case-001` replaces the published files with a partial run | medium | patch | Nothing ties the published folder to a whole run. Provenance by commit and the host name in the file are rejected: the spec asks for the address. |
+| B12 | `stand_ins: false` rests on the operator's word | low | reject | Known and recorded in `deferred-work.md`; `web` says nothing of its environment. |
+| B13 | `POST /api/searches` can be called by anyone | low | reject | The route is the spec's, underwriter role only; open access is the accepted risk of `security.md`. |
+| B14 | Effort figures and the cost unit in `static-metrics.yaml` are open | low | reject | Every cost is null and the effort measure is already in `deferred-work.md` for the owner to confirm. |
+| B15 | Sprint status beside spec status; `contracts` and `synthdata` over budget | false | reject | Sprint status moves at the end of the review; the overs predate the story and its counts did not grow. |
+| B16 | Tests call `Settings()` bare | low | reject | A developer's exported `EVALS_*` is not everyday use; the missing tests are V's findings. |
+| B17 | "In no image" is checked for `web` only | low | patch | One line in `.dockerignore` makes it hold for every image. |
+| E1 | A decision answered `not_awaiting_decision` is never sent again | low | patch | The pair stays in `answered`; the case then hangs to its deadline. One line. |
+| E10 | A row whose every search fails is still measured and started with | low | reject | The matrix says a failed search is a miss and listed. |
+| E13 | Two runner processes on one `eval_run_id` | low | reject | Not everyday use; a lock is more than a correction. |
+| E14 | `EVALS_TOP_K` above the search's maximum fails at the first search | low | patch | One bound on the setting. |
+| E15 | An empty `EVALS_ROWS` is read as every row | low | patch | One bound on the setting. |
+| E16 | Two answer-key files with one `case_id` | low | reject | The generator's own tests hold the keys unique. |
+| E17 | A case with no expected fact refuses the run | low | reject | No case of the set is so; the full local run went through. |
+| E18 | Transport errors that are no `httpx.HTTPError` | low | reject | The address is validated before any call. |
+| V1 | `request_failed` is exercised by no test | medium | patch | Filed evidence; a fourth case in the existing test. |
+| V2 | A case set with no rule-meeting fact (`answers`) is exercised by no test | medium | patch | Filed evidence; `case-003` and `case-020` reach it. |
+| V3 | No test makes a deployed run | medium | patch | Filed evidence; one more `main` call in an existing test. |
+| V4 | Sending a call again is observed by no assertion | medium | patch | Filed evidence; a search that fails once in the existing test. |
+| V5 | An unreadable page text leaving the case unchecked is not tested through `read_page_texts` | low | defer | Filed disposition; B1's patch changes what such a case does to the exit status and its test covers the report. |
+| V6 | Tolerating `not_awaiting_decision` is not tested | low | defer | Filed disposition. |
+| V-other 3 | `test_whole_path.py` failed once in six runs under a mutation | maybe-false | reject | Not reproduced unmutated; watched in the full verification runs. |
 
 ## Design Notes
 

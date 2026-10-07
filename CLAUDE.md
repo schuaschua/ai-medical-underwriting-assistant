@@ -19,5 +19,5 @@ Bring-up and tear-down steps are in `infra/bootstrap/README.md`. The resource gr
 - Prefer one test that runs a whole path over many tests of its parts. Use `parametrize` sparingly: a handful of cases, not a table of every input.
 - When a story adds tests, it stays inside the budget: remove or merge weaker tests of the same package if needed.
 - The coverage threshold in `pyproject.toml` (80%) still holds. If a cut would take coverage under it, keep the broad tests and cut the narrow ones.
-- Budget per package, to be kept roughly: `contracts` 60, `synthdata` 45, `intake` 50, `web` 45, `workflow` 110, `classification` 40, `extraction` 40, `retrieval` 55, `verdict` 55.
+- Budget per package, to be kept roughly: `contracts` 60, `synthdata` 45, `intake` 50, `web` 45, `workflow` 110, `classification` 40, `extraction` 40, `retrieval` 55, `verdict` 55, `evals` 15.
 - Reason (owner, 2026-10-08): 3,490 tests for a proof of concept is far too many; they slow every run and every change.

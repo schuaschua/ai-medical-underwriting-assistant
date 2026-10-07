@@ -295,6 +295,10 @@ def test_story_1_5_no_route_returns_an_original(settings: Settings) -> None:
         # Story 2.8: the agent's log, read only. Neither returns a file.
         ("GET", "/api/verdict-runs/{verdict_run_id}/steps"),
         ("GET", "/api/cases/{case_id}/agent-steps"),
+        # Story 3.4: the bake-off runner's eval search and its read of a
+        # page's text, which is the redacted page's (AD-21).
+        ("POST", "/api/searches"),
+        ("GET", "/api/pages/{page_id}/text"),
     }
 
 
