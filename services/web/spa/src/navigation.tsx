@@ -1,9 +1,10 @@
 // The screens that exist, per demo role. A story that adds a screen adds it
 // here; navigation and routing both read this one table.
-import type { ReactElement } from "react";
+import { lazy, type ReactElement } from "react";
 import type { DemoRole } from "./api/contracts.gen";
 import { AUDIT_PATH } from "./audit/auditPath";
 import { CASE_LIST_PATH } from "./cases/caseList";
+import { RESULT_PATH } from "./result/resultPath";
 import { AuditTrail } from "./screens/AuditTrail";
 import { CaseList } from "./screens/CaseList";
 import { CustomerHome } from "./screens/CustomerHome";
@@ -12,10 +13,21 @@ import { UnderwriterHome } from "./screens/UnderwriterHome";
 import { UploadDocument } from "./screens/UploadDocument";
 import { strings } from "./strings";
 
+// The result view draws PDFs, and the library for that is large: the screen
+// and the library are fetched when the screen is first opened, so no other
+// screen, the customer's included, loads them.
+const ResultView = lazy(() =>
+  import("./screens/ResultView").then((module) => ({
+    default: module.ResultView,
+  })),
+);
+
 export interface Screen {
   path: string;
   label: string;
   element: ReactElement;
+  /** Left out of the navigation: the screen is reached from a case, not by itself. */
+  unlisted?: true;
 }
 
 const HOME_PATHS = {
@@ -58,6 +70,14 @@ export const SCREENS: Record<DemoRole, readonly Screen[]> = {
       path: AUDIT_PATH,
       label: strings.navigation.audit,
       element: <AuditTrail />,
+    },
+    {
+      // AD-9: for the underwriter only. Reached from the case list and from
+      // a case's audit trail, which name the case in the address.
+      path: RESULT_PATH,
+      label: strings.result.heading,
+      element: <ResultView />,
+      unlisted: true,
     },
   ],
 };

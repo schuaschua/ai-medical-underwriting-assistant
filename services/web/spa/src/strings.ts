@@ -7,8 +7,12 @@ import type {
   PageStatus,
   PageType,
   QueuedBy,
+  ReasonEffect,
   RouteDetail,
   Service,
+  StageStatus,
+  SystemReason,
+  Verdict,
 } from "./api/contracts.gen";
 
 /** The largest upload, in MB, as the wording states it. The server enforces it. */
@@ -65,7 +69,7 @@ export const strings = {
     customerIntro: "Use “Upload a document” to send us a PDF.",
     underwriterHeading: "Underwriter home",
     underwriterIntro:
-      "Use “Triage queue” to accept or deny the pages that are waiting, “Cases” to find a case, and “Audit trail” to read what was done to it.",
+      "Use “Triage queue” to accept or deny the pages that are waiting, “Cases” to find a case and open its result, and “Audit trail” to read what was done to it.",
     checking: "Checking with the server…",
     confirmed: (role: string) => `The server sees you as: ${role}.`,
   },
@@ -200,7 +204,7 @@ export const strings = {
   cases: {
     heading: "Cases",
     intro:
-      "Every case that was started, newest first. Open a case's audit trail to read what was done to it.",
+      "Every case that was started, newest first. Open a case's result to read what the AI suggests for it, or its audit trail to read what was done to it.",
     reading: "Reading the cases…",
     empty: "No cases yet.",
     more: "More cases exist than are shown here. Only the newest are listed.",
@@ -217,6 +221,130 @@ export const strings = {
     trailColumn: "Audit trail",
     trail: "Audit trail",
     trailFor: (caseId: string) => `Audit trail of case ${caseId}`,
+    resultColumn: "Result",
+    result: "Result",
+    resultFor: (caseId: string) => `Result of case ${caseId}`,
+  },
+  // The underwriter's result view (story 2.7). Every verdict, loading,
+  // confidence and "found on the page" shown is the server's own; these are
+  // only the words for them.
+  result: {
+    heading: "Result",
+    intro:
+      "The redacted document beside what the AI suggests for it. Follow a citation to see a quote on its page, and a rule to read it in the manual.",
+    noCase: "Open a case's result from the list of cases.",
+    toCases: "Go to the cases",
+    notACaseId: "The address does not name a case.",
+    reading: "Reading the result…",
+    unknownCase: "No such case.",
+    resultOf: (caseId: string) => `Result of case ${caseId}`,
+    caseStatus: (status: string) => `Case status: ${status}.`,
+    following: "This screen reads again as the case moves.",
+    finished: "The case is finished, so this screen does not read again.",
+    // The case is final, but a part kept failing: the reading was given up.
+    gaveUp:
+      "Part of the result could not be read, and this screen has stopped trying. Choose “Check again” to read it again.",
+    caseFailed: (reason: string) => `The case failed. ${reason}`,
+    caseFailedNoReason: "The case failed. No reason was recorded.",
+    // A read failed after the result was shown: what is shown may be out of date.
+    stale:
+      "The result could not be read again. What is shown may be out of date.",
+    checkAgain: "Check again",
+    toTrail: "Audit trail of this case",
+    // One part of the screen could not be read; the other parts are shown.
+    partFault: (part: string) => `${part} could not be read.`,
+    documentHeading: "Redacted document",
+    documentReading: "Reading the document…",
+    documentNotReady: "The document is not ready yet.",
+    documentFault: "The document could not be shown.",
+    documentTryAgain: "Try to read the document again",
+    documentLoading: "Opening the document…",
+    pageCaption: (pageNumber: number, pageCount: number) =>
+      `Page ${pageNumber} of ${pageCount}`,
+    pageLoading: "Drawing the page…",
+    pageFault: "This page could not be drawn.",
+    pageNotDrawnYet: "This page is drawn when it comes into view.",
+    // Where a cited quote is: said in words, so the highlight is not the only sign.
+    citing: (pageNumber: number) =>
+      `Page ${pageNumber}: looking for the quote…`,
+    cited: (pageNumber: number) =>
+      `Page ${pageNumber}: the quote is highlighted.`,
+    citeFault: (pageNumber: number) =>
+      `Page ${pageNumber}: the highlight could not be shown.`,
+    pagesLabel: "Pages of the redacted document",
+    highlightOn: (pageNumber: number) =>
+      `Highlight of the quote on page ${pageNumber}`,
+    verdictHeading: "Suggested verdict",
+    noRun: "No suggestion yet.",
+    runsFaultPart: "The suggestion",
+    runRunning: "The suggestion is being made.",
+    runFailed: (reason: string) => `This run failed. ${reason}`,
+    runFailedNoReason: "This run failed. No reason was recorded.",
+    madeWith: (row: string) => `Made with retrieval row ${row}.`,
+    runPicker: "Suggestion on screen, by retrieval row",
+    runOption: (row: string, status: string) => `${row} (${status})`,
+    moreRuns: "This case has more runs than are listed here.",
+    runStatus: {
+      running: "running",
+      done: "done",
+      failed: "failed",
+    } satisfies Record<StageStatus, string>,
+    verdict: {
+      standard: "Standard rates",
+      decline: "Decline",
+      refer: "Refer to underwriter",
+    } satisfies Record<Exclude<Verdict, "loaded">, string>,
+    loaded: (loadingPct: number) => `Loaded premium, +${loadingPct} %`,
+    // A loaded verdict whose loading the answer does not carry.
+    loadedWithoutLoading: "Loaded premium",
+    confidence: (confidence: string) => `Confidence: ${confidence}`,
+    noConfidence: "The agent gave no confidence.",
+    systemReasonsHeading: "Why it is referred",
+    systemReason: {
+      no_matching_rule: "No rule of the manual matched the facts.",
+      conflicting_rules: "The rules that matched do not agree with each other.",
+      unverified_quote:
+        "A fact the suggestion rests on has a quote that was not found on its page.",
+      low_confidence: "The agent was not confident enough of its answer.",
+      step_limit:
+        "The agent reached the limit on its steps before it answered.",
+    } satisfies Record<SystemReason, string>,
+    reasonsHeading: "Reasons",
+    noReasons: "No reasons were given.",
+    rule: (ruleId: string) => `Rule ${ruleId}`,
+    openRule: (ruleId: string) => `Read rule ${ruleId} in the manual`,
+    effect: {
+      none: "No debit",
+      decline: "Decline",
+    } satisfies Record<Exclude<ReasonEffect, "debit">, string>,
+    debit: (debitPct: number) => `Debit +${debitPct} %`,
+    debitWithoutFigure: "Debit",
+    citedFacts: "Facts it cites:",
+    // The facts themselves could not be read: nothing is said about any one of them.
+    citedFactsUnread:
+      "The facts could not be read, so the facts this reason cites cannot be shown.",
+    factNotListed: (factId: string) =>
+      `A fact that is not in the list below (${factId}).`,
+    ruleHeading: (ruleId: string) => `Rule ${ruleId} in the manual`,
+    ruleReading: "Reading the rule…",
+    ruleNotInManual: "This rule is not in the manual.",
+    ruleImpairment: (impairment: string) => `Impairment: ${impairment}`,
+    ruleManualPage: (pageNumber: number) => `Manual page ${pageNumber}`,
+    ruleClose: "Close the rule",
+    factsHeading: "Facts",
+    factsFaultPart: "The facts",
+    pagesFaultPart: "The list of pages",
+    noFacts: "No facts yet.",
+    factsTable: "Facts, in page order",
+    factColumn: "Fact",
+    quoteColumn: "Quote",
+    citationColumn: "Citation",
+    cite: (pageNumber: number) => `Page ${pageNumber}`,
+    citeFor: (statement: string, pageNumber: number) =>
+      `Show the quote for “${statement}” on page ${pageNumber}`,
+    // An unverified fact: flagged, with its page stated and nothing to follow.
+    quoteNotFound: (pageNumber: number) =>
+      `Page ${pageNumber}: quote not found on the page`,
   },
   audit: {
     heading: "Audit trail",
@@ -348,7 +476,10 @@ export const strings = {
     } satisfies Record<ErrorCode, string>,
     linkFromTriage: "Audit trail",
     linkFromTriageFor: (caseId: string) => `Audit trail of case ${caseId}`,
+    linkToResult: "Result of this case",
   },
+  // A screen whose code is fetched when it is first opened.
+  screenLoading: "Opening the screen…",
   notFound: {
     heading: "Page not found",
     body: "This screen does not exist, or is not open to your role.",
@@ -365,6 +496,7 @@ export const strings = {
       role_not_allowed: "This action is not open to your role.",
       not_found: "That could not be found.",
       not_awaiting_decision: "This page is no longer waiting for that answer.",
+      not_redacted: "The document is not ready yet.",
       method_not_allowed: "That action is not available here.",
       file_too_large: TOO_LARGE,
       payload_too_large: TOO_LARGE,

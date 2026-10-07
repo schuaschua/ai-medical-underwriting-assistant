@@ -251,7 +251,7 @@ def test_story_1_5_logs_carry_no_file_name_and_no_content(
 
 # GET and HEAD of health share one function, which only the schema builder minds.
 @pytest.mark.filterwarnings("ignore:Duplicate Operation ID")
-def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
+def test_story_1_5_no_route_returns_an_original(settings: Settings) -> None:
     app = create_app(settings)
     paths = get_openapi(title="web", version="0", routes=app.routes)["paths"]
     api_routes = {
@@ -261,7 +261,8 @@ def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
         if is_api_path(path)
     }
 
-    # The whole API: nothing in it reads a document, let alone the original.
+    # The whole API: the one document it returns is the redacted PDF, and
+    # nothing in it reads an original.
     assert api_routes == {
         ("GET", "/api/health"),
         ("HEAD", "/api/health"),
@@ -282,6 +283,15 @@ def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
         # page; still nothing returns a document or anything of an original.
         ("GET", "/api/triage"),
         ("GET", "/api/pages/{page_id}/thumbnail"),
+        # Story 2.7: the underwriter's result view. The file is `intake`'s
+        # redacted PDF (AD-21): `intake` has no route for an original, and
+        # `web` calls no other for a file.
+        ("GET", "/api/cases/{case_id}/facts"),
+        ("GET", "/api/cases/{case_id}/verdict-runs"),
+        ("GET", "/api/rules/{rule_id}"),
+        ("GET", "/api/cases/{case_id}/pages"),
+        ("GET", "/api/pages/{page_id}/boxes"),
+        ("GET", "/api/documents/{document_id}/file"),
     }
 
 
@@ -296,7 +306,6 @@ def test_story_1_5_asking_for_the_original_is_404(
         f"/api/cases/{case_id}",
         f"/api/cases/{case_id}/original",
         f"/api/documents/{document_id}",
-        f"/api/documents/{document_id}/file",
         f"/api/documents/{document_id}/original",
         f"/api/originals/{case_id}/{document_id}.pdf",
     ):
@@ -304,6 +313,13 @@ def test_story_1_5_asking_for_the_original_is_404(
         assert response.status_code == 404, path
         assert error_of(response.json())[0] == "not_found"
         assert b"%PDF" not in response.content
+    # Since story 2.7 one route returns a file, the redacted PDF, and not to
+    # the customer who uploaded the original.
+    refused = client.get(
+        f"/api/documents/{document_id}/file", headers={"X-Demo-Role": "customer"}
+    )
+    assert refused.status_code == 403
+    assert b"%PDF" not in refused.content
     # And no such request was passed on to another service.
     assert len(sidecar.requests) == calls_for_the_upload
 

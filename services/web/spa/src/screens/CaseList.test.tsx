@@ -104,9 +104,9 @@ describe("1.13 the underwriter's list of cases", () => {
     expect(
       listed.map((cells) => [...cells.slice(0, 2), ...cells.slice(3)]),
     ).toEqual([
-      [NEWEST, "Running", "0", "0", "Audit trail"],
-      [WAITING, "Waiting for a decision", "6", "3", "Audit trail"],
-      [OLDEST, "Completed", "3", "0", "Audit trail"],
+      [NEWEST, "Running", "0", "0", "Result", "Audit trail"],
+      [WAITING, "Waiting for a decision", "6", "3", "Result", "Audit trail"],
+      [OLDEST, "Completed", "3", "0", "Result", "Audit trail"],
     ]);
     expect(
       screen.getAllByRole("columnheader").map((header) => header.textContent),
@@ -116,6 +116,7 @@ describe("1.13 the underwriter's list of cases", () => {
       "Started",
       "Pages",
       "Pages waiting for a person",
+      "Result",
       "Audit trail",
     ]);
     // Read as the underwriter, through the one client module.

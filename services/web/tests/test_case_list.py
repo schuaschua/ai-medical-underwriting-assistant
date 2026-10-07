@@ -143,9 +143,15 @@ def test_story_1_13_a_browser_cannot_say_who_started_the_case(
 # --- The case list -------------------------------------------------------------------
 
 
-def test_story_1_13_the_underwriter_reads_the_case_list_as_workflow_answers_it(
+def test_story_1_13_the_underwriter_reads_the_case_list_as_workflow_answers_it_and_the_customer_is_refused(
     client: TestClient, sidecar: FakeSidecar
 ) -> None:
+    refused = client.get("/api/cases", headers=CUSTOMER)
+
+    assert error_of(refused) == (403, "role_not_allowed")
+    # Refused by `web` itself: `workflow` is never asked.
+    assert sidecar.requests == []
+
     newest, older = new_id(), new_id()
     sidecar.listed = {
         "cases": [
@@ -169,13 +175,3 @@ def test_story_1_13_the_underwriter_reads_the_case_list_as_workflow_answers_it(
     assert call.headers["traceparent"] == TRACEPARENT
     assert "x-demo-role" not in call.headers
     assert response.headers["cache-control"] == "no-store"
-
-
-def test_story_1_13_the_customer_is_refused_the_case_list(
-    client: TestClient, sidecar: FakeSidecar
-) -> None:
-    response = client.get("/api/cases", headers=CUSTOMER)
-
-    assert error_of(response) == (403, "role_not_allowed")
-    # Refused by `web` itself: `workflow` is never asked.
-    assert sidecar.requests == []

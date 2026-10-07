@@ -16,7 +16,10 @@ from contracts.base import ContractModel
 from contracts.enums import PageStatus, Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
 from contracts.models.classification import ClassificationList
-from contracts.models.intake import CaseCreated
+from contracts.models.extraction import FactList
+from contracts.models.intake import CaseCreated, PageBoxes, PageBoxesQuery, PageList
+from contracts.models.retrieval import RuleText
+from contracts.models.verdict import VerdictRunList
 from contracts.models.workflow import (
     AuditTrail,
     CaseList,
@@ -71,8 +74,12 @@ _DECISION_REFUSALS = frozenset(
 # The queue is asked for with a status `web` itself names, so no refusal of
 # it is the user's: whatever `workflow` refuses is this service's fault.
 _NO_REFUSAL: frozenset[ErrorCode] = frozenset()
-# What `intake` may say about a page's thumbnail: it holds no such page.
-_UNKNOWN_PAGE = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
+# What an owner may say about a read of one of its resources (a page's
+# thumbnail, and the reads of the result view of story 2.7): the case, rule,
+# page or document is unknown to it, or the request is not valid. For the
+# document also that there is no redacted file yet (AD-21).
+_UNKNOWN_RESOURCE = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
+_NO_FILE = _UNKNOWN_RESOURCE | {ErrorCode.NOT_REDACTED}
 
 
 def sidecar_base_url(settings: Settings) -> str:
@@ -121,6 +128,7 @@ class ServiceClient:
         self._http = http
         self._upload_timeout = settings.upload_timeout_seconds
         self._lifecycle_timeout = settings.lifecycle_timeout_seconds
+        self._document_timeout = settings.document_timeout_seconds
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -290,16 +298,108 @@ class ServiceClient:
         self, page_id: str, *, traceparent: str | None
     ) -> bytes:
         """`GET /pages/{page_id}/thumbnail` on `intake`: the redacted page as a PNG."""
-        operation = get_operation("read_page_thumbnail")
+        return await self._read_file(
+            get_operation("read_page_thumbnail"),
+            {"page_id": page_id},
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+        )
+
+    async def list_facts(self, case_id: str, *, traceparent: str | None) -> FactList:
+        """`GET /cases/{case_id}/facts` on `extraction`: the case's facts, each with its quote."""
+        return await self._call(
+            get_operation("list_facts"),
+            {"case_id": case_id},
+            FactList,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+        )
+
+    async def list_verdict_runs(
+        self, case_id: str, *, traceparent: str | None
+    ) -> VerdictRunList:
+        """`GET /cases/{case_id}/verdict-runs` on `verdict`: the case's suggested verdicts."""
+        return await self._call(
+            get_operation("list_verdict_runs"),
+            {"case_id": case_id},
+            VerdictRunList,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+        )
+
+    async def read_rule(self, rule_id: str, *, traceparent: str | None) -> RuleText:
+        """`GET /rules/{rule_id}` on `retrieval`: the manual's text of one rule."""
+        return await self._call(
+            get_operation("read_rule"),
+            {"rule_id": rule_id},
+            RuleText,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+        )
+
+    async def list_pages(self, case_id: str, *, traceparent: str | None) -> PageList:
+        """`GET /cases/{case_id}/pages` on `intake`: empty until redaction is done."""
+        return await self._call(
+            get_operation("list_pages"),
+            {"case_id": case_id},
+            PageList,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+        )
+
+    async def read_page_boxes(
+        self, page_id: str, query: PageBoxesQuery, *, traceparent: str | None
+    ) -> PageBoxes:
+        """`GET /pages/{page_id}/boxes` on `intake`: the word boxes an offset range touches."""
+        return await self._call(
+            get_operation("read_page_boxes"),
+            {"page_id": page_id},
+            PageBoxes,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+            # Only the range that was asked for is sent on.
+            query={
+                name: str(value)
+                for name, value in query.model_dump(exclude_none=True).items()
+            },
+        )
+
+    async def read_document_file(
+        self, document_id: str, *, traceparent: str | None
+    ) -> bytes:
+        """`GET /documents/{document_id}/file` on `intake`: the redacted PDF (AD-21).
+
+        `intake` has no other file to answer with: the original is never served.
+        """
+        return await self._read_file(
+            get_operation("read_document_file"),
+            {"document_id": document_id},
+            passed_on=_NO_FILE,
+            traceparent=traceparent,
+            # A PDF of up to 10 MB through two sidecars: its own deadline.
+            deadline_seconds=self._document_timeout,
+        )
+
+    async def _read_file(
+        self,
+        operation: Operation,
+        path_parameters: dict[str, str],
+        *,
+        passed_on: frozenset[ErrorCode],
+        traceparent: str | None,
+        deadline_seconds: float | None = None,
+    ) -> bytes:
+        """One operation that answers with a file: its bytes, of the media type it names."""
         response = await self._send(
             operation,
-            {"page_id": page_id},
-            passed_on=_UNKNOWN_PAGE,
+            path_parameters,
+            passed_on=passed_on,
             traceparent=traceparent,
+            deadline_seconds=deadline_seconds,
         )
         media_type = response.headers.get("content-type", "").split(";")[0].strip()
         if media_type != operation.response_media_type or not response.content:
-            # Whatever this is, it is not handed to a browser as an image.
+            # Whatever this is, it is not handed to a browser as that file.
             raise self._invalid_body(operation, response)
         return response.content
 
@@ -337,15 +437,18 @@ class ServiceClient:
         traceparent: str | None,
         body: dict[str, object] | None = None,
         query: dict[str, str] | None = None,
+        deadline_seconds: float | None = None,
     ) -> httpx.Response:
         """One operation of another service: its successful answer, or the error to raise."""
+        deadline = deadline_seconds or self._lifecycle_timeout
         try:
             # One deadline for the whole call, shorter than the browser's:
             #   workflow's scheduler call 10 s  <  web 20 s
             #   (WEB_LIFECYCLE_TIMEOUT_SECONDS)  <  browser 30 s.
             # httpx's own timeout applies to each phase separately, so it
             # alone would not bound the call.
-            async with asyncio.timeout(self._lifecycle_timeout):
+            # The document file has a longer one of its own (see the settings).
+            async with asyncio.timeout(deadline):
                 response = await self._http.request(
                     operation.method.value,
                     # The parameters are ids the route has already checked.
@@ -355,7 +458,7 @@ class ServiceClient:
                     json=body,
                     params=query,
                     headers=trace_headers(traceparent),
-                    timeout=self._lifecycle_timeout,
+                    timeout=deadline,
                 )
         except (httpx.HTTPError, TimeoutError) as error:
             # security rule 31: the error's type; its message can hold an address.

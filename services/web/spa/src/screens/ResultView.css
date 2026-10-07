@@ -1,0 +1,81 @@
+/* The result view's layout (story 2.7): two panes side by side, and the boxes
+   of a quote over its page. No design system exists: everything else is the
+   browser's default styling, and the colours are the system's own. */
+
+.result-panes {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+/* Half the room each. The findings scroll by themselves, and so do the
+   document's pages (under their heading and the line that says where a
+   cited quote is), so the document stays beside the findings. */
+.result-document,
+.result-findings {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+
+.result-findings,
+.result-document-pages {
+  max-height: 85vh;
+  overflow: auto;
+}
+
+/* A narrow window: the document above, the findings under it. */
+@media (max-width: 60rem) {
+  .result-panes {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .result-document,
+  .result-findings {
+    flex-basis: auto;
+  }
+}
+
+/* The page as drawn: the boxes are placed against it. */
+.result-sheet {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid;
+}
+
+/* A page not drawn yet takes about a page's room, so that the pages after
+   it are not all in view at once. */
+.result-sheet-waiting {
+  min-height: 60rem;
+}
+
+.result-highlights {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* An outline as well as a colour: the highlight is not a colour alone. */
+.result-highlight {
+  position: absolute;
+  background: Mark;
+  outline: 2px solid;
+  opacity: 0.4;
+}
+
+/* The reasons, and the rule that was opened beside them. */
+.result-reasons {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.result-reasons > * {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+
+/* The manual's text keeps its own line breaks. */
+.result-rule-text {
+  white-space: pre-wrap;
+}

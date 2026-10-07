@@ -41,6 +41,7 @@ def test_story_1_3_every_response_carries_the_security_headers(
         "/",
         "/triage",
         "/assets/app.js",
+        "/assets/pdf.worker.min.mjs",
         "/api/health",
         "/api/me",
         "/api/nope",
@@ -63,3 +64,9 @@ def test_story_1_3_every_response_carries_the_security_headers(
         assert "unsafe" not in policy
         assert "http" not in policy
         assert "*" not in policy
+
+    # Story 2.7: the PDF renderer's worker is a script of this origin. With
+    # `nosniff` a browser runs it only when it is served as JavaScript.
+    worker = client.get("/assets/pdf.worker.min.mjs")
+    assert worker.status_code == 200
+    assert worker.headers["content-type"].split(";")[0] == "text/javascript"

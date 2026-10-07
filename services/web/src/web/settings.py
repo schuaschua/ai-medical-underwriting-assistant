@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # deadline above, and a reading not in hand by then is left out.
     triage_max_concurrent_reads: Annotated[int, Field(ge=1, le=64)] = 8
 
+    # Story 2.7: the read of the redacted PDF, a file of up to 10 MB, has a
+    # deadline of its own, longer than a JSON call's, and again each caller
+    # outlasts the one it calls:
+    #   web 60 s (this setting)  <  browser 90 s (DOCUMENT_TIMEOUT_MS in the
+    #   SPA's api/client.ts).
+    document_timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
+
     # Upload deadlines, shortest first, so each caller outlasts the one it calls:
     #   intake 90 s (INTAKE_UPLOAD_DEADLINE_SECONDS)  <  web 120 s (this setting)
     #   <  browser 150 s (UPLOAD_TIMEOUT_MS in the SPA's api/client.ts).

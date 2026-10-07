@@ -18,6 +18,13 @@ export type Polled<T> =
    */
   | { kind: "unreadable"; error: unknown };
 
+/**
+ * What an answer means for the reading: more may come, at the usual pace
+ * (`following`); part of it failed, so the next read waits longer
+ * (`failing`); or nothing more will come (`settled`).
+ */
+export type Judgement = "following" | "failing" | "settled";
+
 function isHidden(): boolean {
   return document.visibilityState === "hidden";
 }
@@ -27,11 +34,15 @@ function isHidden(): boolean {
  * visible, further apart while reads fail, and again on request. Reading
  * stops once the server refuses the read itself (a 4xx other than 429): no
  * repeat mends that, so its message is shown and only a request reads
- * again. `read` must be the same function on every render.
+ * again. `judge` may say of an answer that nothing more will come, which
+ * stops the reading too, or that part of it failed, which counts as a failed
+ * read for the wait before the next one. `read` and `judge` must be the same
+ * functions on every render.
  */
 export function usePolled<T>(
   read: () => Promise<T>,
   everyMs: number,
+  judge?: (value: T) => Judgement,
 ): {
   state: Polled<T>;
   /** Read again now: something was changed, or the user asked. */
@@ -65,8 +76,16 @@ export function usePolled<T>(
       read()
         .then(
           (value) => {
-            failures.current = 0;
-            notBefore.current = 0;
+            const judgement = judge?.(value) ?? "following";
+            if (judgement === "failing") {
+              failures.current += 1;
+              notBefore.current = Date.now() + backoffMs(failures.current);
+            } else {
+              failures.current = 0;
+              notBefore.current = 0;
+            }
+            // The value will not change again: only a request reads again.
+            settled.current = judgement === "settled";
             if (mounted.current) {
               setState((shown) => ({
                 kind: "read",
@@ -107,7 +126,7 @@ export function usePolled<T>(
           }
         });
     },
-    [read],
+    [read, judge],
   );
 
   useEffect(() => {

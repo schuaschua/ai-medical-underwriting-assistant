@@ -14,17 +14,22 @@ import type {
   DecisionRecorded,
   ErrorBody,
   ErrorCode,
+  FactList,
   Me,
+  PageBoxes,
   PageDecisionRequest,
+  PageList,
+  RuleText,
   TriageQueue,
   UploadedCase,
+  VerdictRunList,
 } from "./contracts.gen";
 
 export const ROLE_HEADER = "X-Demo-Role";
 /** Sent with an upload, and again with its retry, so the retry makes no second case. */
 export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 const API_ROOT = "/api";
-/** The media type of an upload: the body is the PDF itself. */
+/** The media type of an upload, and of the redacted document: the body is the PDF itself. */
 const PDF = "application/pdf";
 /** The media type of a page's thumbnail. */
 const PNG = "image/png";
@@ -64,6 +69,10 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 //   (WEB_UPLOAD_TIMEOUT_SECONDS)  <  browser 150 s (this constant).
 // The browser waits longest, so it shows the server's answer, not its own timeout.
 export const UPLOAD_TIMEOUT_MS = 150_000;
+// The redacted PDF is a file of up to 10 MB: its read has a deadline of its
+// own, and again the browser waits longer than the server it asks:
+//   web 60 s (WEB_DOCUMENT_TIMEOUT_SECONDS)  <  browser 90 s (this constant).
+export const DOCUMENT_TIMEOUT_MS = 90_000;
 
 interface RequestOptions {
   /** Sent as the JSON body. */
@@ -98,7 +107,7 @@ async function exchange(
   method: "GET" | "POST",
   path: string,
   options: RequestOptions,
-  accept: "application/json" | typeof PNG,
+  accept: "application/json" | typeof PNG | typeof PDF,
 ): Promise<{ response: Response; payload: unknown }> {
   const headers = new Headers({ Accept: accept });
   // Read at call time, so a call made after a role switch carries the new role.
@@ -136,7 +145,7 @@ async function exchange(
     response = await fetch(`${API_ROOT}${path}`, init);
     // Read inside the time limit too: a body can stall after the headers.
     payload =
-      response.ok && accept === PNG
+      response.ok && accept !== "application/json"
         ? await response.blob()
         : await response.json().catch(() => null);
   } catch {
@@ -367,6 +376,32 @@ export async function decidePage(
   return recorded as DecisionRecorded;
 }
 
+/**
+ * One file from this server, read here with the role header every call
+ * carries: an element of the page could send none (AD-9). The answer must
+ * be of the media type asked for, and hold something.
+ */
+async function file(
+  path: string,
+  mediaType: typeof PNG | typeof PDF,
+  timeoutMs?: number,
+) {
+  const { response, payload } = await exchange(
+    "GET",
+    path,
+    timeoutMs === undefined ? {} : { timeoutMs },
+    mediaType,
+  );
+  const content = payload as Blob;
+  if (
+    response.headers.get("Content-Type")?.split(";")[0]?.trim() !== mediaType ||
+    content.size === 0
+  ) {
+    throw new ApiError(200, null, "The answer was not that file.", null);
+  }
+  return content;
+}
+
 /** A page's thumbnail on this server: `/api/pages/<page id>/thumbnail`, and nothing after it. */
 const THUMBNAIL_ADDRESS =
   /^\/api\/pages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/thumbnail$/;
@@ -426,20 +461,7 @@ export async function getThumbnail(address: string): Promise<Blob> {
     // Only this server's own thumbnails are read, whatever an answer names.
     throw new ApiError(200, null, "The address was not a thumbnail's.", null);
   }
-  const { response, payload } = await exchange(
-    "GET",
-    address.slice(API_ROOT.length),
-    {},
-    PNG,
-  );
-  const picture = payload as Blob;
-  if (
-    response.headers.get("Content-Type")?.split(";")[0]?.trim() !== PNG ||
-    picture.size === 0
-  ) {
-    throw new ApiError(200, null, "The answer was not a picture.", null);
-  }
-  return picture;
+  return file(address.slice(API_ROOT.length), PNG);
 }
 
 /** Whether a value is a whole number that is not negative, as a count is. */
@@ -520,4 +542,245 @@ export async function getAuditTrail(caseId: string): Promise<AuditTrail> {
     throw new ApiError(200, null, "The answer was not an audit trail.", null);
   }
   return trail as AuditTrail;
+}
+
+// --- The result view (story 2.7) ---------------------------------------------
+//
+// Each answer is checked for what the screen shows from it, so that an
+// answer of another shape is a fault of that part and never a broken page.
+// Nothing here works anything out of an answer: no verdict, no loading, no
+// verification of a quote.
+
+/** An id as the contracts spell it. It goes into an address, so it is this or nothing. */
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A rule's id as the manual prints it (AD-12). */
+const RULE_ID = /^UW-[A-Z]{2,4}-[0-9]{3}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Whether a value is a page number: a whole number from 1. */
+function isPageNumber(value: unknown): value is number {
+  return isCount(value) && value >= 1;
+}
+
+/** Whether a value is a number a length or a percentage can be. */
+function isAmount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/** Whether a value has what a fact is shown with. The offsets are there when, and only when, the server says the quote was found. */
+function isFact(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    isText(value.fact_id) &&
+    isText(value.page_id) &&
+    ID.test(value.page_id) &&
+    isPageNumber(value.page_number) &&
+    typeof value.statement === "string" &&
+    typeof value.quote === "string" &&
+    (value.quote_verified === true
+      ? isCount(value.quote_start) && isCount(value.quote_end)
+      : value.quote_verified === false &&
+        value.quote_start === null &&
+        value.quote_end === null)
+  );
+}
+
+/** Read a case's facts, in the order the server lists them. Only the underwriter role may. */
+export async function getFacts(caseId: string): Promise<FactList> {
+  const listed = await request<unknown>("GET", casePath(caseId, "facts"));
+  if (
+    !isRecord(listed) ||
+    listed.case_id !== caseId ||
+    !Array.isArray(listed.facts) ||
+    !listed.facts.every(isFact)
+  ) {
+    throw new ApiError(200, null, "The answer was not facts.", null);
+  }
+  return listed as unknown as FactList;
+}
+
+/** Whether a value has what a reason is shown with: its rule, its facts and its effect. */
+function isReason(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    isText(value.rule_id) &&
+    RULE_ID.test(value.rule_id) &&
+    Array.isArray(value.fact_ids) &&
+    value.fact_ids.length > 0 &&
+    value.fact_ids.every(isText) &&
+    isText(value.effect) &&
+    (value.debit_pct === null || isAmount(value.debit_pct))
+  );
+}
+
+/** Whether a value has what a verdict run is shown with, the label included (AD-10). */
+function isVerdictRun(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    isText(value.verdict_run_id) &&
+    isText(value.retriever_config) &&
+    isText(value.status) &&
+    isText(value.label) &&
+    (value.verdict === null || isText(value.verdict)) &&
+    (value.loading_pct === null || isAmount(value.loading_pct)) &&
+    (value.confidence === null || isUnitNumber(value.confidence)) &&
+    Array.isArray(value.reasons) &&
+    value.reasons.every(isReason) &&
+    Array.isArray(value.system_reasons) &&
+    value.system_reasons.every(isText) &&
+    (value.error_code === null || isText(value.error_code))
+  );
+}
+
+/**
+ * Read a case's verdict runs, oldest first as the server lists them, each a
+ * suggestion with its label. Only the underwriter role may.
+ */
+export async function getVerdictRuns(caseId: string): Promise<VerdictRunList> {
+  const listed = await request<unknown>(
+    "GET",
+    casePath(caseId, "verdict-runs"),
+  );
+  if (
+    !isRecord(listed) ||
+    listed.case_id !== caseId ||
+    !Array.isArray(listed.verdict_runs) ||
+    !listed.verdict_runs.every(isVerdictRun) ||
+    typeof listed.has_more !== "boolean"
+  ) {
+    throw new ApiError(200, null, "The answer was not verdict runs.", null);
+  }
+  return listed as unknown as VerdictRunList;
+}
+
+/** Read the manual's text of one rule. 404 `not_found` if the manual has no such rule. */
+export async function getRule(ruleId: string): Promise<RuleText> {
+  if (!RULE_ID.test(ruleId)) {
+    throw new ApiError(200, null, "That was not a rule's id.", null);
+  }
+  const rule = await request<unknown>(
+    "GET",
+    `/rules/${encodeURIComponent(ruleId)}`,
+  );
+  if (
+    !isRecord(rule) ||
+    rule.rule_id !== ruleId ||
+    typeof rule.text !== "string" ||
+    !isPageNumber(rule.manual_page) ||
+    !isText(rule.impairment)
+  ) {
+    throw new ApiError(200, null, "The answer was not a rule.", null);
+  }
+  return rule as unknown as RuleText;
+}
+
+function isPage(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isText(value.page_id) &&
+    isText(value.document_id) &&
+    ID.test(value.document_id) &&
+    isPageNumber(value.page_number)
+  );
+}
+
+/**
+ * Read a case's pages: which document they belong to, and each one's
+ * number. The list is empty until the document is redacted.
+ */
+export async function getPages(caseId: string): Promise<PageList> {
+  const listed = await request<unknown>("GET", casePath(caseId, "pages"));
+  if (
+    !isRecord(listed) ||
+    listed.case_id !== caseId ||
+    !Array.isArray(listed.pages) ||
+    !listed.pages.every(isPage)
+  ) {
+    throw new ApiError(200, null, "The answer was not pages.", null);
+  }
+  return listed as unknown as PageList;
+}
+
+// A box may end a hair beyond its page by rounding; further out is a fault.
+const PAGE_EDGE_SLACK_POINTS = 1;
+
+/**
+ * Whether a value is the box of a word on a page of that size: whole-number
+ * offsets into the page text, and four lengths, from a top-left to a
+ * bottom-right corner, that lie on the page.
+ */
+function isBoxOn(width: number, height: number): (value: unknown) => boolean {
+  return (value) =>
+    isRecord(value) &&
+    isCount(value.char_start) &&
+    isCount(value.char_end) &&
+    value.char_start < value.char_end &&
+    isAmount(value.x0) &&
+    isAmount(value.y0) &&
+    isAmount(value.x1) &&
+    isAmount(value.y1) &&
+    value.x0 <= value.x1 &&
+    value.y0 <= value.y1 &&
+    value.x1 <= width + PAGE_EDGE_SLACK_POINTS &&
+    value.y1 <= height + PAGE_EDGE_SLACK_POINTS;
+}
+
+/**
+ * Read where the words of an offset range sit on a page (AD-14). The
+ * offsets are a fact's own, handed back as the server gave them: the
+ * browser never looks for a quote in any text itself. The answer must be
+ * about that page, under the page number the fact names, with every box on
+ * the page: boxes of another page, or beside the page, are never drawn.
+ */
+export async function getPageBoxes(
+  pageId: string,
+  pageNumber: number,
+  quoteStart: number,
+  quoteEnd: number,
+): Promise<PageBoxes> {
+  if (!ID.test(pageId)) {
+    throw new ApiError(200, null, "That was not a page's id.", null);
+  }
+  const range = new URLSearchParams({
+    quote_start: String(quoteStart),
+    quote_end: String(quoteEnd),
+  });
+  const answered = await request<unknown>(
+    "GET",
+    `/pages/${pageId}/boxes?${range.toString()}`,
+  );
+  if (
+    !isRecord(answered) ||
+    answered.page_id !== pageId ||
+    answered.page_number !== pageNumber ||
+    !isAmount(answered.page_width) ||
+    !isAmount(answered.page_height) ||
+    answered.page_width === 0 ||
+    answered.page_height === 0 ||
+    !Array.isArray(answered.boxes) ||
+    !answered.boxes.every(isBoxOn(answered.page_width, answered.page_height))
+  ) {
+    throw new ApiError(200, null, "The answer was not word boxes.", null);
+  }
+  return answered as unknown as PageBoxes;
+}
+
+/**
+ * Read a document's file: the redacted PDF, the only file of a document
+ * the server has a route for (AD-21). 409 `not_redacted` until there is one.
+ */
+export async function getDocumentFile(documentId: string): Promise<Blob> {
+  if (!ID.test(documentId)) {
+    throw new ApiError(200, null, "That was not a document's id.", null);
+  }
+  return file(`/documents/${documentId}/file`, PDF, DOCUMENT_TIMEOUT_MS);
 }

@@ -27,6 +27,8 @@ def spa_dir(tmp_path: Path) -> Path:
     (root / "assets").mkdir(parents=True)
     (root / "index.html").write_text(INDEX_HTML, encoding="utf-8")
     (root / "assets" / "app.js").write_text("export {};\n", encoding="utf-8")
+    # Story 2.7: the PDF renderer's worker is built as a module file of its own.
+    (root / "assets" / "pdf.worker.min.mjs").write_text("export {};\n", "utf-8")
     # A file beside the SPA folder that must never be served.
     (tmp_path / "outside.txt").write_text("outside", encoding="utf-8")
     return root

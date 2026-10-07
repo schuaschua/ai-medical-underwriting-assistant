@@ -1,10 +1,11 @@
 import { useId, useState, type FormEvent } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { CASE_PARAMETER, parseCaseId } from "../audit/auditPath";
 import { useAuditTrail } from "../audit/auditTrail";
 import { isFinalStatus } from "../cases/caseProgress";
 import { AuditEventRow } from "../components/AuditEventRow";
 import { ErrorMessage } from "../components/ErrorMessage";
+import { resultPath } from "../result/resultPath";
 import { strings } from "../strings";
 
 /** The trail of one case, as the server answers it and in its order (AD-8, AD-19). */
@@ -53,6 +54,9 @@ function Trail({ caseId }: { caseId: string }) {
           : trail.has_more
             ? strings.audit.firstOnly
             : strings.audit.following}
+      </p>
+      <p>
+        <Link to={resultPath(caseId)}>{strings.audit.linkToResult}</Link>
       </p>
       {state.staleError !== null && (
         <div>

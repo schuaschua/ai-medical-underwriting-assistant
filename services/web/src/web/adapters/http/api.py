@@ -1,4 +1,4 @@
-"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions and triage.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage and the result view's reads.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
 to `intake`, asks `workflow` to start the case, reads progress, the audit
@@ -12,19 +12,29 @@ A route is added to `role_checked`, never to `router` itself, so that it
 cannot be reached without a valid `X-Demo-Role` (spine AD-9). A route for one
 role only adds `Depends(role_for(RouteGroup.<role>))` of its own.
 
-No route here returns a document file; the uploaded original is never served
-by any service (AD-21). The one image served is a page's thumbnail, which
-`intake` makes from the redacted PDF.
+The underwriter's result view (story 2.7) is read through six pass-through
+routes, each one operation of the service that owns the data: the facts
+(`extraction`), the verdict runs (`verdict`), a rule's text (`retrieval`),
+and the page list, a page's word boxes and the document file (`intake`).
+
+The uploaded original is never served by any service (AD-21). The one
+document file served is the redacted PDF, and the one image a page's
+thumbnail, which `intake` makes from that PDF.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Path, Request, Response
+from fastapi import APIRouter, Body, Depends, Path, Query, Request, Response
+from pydantic import ValidationError
 
 from contracts.enums import DemoRole
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
 from contracts.models.classification import ClassificationList
+from contracts.models.extraction import FactList
+from contracts.models.intake import PageBoxes, PageBoxesQuery, PageList
+from contracts.models.retrieval import RuleText
+from contracts.models.verdict import VerdictRunList
 from contracts.models.web import (
     Health,
     Me,
@@ -43,9 +53,10 @@ from contracts.models.workflow import (
     StartCaseRequest,
 )
 from contracts.operations import get_operation
+from contracts.rules import RULE_ID_PATTERN
 from contracts.upload import IDEMPOTENCY_KEY_HEADER, parse_idempotency_key
 from web.adapters.dapr import ServiceClient
-from web.adapters.http.errors import API_PREFIX
+from web.adapters.http.errors import API_PREFIX, INVALID_REQUEST_MESSAGE
 from web.adapters.http.roles import role_for
 from web.adapters.http.triage import TriageReader
 from web.adapters.http.upload import checked_pdf, declared_length
@@ -68,6 +79,10 @@ START_OPTIONS_MESSAGE = "Start options are not open to your role."
 # An id that is not a UUIDv7 is refused with 422 before any service is called.
 CaseIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 PageIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
+DocumentIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
+# A rule is named as the manual prints it (AD-12), or the call is not made.
+RuleIdPath = Annotated[str, Path(pattern=rf"^{RULE_ID_PATTERN}$")]
+OffsetQuery = Annotated[int | None, Query(ge=0)]
 
 
 def _services(request: Request) -> ServiceClient:
@@ -221,6 +236,100 @@ async def read_page_thumbnail(page_id: PageIdPath, request: Request) -> Response
     )
     return Response(
         content, media_type=get_operation("read_page_thumbnail").response_media_type
+    )
+
+
+# --- The underwriter's result view (story 2.7) ---------------------------------------
+#
+# Six reads, for the underwriter only (AD-9), each the same resource path as
+# on the service that owns it. `web` passes the answer on as it is and works
+# nothing out of it (AD-2): no verdict, loading or verification is its own.
+
+
+@role_checked.get(get_operation("list_facts").path)
+async def list_facts(
+    case_id: CaseIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> FactList:
+    return await _services(request).list_facts(
+        case_id, traceparent=request.headers.get("traceparent")
+    )
+
+
+# Every run carries the label "AI suggestion, not a decision" (AD-10); the
+# screen shows it from this payload.
+@role_checked.get(get_operation("list_verdict_runs").path)
+async def list_verdict_runs(
+    case_id: CaseIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> VerdictRunList:
+    return await _services(request).list_verdict_runs(
+        case_id, traceparent=request.headers.get("traceparent")
+    )
+
+
+# The manual's text of one rule, as the one-rule chunk holds it.
+@role_checked.get(get_operation("read_rule").path)
+async def read_rule(
+    rule_id: RuleIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> RuleText:
+    return await _services(request).read_rule(
+        rule_id, traceparent=request.headers.get("traceparent")
+    )
+
+
+# Which document a case has and the number of each page; empty until
+# redaction is done.
+@role_checked.get(get_operation("list_pages").path)
+async def list_pages(
+    case_id: CaseIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> PageList:
+    return await _services(request).list_pages(
+        case_id, traceparent=request.headers.get("traceparent")
+    )
+
+
+# AD-14: where the words of an offset range sit on a page, for the highlight
+# of a fact's quote. The offsets are the fact's own; `intake` finds the words.
+@role_checked.get(get_operation("read_page_boxes").path)
+async def read_page_boxes(
+    page_id: PageIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+    quote_start: OffsetQuery = None,
+    quote_end: OffsetQuery = None,
+) -> PageBoxes:
+    try:
+        query = PageBoxesQuery(quote_start=quote_start, quote_end=quote_end)
+    except ValidationError:
+        # Half a range, or one that runs backwards: `intake` is not asked.
+        raise DomainError(
+            ErrorCode.VALIDATION_FAILED, INVALID_REQUEST_MESSAGE
+        ) from None
+    return await _services(request).read_page_boxes(
+        page_id, query, traceparent=request.headers.get("traceparent")
+    )
+
+
+# AD-21: the redacted PDF, the only document file any route returns. `intake`
+# answers `not_redacted` until there is one, and holds no route for an original.
+@role_checked.get(get_operation("read_document_file").path)
+async def read_document_file(
+    document_id: DocumentIdPath,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> Response:
+    content = await _services(request).read_document_file(
+        document_id, traceparent=request.headers.get("traceparent")
+    )
+    return Response(
+        content, media_type=get_operation("read_document_file").response_media_type
     )
 
 

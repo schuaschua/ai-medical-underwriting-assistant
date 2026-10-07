@@ -185,8 +185,8 @@ page numbers, verification and offsets are set by code. A page with nothing medi
 with no facts. A single proposal that cannot be a fact (no quote, another field) is left out and
 counted in the log; an answer that is not the shape asked for, or that was cut off at the token
 limit (`reason=answer_cut_off` in the log), fails the page with `invalid_model_output`.
-`GET /cases/<case_id>/facts` on the service lists the stored facts in page order; no screen shows
-them yet.
+`GET /cases/<case_id>/facts` on the service lists the stored facts in page order; the underwriter's
+result view shows them (story 2.7, below).
 
 `workflow` records each result: a done one moves the page to `extracted` with a `facts.extracted`
 event naming the service and the model deployment, a failed one fails the page and the case with
@@ -336,6 +336,67 @@ upload `data/cases/case-001.pdf` as the customer, switch to the underwriter, den
 triage queue, then open "Cases" and follow "Audit trail" on the case's row: the trail starts with
 "Case started" by the customer and ends with "Case completed".
 
+**The result view (story 2.7).** The underwriter reads a case's suggested verdict beside its
+document at `/underwriter/result?case=<case_id>`, reached from "Result" on a row of the "Cases"
+screen and from "Result of this case" on a case's audit trail (the customer has no such screen). On
+the left is the redacted PDF; on the right the verdict, then the reasons, then the facts in the
+order `extraction` lists them (page order). Wherever a verdict is shown, so is the label "AI
+suggestion, not a decision", taken from the run's payload, and the screen has no control that
+decides, approves or overrides anything. A loaded verdict reads, for example, "Loaded premium,
++50 %"; a referral reads "Refer to underwriter" with each system reason in plain words; the
+confidence is shown as a percentage. A reason shows its rule, its effect and debit, and the facts it
+cites; a fact shows its statement, its quote and its page.
+
+`web` gains six read routes for it, for the underwriter only (the customer role is refused with
+`role_not_allowed`, and no service is asked). Each passes one operation of the owning service on,
+under the same path, and adds no rule:
+
+| `web` route | Owner |
+|---|---|
+| `GET /api/cases/<case_id>/facts` | `extraction` |
+| `GET /api/cases/<case_id>/verdict-runs` | `verdict` |
+| `GET /api/rules/<rule_id>` | `retrieval` (the rule's one-rule chunk) |
+| `GET /api/cases/<case_id>/pages` | `intake` |
+| `GET /api/pages/<page_id>/boxes?quote_start=&quote_end=` | `intake` |
+| `GET /api/documents/<document_id>/file` | `intake` (the redacted PDF, `application/pdf`) |
+
+A refusal of the caller's own request is passed on (404 `not_found`, 422 `validation_failed`, and
+409 `not_redacted` for a document that has no redacted file yet); anything else, an answer that is
+not the contract's shape, or a file that is not a PDF or is empty, is 502 `upstream_unavailable`.
+The file is the only document any route returns, and it is the redacted one: `intake` has no route
+for an original.
+
+Following the citation of a fact whose quote was found ("Page 3") scrolls the document to that page
+and highlights the quote. The highlight is drawn from the word boxes `intake` returns for the
+fact's own `quote_start` and `quote_end`, each placed as a share of the page's width and height, so
+it sits on its words at any drawn size; the browser never looks for the quote in any text, and the
+PDF's text layer is not drawn at all. The page is also named in words above the document ("Page 3:
+the quote is highlighted."), and if the boxes cannot be read the page is still shown with a note. A
+fact whose quote was not found reads "Page 3: quote not found on the page" and has no citation
+control. Choosing a reason's rule ("Rule UW-DM-002") opens the manual's text of it, with its
+impairment and manual page, beside the reasons; a rule the manual does not hold reads "This rule is
+not in the manual." The rule text, statements and quotes are rendered as text, never as HTML.
+
+A case with several runs (one per retriever configuration) names the row of the run on screen and
+has a picker for the others. A case with no run yet reads "No suggestion yet." and shows the
+document and the facts so far; a failed run, and a failed case, say so with the reason in plain
+words. While the document is not redacted the screen reads "The document is not ready yet."; a case
+that was never started reads "No such case." The screen reads the case's status, pages, facts and
+runs again every 3 s while the tab is visible, and stops once the case is final (and no listed run
+is still running); "Check again" reads at once. An answer that is not the contract's shape is a
+fault of that part only ("The facts could not be read."), and the other parts are still shown.
+
+The PDF is drawn by `react-pdf` 11.0.0 (`pdf.js`). The file is read by the API client, with the
+role header every call carries, and handed to the renderer as bytes; pages are drawn as they come
+into view, 720 CSS pixels wide. The renderer's worker is built as a file of its own
+(`dist/assets/pdf.worker.min-<hash>.mjs`) and served by `web` like every other script, so the
+content security policy is unchanged: scripts and workers from this origin only, no inline script,
+no `blob:` and no WebAssembly (`useWasm` is off). To see it locally, run `./tools/dev.sh`, upload
+`data/cases/case-001.pdf` as the customer, switch to the underwriter, open "Cases" and follow
+"Result" on the case's row. The tests stand in for the renderer (jsdom has no canvas and no
+worker), so that the real PDF draws under the policy, and that a highlight sits on its words, still
+needs a look in a real browser (`_bmad-output/implementation-artifacts/deferred-work.md`).
+
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
 the service's REST job routes, reads the original from the blob emulator and writes the redacted PDF
@@ -424,6 +485,33 @@ hold ids, counts and timings, never text of the manual. Nothing in `retrieval` r
 the job learns the rules from the manual alone, and only a test outside `services/` compares its
 chunks with the rule table.
 
+**The `fixed` chunk set, the baseline (story 3.2).** The same job also writes a second chunk set
+from the same parsed manual, for row `r1` of the retrieval ladder: the manual's body text in reading
+order, page furniture left out, in runs of 350 words of which 35 are shared with the run before
+(`RETRIEVAL_FIXED_CHUNK_WORDS`, `RETRIEVAL_FIXED_CHUNK_OVERLAP_WORDS`; words, not model tokens, since
+the baseline only has to be fixed and stated). The project's manual gives 150 such chunks. A `fixed`
+chunk has no context line and costs no chat call: what is embedded is its own text, with the same
+embedding deployment. Its `chunk_id` is the set and its position (`fixed-0001`, `fixed-0002`, ...).
+Its `rule_ids` are the rules whose definition marker (`Rule <rule_id>:`) lies inside its text, which
+may be none, one or several, and a rule in an overlap is in two chunks; rules it only mentions are
+its `reference_rule_ids`. Its section, impairment and page are those of where it starts; a chunk
+that starts before the first numbered section stands under "Front matter". A definition is not kept
+whole: one that a cut falls in is in two chunks, part in each. That is what the baseline is there to
+show.
+
+Which sets the job writes is `RETRIEVAL_INGEST_CHUNK_SETS` (default `["smart", "fixed"]`). The
+manual is read and parsed once; each set is then a run of its own, with its own checks, removal
+guard, transaction and row in `retrieval.ingest_run`, and its own last log line (`chunk_set=smart`,
+`chunk_set=fixed`). A set whose run fails is left as it was and the other is written all the same;
+the job then ends with status 1. For the `fixed` set the run record holds a digest of the size and
+the overlap where the `smart` set's holds the prompt's digest, and no chat deployment: a changed
+size or overlap cuts the set again on the next run (that run is not held to the removal guard, as
+the number of chunks is meant to change), and leaves the `smart` set untouched. The `fixed` cut
+checks itself as well: the same page and heading checks, a rule defined twice, page furniture
+inside a chunk, a rule that is referred to and defined nowhere, and a rule whose marker ended up in
+no chunk (`definition_in_no_chunk`: a cut fell inside a marker and the overlap is too small to keep
+it).
+
 Locally Document Intelligence is a stand-in, `uv run python -m synthdata.layout_standin` (port 5102):
 it reads the PDF it is sent with PyMuPDF and answers in the shape of the service's layout result
 (pages, lines, words, and paragraphs with a page and a role). It is not a layout model; start it with
@@ -445,8 +533,9 @@ curl -s http://localhost:8004/rules/UW-DM-003
 `POST /searches` is the one search operation for every row of the retrieval ladder: a query, a
 `retriever_config` and `top_k` (default 5, at most 50) in; `retriever_config`, `latency_ms` (the time
 `retrieval` spent, the embedding call included) and ranked items out, each with `chunk_id`, `rule_ids`,
-`rank`, `score`, `text`, `manual_page` and `impairment`. Only row `r3` is built. Its steps, each a
-function of its own in `services/retrieval/src/retrieval/`:
+`rank`, `score`, `text`, `manual_page` and `impairment`. Rows `r1`, `r2` and `r3` are built (the
+two baselines are below). The steps of `r3`, each a function of its own in
+`services/retrieval/src/retrieval/`:
 
 1. The query is embedded once, exactly as it was asked, through the model gateway on the one embedding
    deployment, the same the chunks were embedded with (`domain/search.py`, `embed_query`).
@@ -468,8 +557,39 @@ function of its own in `services/retrieval/src/retrieval/`:
    their `chunk_id`, on each side and in the fusion, so the same query on the same index always gives
    the same answer.
 
-There is no reranker, no query rewriting by a model and no cache. The other rows are named in one
-table (`domain/rows.py`) and refused with `retriever_not_available` (409) until Epic 3 builds them; a
+**The baseline rows `r1` and `r2` (story 3.2).** Both go through the same operation and answer the
+same shape; only the row differs. `r1` is exact cosine nearest-neighbour over the `fixed` chunks,
+`r2` the same over the `smart` chunks (`domain/search.py`, `vector_search`): steps 1 and 2 above and
+nothing else, so no full-text search and no fusion. A query that matches a chunk only by a rare word
+gets no help from that word, which is what `r3` adds. Their `score` is the cosine similarity moved
+onto 0 to 1 (`(1 + cos) / 2`: 1 for the same direction, 0.5 for nothing in common), larger is
+better, and chunks equally near come in the order of their `chunk_id`. A `fixed` chunk's `rule_ids`
+may name several rules or none. Both rows keep the search's short budget, the check of the embedding
+deployment against the set's own run record, and the read-only view of the index. So `r1` to `r2`
+changes only the chunking, and `r2` to `r3` only adds full-text search.
+
+```sh
+curl -s -X POST http://localhost:8004/searches -H 'content-type: application/json' \
+  -d '{"query": "Type 2 diabetes mellitus: HbA1c from 8.0 to below 9.0 %", "retriever_config": "r1"}'
+curl -s 'http://localhost:8004/rules/UW-DM-003?retriever_config=r1'
+```
+
+A case may be started with any of the three rows, or with all of them
+(`"retriever_configs": ["r1", "r2", "r3"]` in the start request): it gets one verdict run per row on
+the same extracted facts and completes when each has its `verdict.suggested` event. The rows a case
+may run with are named in three places, which a test outside `services/` holds equal
+(`packages/synthdata/tests/test_manual_search_end_to_end.py`): `retrieval`'s row table
+(`domain/rows.py`), `verdict`'s runnable rows (`RUNNABLE_RETRIEVER_CONFIGS` in `domain/run.py`) and
+`workflow`'s setting `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS` (in `dapr.yaml` and
+`infra/demo/app/terraform.tfvars`). A verdict run on `r1` reads its rules from the `fixed` set. A
+reason's effect is then read from that rule's own definition inside the chunk, from its marker to
+the next marker or the chunk's end; a definition the chunk cuts off before its rating bears out no
+debit and no decline, so that reason is dropped and the run refers. That is the baseline's honest
+weakness and nothing works around it.
+
+There is no reranker, no query rewriting by a model and no cache. Rows `r4`, `r5` and `r6` are named
+in one table (`domain/rows.py`) and refused with `retriever_not_available` (409) until their stories
+build them; a
 `retriever_config` that is no row at all is `validation_failed` (422), as are a blank query and a
 `top_k` outside 1 to 50 or a query over 2,000 characters. A search has a short budget of its own,
 apart from the ingestion job's model settings: 3 seconds for the query's embedding call
@@ -484,8 +604,10 @@ comparable. The record is read with every search, in the search's own transactio
 ingestion is seen at once. `GET /rules/<rule_id>` answers the `smart` chunk
 that defines the rule: its text, manual page, impairment, chunk id and chunk set, and the rules its
 text refers to (`reference_rule_ids`). An unknown rule is `not_found` (404) and a malformed id 422.
-With `?retriever_config=`, every row on the `smart` set answers the same chunk, and `r1` is
-`retriever_not_available` until the `fixed` set exists. Logs name the row, counts and timings, never
+With `?retriever_config=`, every row on the `smart` set answers the same chunk, and `r1` answers
+from the `fixed` set: the chunk that holds the rule's definition marker (of two that hold it, the
+later one, in which the definition goes on), with the rules that chunk refers to; a rule no `fixed`
+chunk defines is 404. Logs name the row, counts and timings, never
 the query. The service needs `RETRIEVAL_MODEL_ENDPOINT` and `RETRIEVAL_EMBEDDING_DEPLOYMENT` to search
 (`dapr.yaml` names the stand-in); without them it says once at start-up that searches are off, still
 answers its probes and rule reads, and tells a search that it is not configured to search. A test
@@ -560,8 +682,8 @@ through its own sidecar (`EXTRACTION_DAPR_HTTP_PORT`) and signs in the same way
 (`EXTRACTION_MODEL_ENDPOINT`, `EXTRACTION_MODEL_ENTRA_AUTH=true`). `verdict` reads a case's facts
 from `extraction` and the manual's rules from `retrieval` through its own sidecar
 (`VERDICT_DAPR_HTTP_PORT`) and signs in the same way (`VERDICT_MODEL_ENDPOINT`,
-`VERDICT_MODEL_ENTRA_AUTH=true`). To look at a case's suggested verdicts on this machine, read
-`http://localhost:8006/cases/<case_id>/verdict-runs`; the steps of one run are at
+`VERDICT_MODEL_ENTRA_AUTH=true`). A case's suggested verdicts are on the underwriter's result view
+(story 2.7), and at `http://localhost:8006/cases/<case_id>/verdict-runs`; the steps of one run are at
 `http://localhost:8006/verdict-runs/<verdict_run_id>/steps`, and a case's steps across its runs at
 `http://localhost:8006/cases/<case_id>/agent-steps`, which takes `?tool=` and `?rule_id=` to narrow
 them.

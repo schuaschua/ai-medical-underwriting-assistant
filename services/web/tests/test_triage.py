@@ -330,7 +330,7 @@ def test_story_1_11_the_reading_shown_is_that_of_the_classifier_the_case_runs_wi
 
 
 @pytest.mark.parametrize("role", [CUSTOMER], ids=["customer"])
-def test_story_1_11_either_role_is_served_the_thumbnail_intake_holds(
+def test_story_1_11_either_role_is_served_the_thumbnail_intake_holds_and_nothing_that_is_no_png(
     client: TestClient, sidecar: FakeSidecar, role: dict[str, str]
 ) -> None:
     page_id = new_id()
@@ -354,26 +354,16 @@ def test_story_1_11_either_role_is_served_the_thumbnail_intake_holds(
     assert response.headers["content-security-policy"]
     assert response.headers["strict-transport-security"]
 
+    # Anything but a PNG from `intake` is never handed to a browser as one.
+    sidecar.thumbnail = httpx.Response(
+        200, content=b"%PDF-1.7", headers={"Content-Type": "application/pdf"}
+    )
 
-@pytest.mark.parametrize(
-    "answer",
-    [
-        httpx.Response(
-            200, content=b"%PDF-1.7", headers={"Content-Type": "application/pdf"}
-        )
-    ],
-    ids=["pdf"],
-)
-def test_story_1_11_anything_but_a_png_from_intake_is_502(
-    client: TestClient, sidecar: FakeSidecar, answer: httpx.Response
-) -> None:
-    sidecar.thumbnail = answer
+    wrong = client.get(thumbnail_path(new_id()), headers=role)
 
-    response = client.get(thumbnail_path(new_id()), headers=CUSTOMER)
-
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "upstream_unavailable"
-    assert b"PDF" not in response.content
+    assert wrong.status_code == 502
+    assert wrong.json()["error"]["code"] == "upstream_unavailable"
+    assert b"PDF" not in wrong.content
 
 
 # --- The settings -----------------------------------------------------------------

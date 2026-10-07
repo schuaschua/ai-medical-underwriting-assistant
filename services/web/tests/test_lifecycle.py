@@ -292,35 +292,20 @@ def test_story_1_6_progress_is_read_from_workflow_by_either_role(
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_story_1_6_the_audit_trail_is_read_from_workflow_by_the_underwriter_only(
+def test_story_1_6_and_1_12_the_trail_is_the_underwriters_and_passes_through_with_its_error_code_and_its_more_flag(
     client: TestClient, sidecar: FakeSidecar
 ) -> None:
-    case_id = new_id()
+    case_id, page_id = new_id(), new_id()
     client.post(f"/api/cases/{case_id}/start", headers=CUSTOMER)
     calls = len(sidecar.requests)
 
+    # Story 1.6: for the underwriter only.
     refused = client.get(f"/api/cases/{case_id}/audit", headers=CUSTOMER)
     assert refused.status_code == 403
     assert error_of(refused)[0] == "role_not_allowed"
     assert client.get(f"/api/cases/{case_id}/audit").status_code == 400
     # Neither call reached `workflow`.
     assert len(sidecar.requests) == calls
-
-    response = client.get(f"/api/cases/{case_id}/audit", headers=UNDERWRITER)
-
-    assert response.status_code == 200
-    trail = AuditTrail.model_validate(response.json())
-    assert (trail.case_id, trail.events) == (case_id, [])
-    assert str(sidecar.requests[-1].url) == (
-        f"{INVOKE}/workflow/method/cases/{case_id}/audit"
-    )
-
-
-def test_story_1_12_the_trail_passes_through_with_its_error_code_and_its_more_flag(
-    client: TestClient, sidecar: FakeSidecar
-) -> None:
-    case_id, page_id = new_id(), new_id()
-    client.post(f"/api/cases/{case_id}/start", headers=CUSTOMER)
 
     def event(action: str, actor: str, **changes: object) -> dict[str, object]:
         return {
@@ -368,6 +353,9 @@ def test_story_1_12_the_trail_passes_through_with_its_error_code_and_its_more_fl
     response = client.get(f"/api/cases/{case_id}/audit", headers=UNDERWRITER)
 
     assert response.status_code == 200
+    assert str(sidecar.requests[-1].url) == (
+        f"{INVOKE}/workflow/method/cases/{case_id}/audit"
+    )
     assert response.json() == answered
     trail = AuditTrail.model_validate(response.json())
     assert trail.has_more is True

@@ -118,7 +118,8 @@ def completed(client: DurableTaskSchedulerClient, case_id: str) -> Orchestration
 class ServicesBehindSidecar(httpx.AsyncBaseTransport):
     """Stands in for the Dapr sidecars: an invocation by app id reaches that service's app.
 
-    `calls` notes every invocation as app id, method and path, in order.
+    `calls` notes every invocation as app id, method and path, in order;
+    `targets` the same with the query string, where a test needs to see it.
     """
 
     def __init__(self, **apps: Any) -> None:
@@ -130,6 +131,7 @@ class ServicesBehindSidecar(httpx.AsyncBaseTransport):
             for app_id, app in apps.items()
         }
         self.calls: list[tuple[str, str, str]] = []
+        self.targets: list[tuple[str, str, str]] = []
 
     def paths(self, app_id: str) -> list[str]:
         """The paths invoked on one service, in order."""
@@ -149,6 +151,7 @@ class ServicesBehindSidecar(httpx.AsyncBaseTransport):
         target = request.url.raw_path.decode("ascii").removeprefix(
             f"{_INVOKE}{app_id}{_METHOD}"
         )
+        self.targets.append((app_id, request.method, target))
         forwarded = httpx.Request(
             request.method,
             f"http://{app_id}{target}",
@@ -381,12 +384,15 @@ class LocalRetrieval:
         the transport that puts the model stand-in where the embedding
         deployment would be. Its gateway and its engine are closed with it.
         """
-        app = create_retrieval(
+        with TestClient(self.app(**changes), raise_server_exceptions=False) as client:
+            yield client
+
+    def app(self, **changes: Any) -> Any:
+        """A new instance of the service, with the model stand-in behind its gateway."""
+        return create_retrieval(
             self.settings.model_copy(update=changes),
             model_transport=httpx2.ASGITransport(app=self.model.app()),
         )
-        with TestClient(app, raise_server_exceptions=False) as client:
-            yield client
 
 
 @dataclass
@@ -412,10 +418,7 @@ class LocalVerdict:
         """A new instance of the service, with the real `extraction` and `retrieval` behind its sidecar."""
         sidecar = ServicesBehindSidecar(
             extraction=self.extraction.app(),
-            retrieval=create_retrieval(
-                self.retrieval.settings,
-                model_transport=httpx2.ASGITransport(app=self.retrieval.model.app()),
-            ),
+            retrieval=self.retrieval.app(),
         )
         self.sidecars.append(sidecar)
         return create_verdict(

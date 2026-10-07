@@ -3,6 +3,7 @@ import { auditTrailPath } from "../audit/auditPath";
 import { useCaseList } from "../cases/caseList";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { LocalTime } from "../components/LocalTime";
+import { resultPath } from "../result/resultPath";
 import { strings } from "../strings";
 
 /** The words for a case status, or the status itself when this build has none. */
@@ -15,7 +16,7 @@ function statusText(status: string): string {
 
 /**
  * The underwriter's list of cases: every case the server lists, newest first
- * as it orders them, each with a link to its audit trail. Nothing here
+ * as it orders them, each with a link to its result and to its audit trail. Nothing here
  * chooses, orders or counts (AD-19): the status and the numbers are the
  * server's.
  */
@@ -70,6 +71,7 @@ export function CaseList() {
               <th scope="col">{strings.cases.startedColumn}</th>
               <th scope="col">{strings.cases.pagesColumn}</th>
               <th scope="col">{strings.cases.waitingColumn}</th>
+              <th scope="col">{strings.cases.resultColumn}</th>
               <th scope="col">{strings.cases.trailColumn}</th>
             </tr>
           </thead>
@@ -85,6 +87,14 @@ export function CaseList() {
                 </td>
                 <td>{listed.page_count}</td>
                 <td>{listed.waiting_page_count}</td>
+                <td>
+                  <Link
+                    to={resultPath(listed.case_id)}
+                    aria-label={strings.cases.resultFor(listed.case_id)}
+                  >
+                    {strings.cases.result}
+                  </Link>
+                </td>
                 <td>
                   <Link
                     to={auditTrailPath(listed.case_id)}

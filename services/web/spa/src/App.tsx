@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import {
   Navigate,
   Route,
@@ -53,20 +53,23 @@ export function App() {
           // the server checks the role on every call (security.md rule 20).
           // The boundary shows a plain message if a screen fails to render.
           <ErrorBoundary key={`${role}:${pathname}`}>
-            <Routes>
-              <Route
-                path="/"
-                element={<Navigate to={homePath(role)} replace />}
-              />
-              {SCREENS[role].map((screen) => (
+            {/* A screen fetched when first opened says so while it comes. */}
+            <Suspense fallback={<p role="status">{strings.screenLoading}</p>}>
+              <Routes>
                 <Route
-                  key={screen.path}
-                  path={screen.path}
-                  element={screen.element}
+                  path="/"
+                  element={<Navigate to={homePath(role)} replace />}
                 />
-              ))}
-              <Route path="*" element={<NotFound role={role} />} />
-            </Routes>
+                {SCREENS[role].map((screen) => (
+                  <Route
+                    key={screen.path}
+                    path={screen.path}
+                    element={screen.element}
+                  />
+                ))}
+                <Route path="*" element={<NotFound role={role} />} />
+              </Routes>
+            </Suspense>
           </ErrorBoundary>
         )}
       </main>
