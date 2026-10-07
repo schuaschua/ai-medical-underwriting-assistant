@@ -33,6 +33,7 @@ from synthdata.manual_model import (
     LATEST_SOURCE_YEAR,
     MAX_PAGES,
     MIN_PAGES,
+    ManualSpec,
     RuleTable,
     RuleTableImpairment,
     RuleTableRule,
@@ -506,6 +507,33 @@ def test_story_2_1_generation_fails_when_the_manual_and_the_table_disagree() -> 
             check([*good[:4], broken, *good[5:]])
     with pytest.raises(ValueError, match="page_count"):
         RuleTable.model_validate({**table.model_dump(), "page_count": 100})
+    # A reference between two rules of one impairment says that their ratings add
+    # (`verdict` reads it so), which two bands of one measure never do.
+    spec = MANUAL.model_dump()
+    _change("UW-DM-001", see=["UW-DM-002"])(spec)
+    with pytest.raises(ValueError, match="UW-DM-001: it refers to UW-DM-002, another"):
+        ManualSpec.model_validate(spec)
+    # Which of several readings is rated is printed from the same data the answer
+    # key is worked out with.
+    whole = " ".join(good)
+    chosen = [
+        rule.words(measure.label)
+        for item in MANUAL.impairments
+        for rule in item.reading_rules
+        for measure in item.measures
+        if measure.key == rule.measure
+    ]
+    assert len(chosen) >= 9 and all(words in whole for words in chosen)
+    # And in the definition of every rule of such a measure, which is read alone.
+    for item in MANUAL.impairments:
+        for rule in item.rules:
+            choice = item.reading_rule(rule.threshold.measure)
+            definition = good[rule_pages[rule.rule_id] - 1]
+            start = definition.index(f"Rule {rule.rule_id}:")
+            own = definition[start:].split("Source of the", 1)[0]
+            said = "Where the file holds several readings" in own
+            assert said == (choice is not None), rule.rule_id
+            assert choice is None or choice.definition_words() in own
 
 
 # ---------------------------------------------------------------------------

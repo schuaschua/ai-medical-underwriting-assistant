@@ -89,6 +89,23 @@ _FACT_LABELS = frozenset(
         "current treatment",
         "family history",
         "latest hba1c",
+        # The other findings of the physician's statement in cases 004 to 022.
+        "hba1c",
+        "egfr",
+        "ldl cholesterol",
+        "urine albumin-to-creatinine ratio",
+        "fev1",
+        "fev1 after a bronchodilator",
+        "phq-9 score",
+        "audit score",
+        "fib-4 index",
+        "das28",
+        "tumour thickness",
+        "apnoea-hypopnoea index",
+        "abdominal aortic diameter",
+        "time since the last seizure",
+        "bone density t-score (hip)",
+        "bone density t-score (spine)",
     }
 )
 # The tests of the laboratory report's table: a row is the test, its result
@@ -102,6 +119,12 @@ _LAB_TESTS = frozenset(
         "hdl cholesterol",
         "creatinine",
         "egfr",
+        # The further tests of cases 004 to 022.
+        "tsh",
+        "serum urate",
+        "fasting triglycerides",
+        "urine albumin-to-creatinine ratio",
+        "haemoglobin",
     }
 )
 # The header rows of the two tables of the attending physician's statement.

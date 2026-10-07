@@ -6,7 +6,7 @@ guideline each rule names; every debit percentage is invented.
 
 from decimal import Decimal
 
-from synthdata.manual_model import Category, ImpairmentSpec, Measure
+from synthdata.manual_model import Category, ImpairmentSpec, Measure, ReadingRule
 from synthdata.manual_sources import (
     AASLD_HBV,
     AASLD_NAFLD,
@@ -652,8 +652,9 @@ IMPAIRMENTS_2: tuple[ImpairmentSpec, ...] = (
                 "Referral usually happens once the eGFR is under 30 or falling quickly.",
             ),
         ),
+        reading_rules=(ReadingRule(measure="egfr", choose="most_recent"),),
         evidence=(
-            "Use the most recent eGFR, provided a second result at least three months earlier was also below 60; one low reading does not establish chronic disease.",
+            "A second result at least three months before the one rated must also be below 60; one low reading does not establish chronic disease.",
             "An eGFR of 60 or more meets no rule of this section, even when a diagnosis of early kidney disease is recorded on the strength of albumin alone.",
         ),
         pitfalls=(
@@ -1271,8 +1272,11 @@ IMPAIRMENTS_2: tuple[ImpairmentSpec, ...] = (
                 "Time off work is a practical measure of how disabling the episode is.",
             ),
         ),
+        reading_rules=(
+            ReadingRule(measure="phq9_score", choose="most_recent", within_months=12),
+        ),
         evidence=(
-            "Use a PHQ-9 total recorded by a clinician in the last twelve months. Where several are on file, use the latest and note the highest.",
+            "Use a PHQ-9 total recorded by a clinician. Where several are on file, note the highest.",
             "With no score on file, a single past episode that ended more than five years ago with no treatment since meets no rule of this section. Anything else without a score goes to a person.",
         ),
         pitfalls=(
@@ -1454,8 +1458,13 @@ IMPAIRMENTS_2: tuple[ImpairmentSpec, ...] = (
                 "Treatment roughly halves the risk of spinal fracture.",
             ),
         ),
+        reading_rules=(
+            ReadingRule(
+                measure="bone_density_t_score", choose="lowest", within_months=36
+            ),
+        ),
         evidence=(
-            "Use the lower of the hip and spine T-scores from a bone density scan in the last three years.",
+            "Take the hip and spine T-scores from a bone density scan in the last three years.",
             "A T-score above -2.5 meets no rule of this section. Two or more fractures of the spine take the case to a person.",
         ),
         pitfalls=(

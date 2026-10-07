@@ -1,0 +1,379 @@
+{
+  "case_id": "case-011",
+  "file_name": "case-011.pdf",
+  "summary": "Treated depression with a low PHQ-9 score beside coeliac disease, which the manual has no rule for; the lab report is upside down; a utility bill.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 180,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "utility_bill",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Corey Mockbourne",
+      "pages": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "76 Test Avenue, Demowick, ZZ 00177",
+      "pages": [
+        1,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0111",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "corey.mockbourne@example.com",
+      "pages": [
+        1,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-31-5169",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0006243",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Darcy Samplecroft",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "3 Placeholder Rise, Demowick, ZZ 00180",
+      "pages": [
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0111",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "3 Placeholder Rise",
+    "76 Test Avenue",
+    "Corey",
+    "Darcy",
+    "Demowick",
+    "Demowick Energy",
+    "Demowick Medical Centre",
+    "Dental nurse",
+    "Dr Darcy Samplecroft",
+    "Example Mutual Life Assurance",
+    "Mockbourne",
+    "SP-2026-000111",
+    "Samplecroft",
+    "Specimen Diagnostics Laboratory",
+    "ZZ 00177",
+    "ZZ 00180"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Depression, diagnosed 2024-02-19",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Depression, diagnosed 2024-02-19"
+        },
+        {
+          "page_number": 2,
+          "quote": "Depression 2024-02-19 Sertraline 50 mg once daily"
+        }
+      ]
+    },
+    {
+      "kind": "diagnosis",
+      "statement": "Coeliac disease, diagnosed 2021-05-06",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Coeliac disease, diagnosed 2021-05-06"
+        },
+        {
+          "page_number": 2,
+          "quote": "Coeliac disease 2021-05-06 Gluten-free diet"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 21.4 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 21.4 kg/m2"
+        },
+        {
+          "page_number": 2,
+          "quote": "Body mass index (BMI) 21.4 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 112 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-14 112 70"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 70 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-14 112 70"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.0 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Latest HbA1c 5.0 % on 2026-09-14"
+        },
+        {
+          "page_number": 3,
+          "quote": "HbA1c 5.0 %"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Depression: PHQ-9 score 9 points",
+      "measure": "phq9_score",
+      "rule_ids": [
+        "UW-DEP-001"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "PHQ-9 score 9 points on 2026-09-14"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 92 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "LDL cholesterol 92 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 110 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "eGFR 110 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-DEP-001"
+  ],
+  "expected_verdict": {
+    "verdict": "refer",
+    "loading_pct": null,
+    "system_reasons": [
+      "no_matching_rule"
+    ]
+  }
+}

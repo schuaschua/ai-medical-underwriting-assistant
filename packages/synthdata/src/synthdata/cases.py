@@ -1,4 +1,8 @@
-"""The first synthetic cases, as data. Every person, place, number and reading is invented.
+"""The first three synthetic cases, as data, and the whole case set.
+
+Every person, place, number and reading is invented. The three cases here are used by
+name in other tests and in the demo path, so their PDFs are never changed; the rest of
+the set is in `cases_more`.
 
 Identifiers are built to be impossible in real life: telephone numbers use the
 555-0100 to 555-0199 block that is reserved for fiction, email addresses use
@@ -9,12 +13,15 @@ and the places and the state code `ZZ` do not exist.
 from datetime import date
 from decimal import Decimal
 
+from contracts.enums import Verdict
+from synthdata.cases_more import MORE_CASES
 from synthdata.model import (
     Applicant,
     BloodPressureReading,
     CaseDefinition,
     Clinical,
     Diagnosis,
+    Intent,
     Invoice,
     InvoiceLine,
     LabResult,
@@ -52,6 +59,7 @@ _MEDICAL_ONLY = CaseDefinition(
                 condition="Type 2 diabetes mellitus",
                 diagnosed_on=date(2019, 5, 6),
                 treatment="Metformin 1000 mg twice daily",
+                impairment="type_2_diabetes",
             ),
         ),
         height_cm=165,
@@ -127,6 +135,7 @@ _MEDICAL_ONLY = CaseDefinition(
         PageSpec(layout=PageLayout.ATTENDING_PHYSICIAN_STATEMENT),
         PageSpec(layout=PageLayout.LAB_REPORT),
     ),
+    intends=Intent(verdict=Verdict.LOADED, loading_pct=50, rule_ids=("UW-DM-002",)),
 )
 
 _MIXED = CaseDefinition(
@@ -156,6 +165,7 @@ _MIXED = CaseDefinition(
                 condition="Essential hypertension",
                 diagnosed_on=date(2021, 2, 15),
                 treatment="Amlodipine 5 mg once daily",
+                impairment="hypertension",
             ),
         ),
         height_cm=178,
@@ -269,6 +279,9 @@ _MIXED = CaseDefinition(
         PageSpec(layout=PageLayout.PAYSLIP),
         PageSpec(layout=PageLayout.UTILITY_BILL),
     ),
+    intends=Intent(
+        verdict=Verdict.LOADED, loading_pct=100, rule_ids=("UW-HT-002", "UW-TOB-001")
+    ),
 )
 
 _EDGE = CaseDefinition(
@@ -359,6 +372,7 @@ _EDGE = CaseDefinition(
         PageSpec(layout=PageLayout.LAB_REPORT, rotation=90),
         PageSpec(layout=PageLayout.ATTENDING_PHYSICIAN_STATEMENT),
     ),
+    intends=Intent(verdict=Verdict.STANDARD),
 )
 
-CASES: tuple[CaseDefinition, ...] = (_MEDICAL_ONLY, _MIXED, _EDGE)
+CASES: tuple[CaseDefinition, ...] = (_MEDICAL_ONLY, _MIXED, _EDGE, *MORE_CASES)

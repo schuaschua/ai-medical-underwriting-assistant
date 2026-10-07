@@ -1,0 +1,416 @@
+{
+  "case_id": "case-015",
+  "file_name": "case-015.pdf",
+  "summary": "Blood pressure in the band the manual declines, with a small aortic aneurysm; an invoice.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "invoice",
+      "is_medical": false,
+      "layout": "invoice",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Micah Examplegarth",
+      "pages": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "33 Mock Common, Dummington, ZZ 00205",
+      "pages": [
+        1,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0115",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "micah.examplegarth@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-35-6685",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0006695",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Perry Mockstead",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "7 Sample Hill, Dummington, ZZ 00208",
+      "pages": [
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0115",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "33 Mock Common",
+    "7 Sample Hill",
+    "DPH-55102",
+    "Dr Perry Mockstead",
+    "Dummington",
+    "Dummington Family Practice",
+    "Dummington Plant Hire",
+    "Example Mutual Life Assurance",
+    "Examplegarth",
+    "Micah",
+    "Mockstead",
+    "Perry",
+    "SP-2026-000115",
+    "Site foreman",
+    "Specimen Diagnostics Laboratory",
+    "ZZ 00205",
+    "ZZ 00208"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Hypertension, diagnosed 2012-03-26",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Essential hypertension, diagnosed 2012-03-26"
+        },
+        {
+          "page_number": 2,
+          "quote": "Essential hypertension 2012-03-26 Amlodipine 10 mg once daily"
+        }
+      ]
+    },
+    {
+      "kind": "diagnosis",
+      "statement": "Abdominal aortic aneurysm, diagnosed 2025-02-10",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Abdominal aortic aneurysm, diagnosed 2025-02-10"
+        },
+        {
+          "page_number": 2,
+          "quote": "Abdominal aortic aneurysm 2025-02-10 Yearly ultrasound"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 29.6 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 29.6 kg/m2"
+        },
+        {
+          "page_number": 2,
+          "quote": "Body mass index (BMI) 29.6 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 186 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-08-17 186 112"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 112 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-08-17 186 112"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 184 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-18 184 110"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 110 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-18 184 110"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.6 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Latest HbA1c 5.6 % on 2026-09-18"
+        },
+        {
+          "page_number": 3,
+          "quote": "HbA1c 5.6 %"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Abdominal aortic aneurysm: abdominal aortic diameter 3.4 cm",
+      "measure": "abdominal_aortic_diameter",
+      "rule_ids": [
+        "UW-AAA-001"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Abdominal aortic diameter 3.4 cm on 2026-02-16"
+        }
+      ]
+    },
+    {
+      "kind": "derived",
+      "statement": "systolic blood pressure 185 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [
+        "UW-HT-004"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-08-17 186 112"
+        },
+        {
+          "page_number": 2,
+          "quote": "2026-09-18 184 110"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 142 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "LDL cholesterol 142 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 68 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "eGFR 68 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-HT-004",
+    "UW-AAA-001"
+  ],
+  "expected_verdict": {
+    "verdict": "decline",
+    "loading_pct": null,
+    "system_reasons": []
+  }
+}

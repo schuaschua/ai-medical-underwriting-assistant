@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-06-2026 14:30
-last_updated: 10-08-2026 07:30
+last_updated: 10-08-2026 11:30
 project: ai-medical-underwriting-assistant
 project_key: NOKEY
 tracking_system: file-system
@@ -59,12 +59,12 @@ development_status:
   2-5-suggested-verdict-with-cited-reasons: review
   2-6-rules-that-send-a-case-to-the-underwriter: review
   2-7-result-view-with-clickable-citations: review
-  2-8-query-the-agent-s-log: in-progress
+  2-8-query-the-agent-s-log: review
   epic-2-retrospective: optional
 
   epic-3: in-progress
-  3-1-full-synthetic-case-set-with-its-answer-key: in-progress
-  3-2-baseline-rows-r1-and-r2: in-progress
+  3-1-full-synthetic-case-set-with-its-answer-key: review
+  3-2-baseline-rows-r1-and-r2: review
   3-3-row-r5-on-azure-ai-search: backlog
   3-4-bake-off-runner-scores-the-rows: backlog
   3-5-retrieval-scoreboard: backlog
@@ -74,7 +74,7 @@ development_status:
   epic-3-retrospective: optional
 
   epic-4: in-progress
-  4-1-scored-page-set-and-separate-training-set: in-progress
+  4-1-scored-page-set-and-separate-training-set: review
   4-2-document-intelligence-classifier-trained-and-available: backlog
   4-3-runner-scores-both-classifiers-and-the-scoreboard-shows-the: backlog
   epic-4-retrospective: optional

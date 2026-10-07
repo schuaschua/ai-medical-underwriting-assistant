@@ -1,0 +1,411 @@
+{
+  "case_id": "case-006",
+  "file_name": "case-006.pdf",
+  "summary": "An underactive thyroid with a normal TSH, and osteoporosis on a bone scan; a passport and a handwritten note.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "id_document",
+      "is_medical": false,
+      "layout": "passport",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 5,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "handwritten_note",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": false
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Kendall Specimendale",
+      "pages": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 2
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "5 Template Close, Samplestead, ZZ 00142",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0106",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "kendall.specimendale@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-26-3274",
+      "pages": [
+        1,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0005678",
+      "pages": [
+        1,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Logan Testgrove",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "40 Dummy Hill, Samplestead, ZZ 00145",
+      "pages": [
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0106",
+      "pages": [
+        1,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "40 Dummy Hill",
+    "5 Template Close",
+    "Dr Logan Testgrove",
+    "Example Mutual Life Assurance",
+    "Exampleland Passport Office",
+    "Examplelander",
+    "Graphic designer",
+    "Kendall",
+    "Logan",
+    "P-SYN-0000612",
+    "Republic of Exampleland",
+    "SP-2026-000106",
+    "Samplestead",
+    "Samplestead Family Doctors",
+    "Specimen Diagnostics Laboratory",
+    "Specimendale",
+    "Testgrove",
+    "ZZ 00142",
+    "ZZ 00145"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Hypothyroidism, diagnosed 2018-04-09",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Underactive thyroid, diagnosed 2018-04-09"
+        },
+        {
+          "page_number": 3,
+          "quote": "Hypothyroidism 2018-04-09 Levothyroxine 75 micrograms daily"
+        }
+      ]
+    },
+    {
+      "kind": "diagnosis",
+      "statement": "Osteoporosis, diagnosed 2026-06-10",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Thin bones, diagnosed 2026-06-10"
+        },
+        {
+          "page_number": 3,
+          "quote": "Osteoporosis 2026-06-10 Alendronate 70 mg once weekly"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 23.5 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 23.5 kg/m2"
+        },
+        {
+          "page_number": 3,
+          "quote": "Body mass index (BMI) 23.5 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 3,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.2 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "HbA1c 5.2 %"
+        },
+        {
+          "page_number": 3,
+          "quote": "Latest HbA1c 5.2 % on 2026-09-03"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 101 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "LDL cholesterol 101 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 104 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "eGFR 104 mL/min/1.73 m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Hypothyroidism: TSH 2.4 mIU/L",
+      "measure": "tsh",
+      "rule_ids": [
+        "UW-THY-001"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "TSH 2.4 mIU/L"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 114 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "2026-09-03 114 72"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 72 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "2026-09-03 114 72"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "bone density T-score -2.8 standard deviations",
+      "measure": "bone_density_t_score",
+      "rule_ids": [
+        "UW-OST-001"
+      ],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "Bone density T-score (hip) -2.8 standard deviations on 2026-06-10"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "bone density T-score -2.1 standard deviations",
+      "measure": "bone_density_t_score",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "Bone density T-score (spine) -2.1 standard deviations on 2026-06-10"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-THY-001",
+    "UW-OST-001"
+  ],
+  "expected_verdict": {
+    "verdict": "loaded",
+    "loading_pct": 25,
+    "system_reasons": []
+  }
+}

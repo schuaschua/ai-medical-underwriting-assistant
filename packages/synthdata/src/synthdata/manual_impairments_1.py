@@ -6,7 +6,7 @@ guideline each rule names; every debit percentage is invented.
 
 from decimal import Decimal
 
-from synthdata.manual_model import ImpairmentSpec, Measure
+from synthdata.manual_model import ImpairmentSpec, Measure, OtherUnit, ReadingRule
 from synthdata.manual_sources import (
     ACR_GOUT,
     ADA_DIAGNOSIS,
@@ -48,6 +48,7 @@ _LDL = Measure(
     minimum=Decimal(0),
     maximum=Decimal(1000),
     conversion="A result in mmol/L is multiplied by 38.67 to give mg/dL: 4.14 mmol/L is 160 mg/dL.",
+    other_units=(OtherUnit(unit="mmol/L", multiply=Decimal("38.67")),),
     label="LDL cholesterol",
     unit="mg/dL",
     meaning="Low-density lipoprotein cholesterol in a fasting blood sample, the fraction most closely tied to artery disease.",
@@ -216,9 +217,12 @@ IMPAIRMENTS_1: tuple[ImpairmentSpec, ...] = (
                 "Diabetes with untreated blood pressure or lipids carries more risk than the sum of its parts would suggest.",
             ),
         ),
+        reading_rules=(
+            ReadingRule(measure="hba1c", choose="most_recent", within_months=12),
+        ),
         evidence=(
             "Use the HbA1c from a laboratory report or an attending physician's statement dated within the last twelve months. A figure the applicant recalls on the application form is a prompt to obtain evidence, not a reading to rate on.",
-            "Where the file holds several readings from the last twelve months, rate on the most recent one and mention in the notes any earlier reading that sits two bands higher. A fasting glucose on its own does not place the applicant in a band; ask for an HbA1c.",
+            "Mention in the notes any earlier reading from the last twelve months that sits two bands higher than the one rated. A fasting glucose on its own does not place the applicant in a band; ask for an HbA1c.",
             "If the laboratory reports HbA1c in mmol/mol, convert it as shown below before reading the table, and record both figures.",
         ),
         pitfalls=(
@@ -312,8 +316,11 @@ IMPAIRMENTS_1: tuple[ImpairmentSpec, ...] = (
                 "Protein in the urine is the earliest sign of the complication that shortens life most in type 1 diabetes.",
             ),
         ),
+        reading_rules=(
+            ReadingRule(measure="hba1c", choose="most_recent", within_months=12),
+        ),
         evidence=(
-            "Rate on the most recent laboratory HbA1c from the last twelve months. A sensor's estimate of average glucose is useful background but is not a substitute for the laboratory figure.",
+            "Rate on a laboratory HbA1c. A sensor's estimate of average glucose is useful background but is not a substitute for the laboratory figure.",
             "A record of severe hypoglycaemia needing another person's help, or of ketoacidosis, within two years is outside these bands: send the case to a person with the hospital letter attached.",
         ),
         pitfalls=(
@@ -691,8 +698,11 @@ IMPAIRMENTS_1: tuple[ImpairmentSpec, ...] = (
                 "Yearly testing is the sign of a followed-up patient.",
             ),
         ),
+        reading_rules=(
+            ReadingRule(measure="tsh", choose="most_recent", within_months=18),
+        ),
         evidence=(
-            "Use the latest TSH from the last eighteen months. If the dose changed after that test, ask for a newer one.",
+            "Use a TSH from the last eighteen months. If the dose changed after that test, ask for a newer one.",
             "A TSH below the laboratory's range on treatment suggests too high a dose; it meets no rule here, but mention it in the notes.",
         ),
         pitfalls=(
@@ -750,10 +760,18 @@ IMPAIRMENTS_1: tuple[ImpairmentSpec, ...] = (
                 "Home and 24-hour readings run a little lower than clinic readings, and a file should not mix them without saying so.",
             ),
         ),
+        reading_rules=(
+            ReadingRule(
+                measure="systolic_blood_pressure", choose="average", within_months=12
+            ),
+            ReadingRule(
+                measure="diastolic_blood_pressure", choose="highest", within_months=12
+            ),
+        ),
         evidence=(
-            "Take the systolic readings recorded in the last twelve months, average them and round to a whole number. With one reading only, use it, and say in the notes that it stands alone.",
-            "If the readings fall in different bands, the average decides. A reading taken during acute pain or illness is left out when the record says so.",
-            "The diastolic rule is read on the single highest diastolic figure in the last twelve months, not on an average, because it is there to catch a crisis.",
+            "With one systolic reading only, use it, and say in the notes that it stands alone.",
+            "A reading taken during acute pain or illness is left out when the record says so.",
+            "The diastolic rule is not read on an average, because it is there to catch a crisis.",
         ),
         pitfalls=(
             "A single reading taken at an insurance examination tends to run high. Where the physician's own readings are lower and there are three or more of them, the average of the physician's readings is used.",
@@ -1233,8 +1251,9 @@ IMPAIRMENTS_1: tuple[ImpairmentSpec, ...] = (
                 "These two drive both the leg disease and the events that shorten life.",
             ),
         ),
+        reading_rules=(ReadingRule(measure="ankle_brachial_index", choose="lowest"),),
         evidence=(
-            "Use the lower of the two legs' resting ankle-brachial index from a vascular laboratory report.",
+            "Take the resting ankle-brachial index of each leg from a vascular laboratory report.",
             "An index above 1.40 means the arteries are too stiff to compress and the test cannot show narrowing; it has its own rule. Values above 0.90 and up to 1.40 meet no rule of this section.",
         ),
         pitfalls=(

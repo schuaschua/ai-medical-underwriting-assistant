@@ -371,7 +371,8 @@ and highlights the quote. The highlight is drawn from the word boxes `intake` re
 fact's own `quote_start` and `quote_end`, each placed as a share of the page's width and height, so
 it sits on its words at any drawn size; the browser never looks for the quote in any text, and the
 PDF's text layer is not drawn at all. The page is also named in words above the document ("Page 3:
-the quote is highlighted."), and if the boxes cannot be read the page is still shown with a note. A
+the quote is highlighted."), and if the boxes cannot be read the page is still shown and the line
+reads "Page 3: the highlight could not be shown." A
 fact whose quote was not found reads "Page 3: quote not found on the page" and has no citation
 control. Choosing a reason's rule ("Rule UW-DM-002") opens the manual's text of it, with its
 impairment and manual page, beside the reasons; a rule the manual does not hold reads "This rule is
@@ -388,7 +389,9 @@ fault of that part only ("The facts could not be read."), and the other parts ar
 
 The PDF is drawn by `react-pdf` 11.0.0 (`pdf.js`). The file is read by the API client, with the
 role header every call carries, and handed to the renderer as bytes; pages are drawn as they come
-into view, 720 CSS pixels wide. The renderer's worker is built as a file of its own
+into view, as wide as the document's pane (never under 240 CSS pixels), and drawn again when the
+pane's width changes. The result view is a chunk of its own, so the PDF library is loaded only when
+that screen is opened, not with the other screens. The renderer's worker is built as a file of its own
 (`dist/assets/pdf.worker.min-<hash>.mjs`) and served by `web` like every other script, so the
 content security policy is unchanged: scripts and workers from this origin only, no inline script,
 no `blob:` and no WebAssembly (`useWasm` is off). To see it locally, run `./tools/dev.sh`, upload
@@ -396,6 +399,38 @@ no `blob:` and no WebAssembly (`useWasm` is off). To see it locally, run `./tool
 "Result" on the case's row. The tests stand in for the renderer (jsdom has no canvas and no
 worker), so that the real PDF draws under the policy, and that a highlight sits on its words, still
 needs a look in a real browser (`_bmad-output/implementation-artifacts/deferred-work.md`).
+
+**The agent's log (story 2.8).** The underwriter can see which searches and rule reads led to a
+suggestion. On a case's audit trail, a "Verdict suggested" row names the retrieval row the run was
+made with and has the button "Show the agent's steps"; on the result view the run on screen has
+"How was this reached?". Both open the same table under what was chosen: every tool call of that
+run in order, with its step number, tool, arguments, the fact it was about, the rules returned or
+read, its outcome, how long it took and when. A call that was refused or failed is listed like any
+other, with the reason in plain words ("Refused. A rule was asked for that had not been found
+first."). Arguments, queries and rule ids come from a model and are rendered as text, never as
+HTML; a value of more than 80 characters is cut and opens whole. The steps can be narrowed by tool
+and by rule id ("Show matching steps"); the narrowing is done by `verdict`, not in the browser, and
+a rule id of another form is refused before any call. When a run has more steps than one answer
+holds, "Show more steps" reads the ones after the last step shown. "Read the steps again" reads from
+the start, which is how the steps of a run that is still running are followed. Nothing on the screen
+edits, removes or runs a step again, and the customer has no such screen.
+
+`web` gains two read routes for it, for the underwriter only, each one operation of `verdict`
+passed on under the same path:
+
+| `web` route | What it lists |
+|---|---|
+| `GET /api/verdict-runs/<verdict_run_id>/steps?tool=&rule_id=&after_step_no=` | One run's steps by step number. 404 `not_found` for a run that is not stored. |
+| `GET /api/cases/<case_id>/agent-steps?tool=&rule_id=&after_verdict_run_id=&after_step_no=` | The steps of every run of a case, in the order they were logged. |
+
+Every query parameter is optional. `tool` is `list_facts`, `search_rules` or `read_rule`; `rule_id`
+keeps the steps that returned or read that rule. A value that is not a tool, a rule id that is not
+of the form `UW-DM-002`, half a cursor, or any other parameter is 422 `validation_failed`, and
+`verdict` is not asked. Both answers are bounded (`VERDICT_STEP_LIST_LIMIT`, 500) and say with
+`has_more` that more steps exist; the rest is read by asking again with the last step listed as the
+cursor: its step number for a run (`after_step_no`), and its run and step number for a case
+(`after_verdict_run_id` with `after_step_no`, because a step number is one run's own). The screen
+uses the read by run; the read by case is there for the API.
 
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
@@ -468,10 +503,10 @@ deployment names. A second run over the same manual finds them unchanged and end
 (`skipped=yes` in its last log line): it changes nothing, calls no model and does not send the manual
 to Document Intelligence again. Before it spends anything a run reads what is stored and checks
 that the schema is at the migration it ships with, and before the context lines it makes one small
-embedding call. A run that would remove more than a tenth of the stored chunks
-(`RETRIEVAL_INGEST_MAX_REMOVED_SHARE`) is refused and its log names them; set
-`RETRIEVAL_INGEST_ALLOW_LARGE_REMOVAL=true` for the one run of a manual that really lost those
-rules. Two runs at once cannot undo each other: the second to store finds the index changed and
+embedding call. A run after which more than a tenth of the rules a chunk set defines would be
+defined by none of its chunks (`RETRIEVAL_INGEST_MAX_REMOVED_SHARE`) is refused and its log names
+them; set `RETRIEVAL_INGEST_ALLOW_LARGE_REMOVAL` to the chunk set it is meant for (`'["smart"]'`,
+`'["fixed"]'` or both) for the one run of a manual that really lost those rules. Two runs at once cannot undo each other: the second to store finds the index changed and
 writes nothing. After a change to the manual it rewrites the chunks that changed, removes
 the chunks whose rule is gone, and writes everything in one transaction at its end. It fails loudly:
 a rule id defined twice, a definition with no text or cut short, a page with no text, no rule at all,
@@ -494,23 +529,31 @@ chunk has no context line and costs no chat call: what is embedded is its own te
 embedding deployment. Its `chunk_id` is the set and its position (`fixed-0001`, `fixed-0002`, ...).
 Its `rule_ids` are the rules whose definition marker (`Rule <rule_id>:`) lies inside its text, which
 may be none, one or several, and a rule in an overlap is in two chunks; rules it only mentions are
-its `reference_rule_ids`. Its section, impairment and page are those of where it starts; a chunk
-that starts before the first numbered section stands under "Front matter". A definition is not kept
+its `reference_rule_ids`. In its text the words of a paragraph are a space apart and two paragraphs
+a line break, so a rule's own definition can be told from what is printed around it. Its section,
+impairment and page are those of where it starts; text before the first section's own heading
+stands under "Front matter". A definition is not kept
 whole: one that a cut falls in is in two chunks, part in each. That is what the baseline is there to
 show.
 
 Which sets the job writes is `RETRIEVAL_INGEST_CHUNK_SETS` (default `["smart", "fixed"]`). The
-manual is read and parsed once; each set is then a run of its own, with its own checks, removal
-guard, transaction and row in `retrieval.ingest_run`, and its own last log line (`chunk_set=smart`,
-`chunk_set=fixed`). A set whose run fails is left as it was and the other is written all the same;
-the job then ends with status 1. For the `fixed` set the run record holds a digest of the size and
-the overlap where the `smart` set's holds the prompt's digest, and no chat deployment: a changed
-size or overlap cuts the set again on the next run (that run is not held to the removal guard, as
-the number of chunks is meant to change), and leaves the `smart` set untouched. The `fixed` cut
-checks itself as well: the same page and heading checks, a rule defined twice, page furniture
-inside a chunk, a rule that is referred to and defined nowhere, and a rule whose marker ended up in
-no chunk (`definition_in_no_chunk`: a cut fell inside a marker and the overlap is too small to keep
-it).
+manual is read and parsed once (a parse that failed or was stopped is not asked for again), and one
+deadline covers all sets (`RETRIEVAL_INGEST_DEADLINE_SECONDS`). Each set is then a run of its own,
+with its own checks, removal guard, transaction and row in `retrieval.ingest_run`, and its own last
+log line (`chunk_set=smart`, `chunk_set=fixed`). A set whose run fails, in whatever way, is left as
+it was and the other is run and reported all the same; the job then ends with status 1. If the
+stored sets then stand on different manuals (one set took a changed manual and the other failed, or
+was not among the sets of that job), the job says so in a line of its own,
+`reason=chunk_sets_built_from_different_manuals` with both sets named, and ends with 1: the rows
+are compared with each other. For the `fixed` set the run record holds a digest of the size and the
+overlap where the `smart` set's holds the prompt's digest, and no chat deployment: a changed size or
+overlap cuts the set again on the next run and leaves the `smart` set untouched. The removal guard
+counts rules, not chunks, so a recut is never refused for its other number of chunks, whatever else
+changed with it. The overlap is at least one word and at most half the size. The `fixed` cut checks
+itself as well: the same page and heading checks, a rule defined twice, page furniture inside a
+paragraph, a rule that is referred to and defined nowhere, a marker that only the joining of two
+paragraphs forms, more chunks than the ids number (9,999), and a rule whose marker ended up in no
+chunk.
 
 Locally Document Intelligence is a stand-in, `uv run python -m synthdata.layout_standin` (port 5102):
 it reads the PDF it is sent with PyMuPDF and answers in the shape of the service's layout result
@@ -577,13 +620,13 @@ curl -s 'http://localhost:8004/rules/UW-DM-003?retriever_config=r1'
 A case may be started with any of the three rows, or with all of them
 (`"retriever_configs": ["r1", "r2", "r3"]` in the start request): it gets one verdict run per row on
 the same extracted facts and completes when each has its `verdict.suggested` event. The rows a case
-may run with are named in three places, which a test outside `services/` holds equal
-(`packages/synthdata/tests/test_manual_search_end_to_end.py`): `retrieval`'s row table
+may run with are named in three places, which a test outside `services/` holds equal without any
+container (`packages/synthdata/tests/test_foundry_standin.py`): `retrieval`'s row table
 (`domain/rows.py`), `verdict`'s runnable rows (`RUNNABLE_RETRIEVER_CONFIGS` in `domain/run.py`) and
-`workflow`'s setting `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS` (in `dapr.yaml` and
-`infra/demo/app/terraform.tfvars`). A verdict run on `r1` reads its rules from the `fixed` set. A
-reason's effect is then read from that rule's own definition inside the chunk, from its marker to
-the next marker or the chunk's end; a definition the chunk cuts off before its rating bears out no
+`workflow`'s setting `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS` (its default; the deploy passes the
+list of `infra/demo/app/terraform.tfvars`). A verdict run on `r1` reads its rules from the `fixed`
+set. A reason's effect is then read from that rule's own definition inside the chunk, from its
+marker to the end of its paragraph; a definition the chunk cuts off before its rating bears out no
 debit and no decline, so that reason is dropped and the run refers. That is the baseline's honest
 weakness and nothing works around it.
 
@@ -606,8 +649,11 @@ that defines the rule: its text, manual page, impairment, chunk id and chunk set
 text refers to (`reference_rule_ids`). An unknown rule is `not_found` (404) and a malformed id 422.
 With `?retriever_config=`, every row on the `smart` set answers the same chunk, and `r1` answers
 from the `fixed` set: the chunk that holds the rule's definition marker (of two that hold it, the
-later one, in which the definition goes on), with the rules that chunk refers to; a rule no `fixed`
-chunk defines is 404. Logs name the row, counts and timings, never
+later one, in which the definition goes on), with the rules that rule's own definition refers to
+(from its marker to the end of its paragraph, also when they are defined in the same chunk, and
+never what a neighbouring rule or a worked example mentions); a rule no `fixed` chunk defines is
+404. A search or a rule read on a row whose chunk set has no run record, because the job never
+wrote it, is `retriever_not_available` (409), never an empty answer. Logs name the row, counts and timings, never
 the query. The service needs `RETRIEVAL_MODEL_ENDPOINT` and `RETRIEVAL_EMBEDDING_DEPLOYMENT` to search
 (`dapr.yaml` names the stand-in); without them it says once at start-up that searches are off, still
 answers its probes and rule reads, and tells a search that it is not configured to search. A test
@@ -659,7 +705,7 @@ more.
 | Stand-in for the Foundry chat and embedding deployments (this machine only) | `http://localhost:5101` |
 | `retrieval` (`/health`, `/ready`, `POST /searches`, `GET /rules/<rule_id>`), and its Dapr sidecar | `http://localhost:8004`, `http://localhost:3504` |
 | `extraction` (`/health`, `/ready`, `POST /fact-sets`, `GET /cases/<case_id>/facts`), and its Dapr sidecar | `http://localhost:8005`, `http://localhost:3505` |
-| `verdict` (`/health`, `/ready`, `POST /verdict-runs`, `GET /cases/<case_id>/verdict-runs`, `GET /verdict-runs/<verdict_run_id>/steps`, `GET /cases/<case_id>/agent-steps?tool=&rule_id=`), and its Dapr sidecar | `http://localhost:8006`, `http://localhost:3506` |
+| `verdict` (`/health`, `/ready`, `POST /verdict-runs`, `GET /cases/<case_id>/verdict-runs`, `GET /verdict-runs/<verdict_run_id>/steps?tool=&rule_id=&after_step_no=`, `GET /cases/<case_id>/agent-steps?tool=&rule_id=&after_verdict_run_id=&after_step_no=`), and its Dapr sidecar | `http://localhost:8006`, `http://localhost:3506` |
 | Stand-in for Document Intelligence's layout model (this machine only) | `http://localhost:5102` |
 | PostgreSQL (database and user `aiuw`, and the roles `workflow` and `verdict`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
@@ -683,10 +729,11 @@ through its own sidecar (`EXTRACTION_DAPR_HTTP_PORT`) and signs in the same way
 from `extraction` and the manual's rules from `retrieval` through its own sidecar
 (`VERDICT_DAPR_HTTP_PORT`) and signs in the same way (`VERDICT_MODEL_ENDPOINT`,
 `VERDICT_MODEL_ENTRA_AUTH=true`). A case's suggested verdicts are on the underwriter's result view
-(story 2.7), and at `http://localhost:8006/cases/<case_id>/verdict-runs`; the steps of one run are at
+(story 2.7), and at `http://localhost:8006/cases/<case_id>/verdict-runs`; the steps of one run are
+on the audit trail and the result view (story 2.8), and at
 `http://localhost:8006/verdict-runs/<verdict_run_id>/steps`, and a case's steps across its runs at
-`http://localhost:8006/cases/<case_id>/agent-steps`, which takes `?tool=` and `?rule_id=` to narrow
-them.
+`http://localhost:8006/cases/<case_id>/agent-steps`; both take `?tool=` and `?rule_id=` to narrow
+them and a cursor for the steps beyond one answer.
 `workflow` reaches the scheduler emulator without a credential; in Azure it signs in to the Durable Task
 Scheduler and PostgreSQL with its managed identity. The emulator keeps its state in memory, so
 orchestrations are gone after `docker compose stop`, while case status and the audit trail stay in

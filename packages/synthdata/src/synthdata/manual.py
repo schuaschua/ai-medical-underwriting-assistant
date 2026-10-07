@@ -383,6 +383,11 @@ def definition_words(spec: ManualSpec, rule: RuleSpec, section: str) -> str:
     ]
     if rule.note:
         parts.append(rule.note)
+    # A definition is read on its own: which of several readings counts is said here
+    # too, from the data that part 3 of the section is printed from.
+    choice = impairment.reading_rule(rule.threshold.measure)
+    if choice is not None:
+        parts.append(choice.definition_words())
     parts += [reference_sentence(reference) for reference in spec.references(rule)]
     parts.append(source_words(rule, impairment.own_edges))
     return " ".join(parts)
@@ -581,6 +586,9 @@ def _impairment(
     part(3)
     for text in impairment.evidence:
         book.paragraph(text)
+    labels = {measure.key: measure.label for measure in impairment.measures}
+    for choice in impairment.reading_rules:
+        book.paragraph(choice.words(labels[choice.measure]))
     book.label("Pitfalls with this evidence.")
     for text in impairment.pitfalls:
         book.paragraph(text)

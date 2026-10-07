@@ -1,0 +1,349 @@
+{
+  "case_id": "case-005",
+  "file_name": "case-005.pdf",
+  "summary": "HbA1c in the prediabetes range with no diagnosis, and a fatty liver with a low FIB-4 index; a recipe.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "recipe",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Finley Demoworth",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "31 Sample Terrace, Dummyford, ZZ 00135",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0105",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "finley.demoworth@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-25-2895",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0005565",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Hayden Placeholt",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "6 Mock Parade, Dummyford, ZZ 00138",
+      "pages": [
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0105",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "31 Sample Terrace",
+    "6 Mock Parade",
+    "Demoworth",
+    "Dr Hayden Placeholt",
+    "Dummyford",
+    "Dummyford Health Centre",
+    "Example Mutual Life Assurance",
+    "Finley",
+    "Hayden",
+    "Librarian",
+    "Placeholt",
+    "SP-2026-000105",
+    "Specimen Diagnostics Laboratory",
+    "The Placeholder Kitchen",
+    "ZZ 00135",
+    "ZZ 00138"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Fatty liver disease, diagnosed 2025-03-10",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Fatty liver, diagnosed 2025-03-10"
+        },
+        {
+          "page_number": 2,
+          "quote": "Fatty liver 2025-03-10 Diet and exercise advice"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 24.4 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 24.4 kg/m2"
+        },
+        {
+          "page_number": 2,
+          "quote": "Body mass index (BMI) 24.4 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 122 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-01 122 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 78 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-01 122 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.9 %",
+      "measure": "hba1c",
+      "rule_ids": [
+        "UW-PD-001"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Latest HbA1c 5.9 % on 2026-09-01"
+        },
+        {
+          "page_number": 3,
+          "quote": "HbA1c 5.9 %"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Fatty liver disease: FIB-4 index 0.92",
+      "measure": "fib4_index",
+      "rule_ids": [
+        "UW-FLD-001"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "FIB-4 index 0.92 on 2026-09-01"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 121 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "LDL cholesterol 121 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 91 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "eGFR 91 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-PD-001",
+    "UW-FLD-001"
+  ],
+  "expected_verdict": {
+    "verdict": "standard",
+    "loading_pct": null,
+    "system_reasons": []
+  }
+}

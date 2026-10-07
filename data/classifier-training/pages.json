@@ -1,0 +1,234 @@
+{
+  "pages": [
+    {
+      "file": "application_form/train-001-p01-application_form.pdf",
+      "page_type": "application_form",
+      "layout": "application_form"
+    },
+    {
+      "file": "attending_physician_statement/train-001-p02-attending_physician_statement.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "attending_physician_statement"
+    },
+    {
+      "file": "lab_report/train-001-p03-lab_report.pdf",
+      "page_type": "lab_report",
+      "layout": "lab_report"
+    },
+    {
+      "file": "id_document/train-001-p04-passport.pdf",
+      "page_type": "id_document",
+      "layout": "passport"
+    },
+    {
+      "file": "invoice/train-001-p05-invoice.pdf",
+      "page_type": "invoice",
+      "layout": "invoice"
+    },
+    {
+      "file": "other/train-001-p06-payslip.pdf",
+      "page_type": "other",
+      "layout": "payslip"
+    },
+    {
+      "file": "other/train-001-p07-utility_bill.pdf",
+      "page_type": "other",
+      "layout": "utility_bill"
+    },
+    {
+      "file": "other/train-001-p08-recipe.pdf",
+      "page_type": "other",
+      "layout": "recipe"
+    },
+    {
+      "file": "attending_physician_statement/train-001-p09-handwritten_note.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "handwritten_note"
+    },
+    {
+      "file": "application_form/train-002-p01-application_form.pdf",
+      "page_type": "application_form",
+      "layout": "application_form"
+    },
+    {
+      "file": "attending_physician_statement/train-002-p02-attending_physician_statement.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "attending_physician_statement"
+    },
+    {
+      "file": "lab_report/train-002-p03-lab_report.pdf",
+      "page_type": "lab_report",
+      "layout": "lab_report"
+    },
+    {
+      "file": "id_document/train-002-p04-passport.pdf",
+      "page_type": "id_document",
+      "layout": "passport"
+    },
+    {
+      "file": "invoice/train-002-p05-invoice.pdf",
+      "page_type": "invoice",
+      "layout": "invoice"
+    },
+    {
+      "file": "other/train-002-p06-payslip.pdf",
+      "page_type": "other",
+      "layout": "payslip"
+    },
+    {
+      "file": "other/train-002-p07-utility_bill.pdf",
+      "page_type": "other",
+      "layout": "utility_bill"
+    },
+    {
+      "file": "other/train-002-p08-recipe.pdf",
+      "page_type": "other",
+      "layout": "recipe"
+    },
+    {
+      "file": "other/train-002-p09-blank.pdf",
+      "page_type": "other",
+      "layout": "blank"
+    },
+    {
+      "file": "application_form/train-003-p01-application_form.pdf",
+      "page_type": "application_form",
+      "layout": "application_form"
+    },
+    {
+      "file": "attending_physician_statement/train-003-p02-attending_physician_statement.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "attending_physician_statement"
+    },
+    {
+      "file": "lab_report/train-003-p03-lab_report.pdf",
+      "page_type": "lab_report",
+      "layout": "lab_report"
+    },
+    {
+      "file": "id_document/train-003-p04-passport.pdf",
+      "page_type": "id_document",
+      "layout": "passport"
+    },
+    {
+      "file": "invoice/train-003-p05-invoice.pdf",
+      "page_type": "invoice",
+      "layout": "invoice"
+    },
+    {
+      "file": "other/train-003-p06-payslip.pdf",
+      "page_type": "other",
+      "layout": "payslip"
+    },
+    {
+      "file": "other/train-003-p07-utility_bill.pdf",
+      "page_type": "other",
+      "layout": "utility_bill"
+    },
+    {
+      "file": "other/train-003-p08-recipe.pdf",
+      "page_type": "other",
+      "layout": "recipe"
+    },
+    {
+      "file": "lab_report/train-003-p09-lab_report.pdf",
+      "page_type": "lab_report",
+      "layout": "lab_report"
+    },
+    {
+      "file": "application_form/train-004-p01-application_form.pdf",
+      "page_type": "application_form",
+      "layout": "application_form"
+    },
+    {
+      "file": "attending_physician_statement/train-004-p02-attending_physician_statement.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "attending_physician_statement"
+    },
+    {
+      "file": "lab_report/train-004-p03-lab_report.pdf",
+      "page_type": "lab_report",
+      "layout": "lab_report"
+    },
+    {
+      "file": "id_document/train-004-p04-passport.pdf",
+      "page_type": "id_document",
+      "layout": "passport"
+    },
+    {
+      "file": "invoice/train-004-p05-invoice.pdf",
+      "page_type": "invoice",
+      "layout": "invoice"
+    },
+    {
+      "file": "other/train-004-p06-payslip.pdf",
+      "page_type": "other",
+      "layout": "payslip"
+    },
+    {
+      "file": "other/train-004-p07-utility_bill.pdf",
+      "page_type": "other",
+      "layout": "utility_bill"
+    },
+    {
+      "file": "other/train-004-p08-recipe.pdf",
+      "page_type": "other",
+      "layout": "recipe"
+    },
+    {
+      "file": "attending_physician_statement/train-004-p09-attending_physician_statement.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "attending_physician_statement"
+    },
+    {
+      "file": "application_form/train-005-p01-application_form.pdf",
+      "page_type": "application_form",
+      "layout": "application_form"
+    },
+    {
+      "file": "attending_physician_statement/train-005-p02-attending_physician_statement.pdf",
+      "page_type": "attending_physician_statement",
+      "layout": "attending_physician_statement"
+    },
+    {
+      "file": "lab_report/train-005-p03-lab_report.pdf",
+      "page_type": "lab_report",
+      "layout": "lab_report"
+    },
+    {
+      "file": "id_document/train-005-p04-passport.pdf",
+      "page_type": "id_document",
+      "layout": "passport"
+    },
+    {
+      "file": "invoice/train-005-p05-invoice.pdf",
+      "page_type": "invoice",
+      "layout": "invoice"
+    },
+    {
+      "file": "other/train-005-p06-payslip.pdf",
+      "page_type": "other",
+      "layout": "payslip"
+    },
+    {
+      "file": "other/train-005-p07-utility_bill.pdf",
+      "page_type": "other",
+      "layout": "utility_bill"
+    },
+    {
+      "file": "other/train-005-p08-recipe.pdf",
+      "page_type": "other",
+      "layout": "recipe"
+    },
+    {
+      "file": "other/train-005-p09-blank.pdf",
+      "page_type": "other",
+      "layout": "blank"
+    },
+    {
+      "file": "application_form/train-005-p10-application_form.pdf",
+      "page_type": "application_form",
+      "layout": "application_form"
+    }
+  ]
+}

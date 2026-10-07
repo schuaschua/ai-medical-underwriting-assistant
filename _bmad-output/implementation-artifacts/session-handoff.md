@@ -15,11 +15,20 @@ Branch `architecture/spine-redaction-diagrams`, nothing pushed. Azure resource g
 | 2.4 fact extraction | done | `9bf5997` |
 | 2.5 and 2.6 verdict agent and refer rules; suite cut to 536 tests | done | `cc11e47` |
 | local run with real Dapr sidecars recorded | done | `12a74c8` |
-| 2.7 result view | being implemented when this was written; spec `spec-2-7-...md`, not committed | — |
-| 3.1 and 4.1 case set, page set, training set | being implemented; spec `spec-3-1-...md`, not committed | — |
-| 3.2 rows `r1` and `r2` | being implemented; spec `spec-3-2-...md`, not committed | — |
-| 2.8 agent log | spec written (`spec-2-8-...md`), not started: starts after 2.7 (both touch `web` and the SPA) | — |
-| 3.3 to 3.8, 4.2, 4.3 | not started; context in `epic-3-context.md` and `epic-4-context.md` | — |
+| 2.7 result view | done | `e3ebaae` |
+| 2.8 agent log | implemented, reviewed, review fixes applied; NOT committed. Verified on its own paths only | — |
+| 3.2 rows `r1` and `r2` | implemented, reviewed, review fixes applied; NOT committed. Cross-service tests over the real manual not rerun since the fixes | — |
+| 3.1 and 4.1 case set, page set, training set | implemented, reviewed; its review fixes were STILL BEING APPLIED by a background agent when this was written (answer key corrections: see the spec's Review Triage Log); NOT committed | — |
+| 3.3 row `r5` on Azure AI Search | spec written (`spec-3-3-...md`), not started | — |
+| 3.4 bake-off runner | spec written (`spec-3-4-...md`), not started | — |
+| 3.5 to 3.8, 4.2, 4.3 | not started; context in `epic-3-context.md` and `epic-4-context.md` | — |
+
+State of the working tree when this was written (2026-10-08): uncommitted changes of three stories share it. Before anything else:
+
+1. Check that no background agent is still editing: `git status` twice a minute apart should show the same files, and `packages/synthdata` should pass `uv run pytest packages/synthdata/tests/test_synthetic_cases.py packages/synthdata/tests/test_underwriting_manual.py`. If the data fixes look half-done, read `spec-3-1-...md` (Review Triage Log) and finish them: every row marked `patch` there.
+2. Run the full checks once: `docker compose up -d --wait`, `uv sync`, `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy packages services`, `uv run pytest --cov`, the SPA checks (`npm --prefix services/web/spa run lint`, `typecheck`, `contracts:check`, `test -- --run`), `.work/bin/terraform -chdir=infra/demo/app fmt -check -recursive` and `validate`.
+3. Commit by path, one commit per story: 2.8 (`services/web`, `packages/contracts`, the step reads in `services/verdict/src/verdict/adapters`, `packages/synthdata/tests/test_agent_log_end_to_end.py`); 3.2 (`services/retrieval`, `services/verdict/src/verdict/domain`, `services/workflow`, `dapr.yaml`, `infra/demo/app`, `tools/`); 3.1 and 4.1 (`packages/synthdata`, `data/`). Shared files (`README.md`, `deferred-work.md`, `infra/bootstrap/README.md`) go with whichever commit comes first. Set each spec's `status` to `done` and its line in `sprint-status.yaml` to `review`.
+4. Then: a look at the result view and the agent log in a real browser against `./tools/dev.sh` (never done), story 3.3, story 3.4, and the rest in order.
 
 If the working tree holds uncommitted changes when you start, they belong to the stories marked "being implemented". Their implementers ran as background agents of the earlier session and may not have finished. For each: read the spec (its task boxes and Implementation Notes show how far it got), run the spec's Verification commands, review, fix, then commit by path (2.7: `services/web`; 3.1 and 4.1: `packages/synthdata`, `data/`; 3.2: `services/retrieval`, `services/verdict`, `services/workflow`, plus their lines in `dapr.yaml` and `infra/demo/app`).
 

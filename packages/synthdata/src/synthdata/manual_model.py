@@ -208,6 +208,17 @@ class Category(ContractModel):
     label: OneLine
 
 
+class OtherUnit(ContractModel):
+    """Another unit documents use for a measure: reading x multiply + add is the measure's unit."""
+
+    unit: OneLine
+    multiply: Decimal
+    add: Decimal = Decimal(0)
+
+    def convert(self, reading: Decimal) -> Decimal:
+        return reading * self.multiply + self.add
+
+
 class Measure(ContractModel):
     """Something a rule compares: a reading, a score, a count of months, a status."""
 
@@ -225,9 +236,20 @@ class Measure(ContractModel):
     categories: tuple[Category, ...] = ()
     # How to turn another unit a document may use into this one.
     conversion: OneLine | None = None
+    # The same conversion as numbers, where a case document may use the other unit.
+    other_units: tuple[OtherUnit, ...] = ()
 
     @model_validator(mode="after")
     def _numbers_or_categories(self) -> Self:
+        for other in self.other_units:
+            # The numbers a program converts with are the numbers the manual prints.
+            figures = [other.unit, str(other.multiply)]
+            figures += [str(other.add)] if other.add else []
+            if not all(figure in (self.conversion or "") for figure in figures):
+                raise ValueError(
+                    f"{self.key}: the conversion from {other.unit} is not the one "
+                    "its sentence states"
+                )
         if self.categories and (self.minimum is not None or self.maximum is not None):
             raise ValueError(f"{self.key}: a status has no number range")
         values = [item.value for item in self.categories]
@@ -353,6 +375,55 @@ APPLIES_UNLESS = ", unless {names} is on file"
 NOT_ON_A_READING = ": a reading alone does not meet this rule"
 
 
+# Which reading is rated when the file holds several of one measure.
+Choose = Literal["most_recent", "average", "highest", "lowest"]
+_CHOOSE_WORDS: dict[str, str] = {
+    "most_recent": "the most recent one is rated",
+    "average": "their average is rated, rounded as the bands are written",
+    "highest": "the highest one is rated",
+    "lowest": "the lowest one is rated",
+}
+# The same rule as one sentence of a rule's definition, which is read on its own.
+# The model stand-in reads it back (`verdict_standin`), so the wording is kept here.
+SEVERAL_READINGS = "Where the file holds several readings, {which}{window} counts"
+COUNTS_WORDS: dict[str, str] = {
+    "most_recent": "the most recent",
+    "average": "the average of the readings",
+    "highest": "the highest",
+    "lowest": "the lowest",
+}
+OF_THE_LAST = " of the last {months} months"
+
+
+class ReadingRule(ContractModel):
+    """How one impairment picks the reading of a measure to rate, as its evidence part says."""
+
+    measure: Slug
+    choose: Choose
+    # Readings older than this, counted back from the application, are left out.
+    within_months: int | None = Field(default=None, gt=0)
+
+    def words(self, label: str) -> str:
+        """The sentence the manual prints for this rule."""
+        window = (
+            f" from the last {self.within_months} months" if self.within_months else ""
+        )
+        return (
+            f"Several readings. Where the file holds more than one {label} "
+            f"reading{window}, {_CHOOSE_WORDS[self.choose]}."
+        )
+
+    def definition_words(self) -> str:
+        """The sentence a definition of a rule of this measure prints."""
+        window = (
+            OF_THE_LAST.format(months=self.within_months) if self.within_months else ""
+        )
+        return (
+            SEVERAL_READINGS.format(which=COUNTS_WORDS[self.choose], window=window)
+            + "."
+        )
+
+
 class Applicability(ContractModel):
     """What must be true of an applicant for an impairment's rules to apply."""
 
@@ -419,6 +490,8 @@ def check_rules(
     `groups` are the rules of each impairment; `references` are (from, to) pairs.
     """
     seen: set[str] = set()
+    # Each rule's impairment and measure: two rules with the same pair are two bands.
+    band_of: dict[str, tuple[str, str]] = {}
     for impairment, rules in groups:
         if not rules:
             raise ValueError(f"{impairment}: an impairment needs at least one rule")
@@ -426,6 +499,7 @@ def check_rules(
             if rule.rule_id in seen:
                 raise ValueError(f"{rule.rule_id}: this rule id is used twice")
             seen.add(rule.rule_id)
+            band_of[rule.rule_id] = (impairment, rule.threshold.measure)
             _check_overlap(rule, rules[:index])
     pairs: set[tuple[str, str]] = set()
     for source, target in references:
@@ -435,6 +509,12 @@ def check_rules(
             raise ValueError(f"{source}: a rule cannot refer to itself")
         if (source, target) in pairs:
             raise ValueError(f"{source}: it refers to {target} twice")
+        if band_of[source] == band_of[target]:
+            # A reference between two rules of an impairment says their ratings add
+            # (`verdict` reads it so); a reading meets one band of a measure only.
+            raise ValueError(
+                f"{source}: it refers to {target}, another band of the same measure"
+            )
         pairs.add((source, target))
 
 
@@ -586,9 +666,24 @@ class ImpairmentSpec(ContractModel):
     unchanged: tuple[OneLine, ...] = Field(min_length=1)
     combinations: tuple[OneLine, ...] = Field(min_length=1)
     rules: tuple[RuleSpec, ...] = Field(min_length=1)
+    # Which reading is rated when the file holds several; printed with the evidence.
+    reading_rules: tuple[ReadingRule, ...] = ()
+
+    def reading_rule(self, measure: str) -> ReadingRule | None:
+        return next(
+            (item for item in self.reading_rules if item.measure == measure), None
+        )
 
     @model_validator(mode="after")
     def _rules_belong_here(self) -> Self:
+        chosen = [item.measure for item in self.reading_rules]
+        known = {measure.key: measure for measure in self.measures}
+        if len(chosen) != len(set(chosen)) or not set(chosen) <= set(known):
+            raise ValueError(
+                f"{self.impairment_id}: one reading rule at most for each of its measures"
+            )
+        if any(known[key].categories for key in chosen):
+            raise ValueError(f"{self.impairment_id}: a status has no reading rule")
         for rule in self.rules:
             if not rule.rule_id.startswith(f"UW-{self.code}-"):
                 raise ValueError(
@@ -663,12 +758,9 @@ class ManualSpec(ContractModel):
         other = self.impairment_of(target_id)
         words = target.threshold.words
         if other is home:
-            replaces = target.threshold.measure == rule.threshold.measure
-            when = (
-                f"the reading is instead {words}"
-                if replaces
-                else f"the record also shows {words}"
-            )
+            # Never another band of the same measure: `check_rules` refuses that.
+            replaces = False
+            when = f"the record also shows {words}"
         else:
             replaces = (
                 other.impairment_id in home.applies.not_with
@@ -707,6 +799,8 @@ class RuleTableImpairment(ContractModel):
     measures: tuple[Measure, ...] = Field(min_length=1)
     # The readings of each measure that meet no rule, and what that means.
     gaps: tuple[Gap, ...] = ()
+    # Which reading is rated when the file holds several of one measure.
+    reading_rules: tuple[ReadingRule, ...] = ()
 
 
 class RuleTableRule(_Rated):

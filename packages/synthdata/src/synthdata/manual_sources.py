@@ -11,6 +11,7 @@ from synthdata.manual_model import (
     Gap,
     KeyQuestion,
     Measure,
+    OtherUnit,
     RuleSpec,
     Source,
     Threshold,
@@ -83,6 +84,9 @@ HBA1C = Measure(
     minimum=Decimal("3.0"),
     maximum=Decimal("20.0"),
     conversion="A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %.",
+    other_units=(
+        OtherUnit(unit="mmol/mol", multiply=Decimal("0.0915"), add=Decimal("2.15")),
+    ),
     meaning="Glycated haemoglobin: the share of haemoglobin carrying glucose, which reflects average blood glucose over about three months.",
 )
 

@@ -1,0 +1,368 @@
+{
+  "case_id": "case-016",
+  "file_name": "case-016.pdf",
+  "summary": "A mixed file: an AUDIT score the manual declines, raised triglycerides, a passport and a recipe.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "id_document",
+      "is_medical": false,
+      "layout": "passport",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "recipe",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 5,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Remy Testcombe",
+      "pages": [
+        1,
+        2,
+        3,
+        5
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 2
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 5,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "14 Placeholder Wharf, Fixturewell, ZZ 00212",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0116",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "remy.testcombe@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-36-7064",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0006808",
+      "pages": [
+        1,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Sasha Demobrook",
+      "pages": [
+        1,
+        3,
+        5
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 5,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "22 Specimen Road, Fixturewell, ZZ 00215",
+      "pages": [
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0116",
+      "pages": [
+        1,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "14 Placeholder Wharf",
+    "22 Specimen Road",
+    "Bar manager",
+    "Demobrook",
+    "Dr Sasha Demobrook",
+    "Example Mutual Life Assurance",
+    "Exampleland Passport Office",
+    "Examplelander",
+    "Fixturewell",
+    "Fixturewell Medical Group",
+    "P-SYN-0001634",
+    "Recipes from the Sample Pantry",
+    "Remy",
+    "Republic of Exampleland",
+    "SP-2026-000116",
+    "Sasha",
+    "Specimen Diagnostics Laboratory",
+    "Testcombe",
+    "ZZ 00212",
+    "ZZ 00215"
+  ],
+  "expected_facts": [
+    {
+      "kind": "reading",
+      "statement": "body mass index 23.5 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 23.5 kg/m2"
+        },
+        {
+          "page_number": 3,
+          "quote": "Body mass index (BMI) 23.5 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 3,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 126 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "2026-09-21 126 80"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 80 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "2026-09-21 126 80"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.3 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "Latest HbA1c 5.3 % on 2026-09-21"
+        },
+        {
+          "page_number": 5,
+          "quote": "HbA1c 5.3 %"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "AUDIT score 24 points",
+      "measure": "audit_score",
+      "rule_ids": [
+        "UW-ALC-003"
+      ],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "AUDIT score 24 points on 2026-09-21"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 124 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 5,
+          "quote": "LDL cholesterol 124 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 96 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 5,
+          "quote": "eGFR 96 mL/min/1.73 m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "fasting triglycerides 210 mg/dL",
+      "measure": "triglycerides",
+      "rule_ids": [
+        "UW-TG-001"
+      ],
+      "places": [
+        {
+          "page_number": 5,
+          "quote": "Fasting triglycerides 210 mg/dL"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-TG-001",
+    "UW-ALC-003"
+  ],
+  "expected_verdict": {
+    "verdict": "decline",
+    "loading_pct": null,
+    "system_reasons": []
+  }
+}

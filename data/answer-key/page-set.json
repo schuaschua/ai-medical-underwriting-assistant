@@ -1,0 +1,1098 @@
+{
+  "documents": [
+    {
+      "case_id": "case-001",
+      "file_name": "case-001.pdf",
+      "mixed": false,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-002",
+      "file_name": "case-002.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "invoice",
+          "is_medical": false,
+          "layout": "invoice",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        },
+        {
+          "page_number": 5,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "payslip",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        },
+        {
+          "page_number": 6,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "utility_bill",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-003",
+      "file_name": "case-003.pdf",
+      "mixed": false,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "blank",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 90,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "edge"
+        },
+        {
+          "page_number": 4,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-004",
+      "file_name": "case-004.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "invoice",
+          "is_medical": false,
+          "layout": "invoice",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-005",
+      "file_name": "case-005.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "recipe",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-006",
+      "file_name": "case-006.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "id_document",
+          "is_medical": false,
+          "layout": "passport",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        },
+        {
+          "page_number": 5,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "handwritten_note",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        }
+      ]
+    },
+    {
+      "case_id": "case-007",
+      "file_name": "case-007.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "recipe",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-008",
+      "file_name": "case-008.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "payslip",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-009",
+      "file_name": "case-009.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "handwritten_note",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 4,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 5,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "payslip",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-010",
+      "file_name": "case-010.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "blank",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 4,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 5,
+          "page_type": "invoice",
+          "is_medical": false,
+          "layout": "invoice",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-011",
+      "file_name": "case-011.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 180,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "edge"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "utility_bill",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-012",
+      "file_name": "case-012.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "id_document",
+          "is_medical": false,
+          "layout": "passport",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-013",
+      "file_name": "case-013.pdf",
+      "mixed": false,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 90,
+          "has_text_layer": true,
+          "kind": "edge"
+        }
+      ]
+    },
+    {
+      "case_id": "case-014",
+      "file_name": "case-014.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "utility_bill",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-015",
+      "file_name": "case-015.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "invoice",
+          "is_medical": false,
+          "layout": "invoice",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-016",
+      "file_name": "case-016.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "id_document",
+          "is_medical": false,
+          "layout": "passport",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "recipe",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        },
+        {
+          "page_number": 5,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-017",
+      "file_name": "case-017.pdf",
+      "mixed": false,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "handwritten_note",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 4,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-018",
+      "file_name": "case-018.pdf",
+      "mixed": false,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "blank",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 3,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-019",
+      "file_name": "case-019.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "payslip",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-020",
+      "file_name": "case-020.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "handwritten_note",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 5,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "recipe",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-021",
+      "file_name": "case-021.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "id_document",
+          "is_medical": false,
+          "layout": "passport",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        },
+        {
+          "page_number": 3,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "blank",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": false,
+          "kind": "edge"
+        },
+        {
+          "page_number": 4,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 5,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        }
+      ]
+    },
+    {
+      "case_id": "case-022",
+      "file_name": "case-022.pdf",
+      "mixed": true,
+      "pages": [
+        {
+          "page_number": 1,
+          "page_type": "application_form",
+          "is_medical": true,
+          "layout": "application_form",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 2,
+          "page_type": "attending_physician_statement",
+          "is_medical": true,
+          "layout": "attending_physician_statement",
+          "rotation": 0,
+          "drawn_rotation": 90,
+          "has_text_layer": true,
+          "kind": "edge"
+        },
+        {
+          "page_number": 3,
+          "page_type": "lab_report",
+          "is_medical": true,
+          "layout": "lab_report",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "medical"
+        },
+        {
+          "page_number": 4,
+          "page_type": "other",
+          "is_medical": false,
+          "layout": "utility_bill",
+          "rotation": 0,
+          "drawn_rotation": 0,
+          "has_text_layer": true,
+          "kind": "non_medical"
+        }
+      ]
+    }
+  ]
+}

@@ -30,8 +30,13 @@ only to an applicant with type 2 diabetes mellitus on file", "Applies to any
 applicant with this reading"). A rule is applied only where that sentence is
 met by the case's facts: an HbA1c of 5.2 % is in the band of a diabetes
 rule, and the applicant has no diabetes on file. A definition without the
-sentence is applied to nobody. Whether a real model reads the manual this
-way is checked in Azure.
+sentence is applied to nobody. And where a definition says which of several
+readings counts ("Where the file holds several readings, the most recent of
+the last 12 months counts"), the stand-in rates that one alone, so that it
+cites one band: a fact's day is the date its statement ends with, and the
+last 12 months are counted back from the latest day any fact names. It
+converts no units: a reading in another unit than the band's is not read.
+Whether a real model reads the manual this way is checked in Azure.
 
 What the stand-in proposes is only a proposal: `verdict`'s domain code
 decides what is stored. The flaws below let tests see it refuse.
@@ -41,16 +46,21 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from decimal import Decimal
+from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import Any
 
 from contracts.rules import RULE_DEFINITION_PATTERN, RULE_ID_PATTERN
+from synthdata.case_parts import months_before
 from synthdata.manual_model import (
     APPLIES_ON_FILE,
     APPLIES_TO_ANY,
     APPLIES_UNLESS,
+    COUNTS_WORDS,
     NOT_ON_A_READING,
+    OF_THE_LAST,
+    SEVERAL_READINGS,
 )
 
 # The name of the structured output `verdict` asks for, and the three tools
@@ -146,7 +156,6 @@ _POINTER = re.compile(
 _WHEN_FORMS: tuple[re.Pattern[str], ...] = (
     re.compile(r"the applicant (?:also|instead) has .+? with (?P<words>.+)"),
     re.compile(r"the record also shows (?P<words>.+)"),
-    re.compile(r"the reading is instead (?P<words>.+)"),
 )
 
 
@@ -241,6 +250,10 @@ class Definition:
     any_reading: bool = False
     # Impairments that rule this one out when they are on file.
     unless: tuple[str, ...] = ()
+    # Which of several readings counts, as the definition says (a key of
+    # `COUNTS_WORDS`), and within how many months; None when it does not say.
+    choose: str | None = None
+    within_months: int | None = None
 
 
 def _pointer(found: re.Match[str]) -> Pointer:
@@ -282,6 +295,41 @@ def _applicability(words: str) -> dict[str, Any]:
     }
 
 
+# The sentence of a definition that says which of several readings counts
+# (`manual_model.ReadingRule.definition_words`). The longer wording is looked
+# for first: "the most recent" must not be read out of another one.
+_SEVERAL = re.compile(
+    re.escape(SEVERAL_READINGS)
+    .replace(
+        re.escape("{which}"),
+        "(?P<which>"
+        + "|".join(
+            re.escape(words) for words in sorted(COUNTS_WORDS.values(), key=len)[::-1]
+        )
+        + ")",
+    )
+    .replace(
+        re.escape("{window}"),
+        "(?:"
+        + re.escape(OF_THE_LAST).replace(re.escape("{months}"), r"(?P<months>\d+)")
+        + ")?",
+    )
+    + r"\."
+)
+
+
+def _reading_rule(words: str) -> dict[str, Any]:
+    """Which of several readings a definition says counts; nothing when it does not say."""
+    found = _SEVERAL.search(words)
+    if found is None:
+        return {}
+    choose = next(
+        key for key, value in COUNTS_WORDS.items() if value == found.group("which")
+    )
+    months = found.group("months")
+    return {"choose": choose, "within_months": int(months) if months else None}
+
+
 def definitions_in(text: str) -> list[Definition]:
     """Every rule a text defines, read from its words. A rule that is only mentioned is not one."""
     # A layout reading breaks a paragraph into lines; the words are the same.
@@ -309,6 +357,7 @@ def definitions_in(text: str) -> list[Definition]:
                 impairment=impairment.group("name") if impairment else None,
                 band=band_of(threshold.group("words")) if threshold else None,
                 **_applicability(words),
+                **_reading_rule(words),
                 effect=effect,
                 debit_pct=debit_pct,
                 pointers=tuple(_pointer(found) for found in _POINTER.finditer(words)),
@@ -564,12 +613,66 @@ def _applies(
     return rule.any_reading
 
 
+_ON_A_DAY = re.compile(r" on (\d{4}-\d{2}-\d{2})$")
+
+
+def _day_of(statement: str) -> date | None:
+    """The day a fact says its reading was taken: the date its statement ends with."""
+    found = _ON_A_DAY.search(statement.strip())
+    return date.fromisoformat(found.group(1)) if found else None
+
+
+def _counting(
+    rule: Definition, band: Band, facts: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """The facts whose reading counts by the rule's own sentence, if it is in the band.
+
+    The readings of the band's measure are taken from every fact, those older
+    than the sentence allows are left out, and the one it names is rated: the
+    most recent, the highest, the lowest, or the average of them all. A
+    reading with no day is taken as of the latest day any fact names.
+    """
+    days = [day for fact in facts if (day := _day_of(fact["statement"])) is not None]
+    today = max(days, default=date.min)
+    stated = [
+        (fact["fact_id"], reading, _day_of(fact["statement"]) or today)
+        for fact in facts
+        if isinstance(reading := reading_of(fact["statement"], band), Decimal)
+    ]
+    if rule.within_months is not None and days:
+        oldest = months_before(today, rule.within_months)
+        stated = [item for item in stated if item[2] >= oldest]
+    if not stated:
+        return []
+    readings = [reading for _, reading, _ in stated]
+    if rule.choose == "average":
+        places = max(
+            -int(end.as_tuple().exponent)
+            for end in (band.lower, band.upper)
+            if end is not None
+        )
+        counted = (sum(readings, Decimal(0)) / len(readings)).quantize(
+            Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP
+        )
+        return [fact_id for fact_id, _, _ in stated] if band.holds(counted) else []
+    if rule.choose == "most_recent":
+        latest = max(day for _, _, day in stated)
+        counted = next(reading for _, reading, day in stated if day == latest)
+    else:
+        counted = max(readings) if rule.choose == "highest" else min(readings)
+    if not band.holds(counted):
+        return []
+    return [fact_id for fact_id, reading, _ in stated if reading == counted]
+
+
 def _facts_meeting(
     rule: Definition, facts: Sequence[Mapping[str, Any]], seen: Conversation
 ) -> list[str]:
     """The ids of the facts a rule applies to; none when it does not apply."""
-    if not _applies(rule, facts, seen):
+    if rule.band is None or not _applies(rule, facts, seen):
         return []
+    if rule.choose is not None:
+        return _counting(rule, rule.band, facts)
     return [fact["fact_id"] for fact in facts if meets(fact["statement"], rule.band)]
 
 
@@ -599,7 +702,11 @@ def _to_read(seen: Conversation) -> list[str]:
         if fact is None:
             continue
         for rule in definitions:
-            if meets(fact["statement"], rule.band) and _applies(rule, facts, seen):
+            # By the rule's own sentence the reading that counts may be another
+            # fact's, or the average of several: the rule is read all the same.
+            if (
+                rule.choose is not None or meets(fact["statement"], rule.band)
+            ) and _facts_meeting(rule, facts, seen):
                 wanted.append(rule.rule_id)
     for rule_id, rule in seen.read.items():
         # A rule the facts do not meet is not followed.

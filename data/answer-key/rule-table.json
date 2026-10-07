@@ -1,7 +1,7 @@
 {
   "manual_file": "underwriting-manual.pdf",
   "manual_title": "Synthetic Underwriting Manual",
-  "page_count": 211,
+  "page_count": 212,
   "notice": "The debit percentages and the decisions to decline are invented for this synthetic manual. The thresholds follow the public source named in each rule, except the edges a rule marks as this manual's own.",
   "contents_page": 2,
   "sections": [
@@ -208,17 +208,17 @@
     {
       "number": "41",
       "title": "Melanoma of the skin",
-      "first_page": 194
+      "first_page": 195
     },
     {
       "number": "42",
       "title": "Glossary",
-      "first_page": 199
+      "first_page": 200
     },
     {
       "number": "43",
       "title": "Public sources",
-      "first_page": 205
+      "first_page": 206
     }
   ],
   "impairments": [
@@ -245,10 +245,24 @@
           "minimum": "3.0",
           "maximum": "20.0",
           "categories": [],
-          "conversion": "A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %."
+          "conversion": "A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %.",
+          "other_units": [
+            {
+              "unit": "mmol/mol",
+              "multiply": "0.0915",
+              "add": "2.15"
+            }
+          ]
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": [
+        {
+          "measure": "hba1c",
+          "choose": "most_recent",
+          "within_months": 12
+        }
+      ]
     },
     {
       "impairment_id": "type_1_diabetes",
@@ -273,10 +287,24 @@
           "minimum": "3.0",
           "maximum": "20.0",
           "categories": [],
-          "conversion": "A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %."
+          "conversion": "A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %.",
+          "other_units": [
+            {
+              "unit": "mmol/mol",
+              "multiply": "0.0915",
+              "add": "2.15"
+            }
+          ]
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": [
+        {
+          "measure": "hba1c",
+          "choose": "most_recent",
+          "within_months": 12
+        }
+      ]
     },
     {
       "impairment_id": "prediabetes",
@@ -302,7 +330,14 @@
           "minimum": "3.0",
           "maximum": "20.0",
           "categories": [],
-          "conversion": "A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %."
+          "conversion": "A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %.",
+          "other_units": [
+            {
+              "unit": "mmol/mol",
+              "multiply": "0.0915",
+              "add": "2.15"
+            }
+          ]
         }
       ],
       "gaps": [
@@ -340,7 +375,8 @@
           },
           "meaning": "the level that defines diabetes; ask whether the diagnosis has been made, and read the diabetes section once it has"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "build",
@@ -363,7 +399,8 @@
           "minimum": "10.0",
           "maximum": "80.0",
           "categories": [],
-          "conversion": "From pounds and inches: weight in pounds times 703, divided by the square of height in inches."
+          "conversion": "From pounds and inches: weight in pounds times 703, divided by the square of height in inches.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -384,7 +421,8 @@
           },
           "meaning": "no rule; no debit for build in this range"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "raised_ldl_cholesterol",
@@ -407,7 +445,14 @@
           "minimum": "0",
           "maximum": "1000",
           "categories": [],
-          "conversion": "A result in mmol/L is multiplied by 38.67 to give mg/dL: 4.14 mmol/L is 160 mg/dL."
+          "conversion": "A result in mmol/L is multiplied by 38.67 to give mg/dL: 4.14 mmol/L is 160 mg/dL.",
+          "other_units": [
+            {
+              "unit": "mmol/L",
+              "multiply": "38.67",
+              "add": "0"
+            }
+          ]
         }
       ],
       "gaps": [
@@ -428,7 +473,8 @@
           },
           "meaning": "no rule; no debit for LDL cholesterol"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "raised_triglycerides",
@@ -451,7 +497,8 @@
           "minimum": "0",
           "maximum": "10000",
           "categories": [],
-          "conversion": "A result in mmol/L is multiplied by 88.57 to give mg/dL: 2.0 mmol/L is about 177 mg/dL."
+          "conversion": "A result in mmol/L is multiplied by 88.57 to give mg/dL: 2.0 mmol/L is about 177 mg/dL.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -472,7 +519,8 @@
           },
           "meaning": "no rule; no debit for triglycerides"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "gout",
@@ -495,10 +543,12 @@
           "minimum": "0.0",
           "maximum": "25.0",
           "categories": [],
-          "conversion": "A result in micromol/L is divided by 59.48 to give mg/dL: 357 micromol/L is 6.0 mg/dL."
+          "conversion": "A result in micromol/L is divided by 59.48 to give mg/dL: 357 micromol/L is 6.0 mg/dL.",
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "hypothyroidism",
@@ -521,10 +571,18 @@
           "minimum": "0.0",
           "maximum": "500.0",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": [
+        {
+          "measure": "tsh",
+          "choose": "most_recent",
+          "within_months": 18
+        }
+      ]
     },
     {
       "impairment_id": "hypertension",
@@ -547,7 +605,8 @@
           "minimum": "50",
           "maximum": "300",
           "categories": [],
-          "conversion": "A reading in kPa is multiplied by 7.5 to give mmHg."
+          "conversion": "A reading in kPa is multiplied by 7.5 to give mmHg.",
+          "other_units": []
         },
         {
           "key": "diastolic_blood_pressure",
@@ -558,7 +617,8 @@
           "minimum": "20",
           "maximum": "200",
           "categories": [],
-          "conversion": "A reading in kPa is multiplied by 7.5 to give mmHg."
+          "conversion": "A reading in kPa is multiplied by 7.5 to give mmHg.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -596,6 +656,18 @@
           },
           "meaning": "no rule of its own; the systolic rules decide the rating"
         }
+      ],
+      "reading_rules": [
+        {
+          "measure": "systolic_blood_pressure",
+          "choose": "average",
+          "within_months": 12
+        },
+        {
+          "measure": "diastolic_blood_pressure",
+          "choose": "highest",
+          "within_months": 12
+        }
       ]
     },
     {
@@ -619,10 +691,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "heart_failure",
@@ -645,10 +719,12 @@
           "minimum": "5",
           "maximum": "90",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "atrial_fibrillation",
@@ -671,10 +747,12 @@
           "minimum": "0",
           "maximum": "9",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "aortic_stenosis",
@@ -697,7 +775,8 @@
           "minimum": "0.5",
           "maximum": "8.0",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -718,7 +797,8 @@
           },
           "meaning": "no rule; thickening of the valve without narrowing"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "hypertrophic_cardiomyopathy",
@@ -741,7 +821,8 @@
           "minimum": "5",
           "maximum": "60",
           "categories": [],
-          "conversion": "A thickness in cm is multiplied by ten to give mm."
+          "conversion": "A thickness in cm is multiplied by ten to give mm.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -762,7 +843,8 @@
           },
           "meaning": "below the diagnostic thickness; no rule; send to a person if the diagnosis is stated all the same"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "abdominal_aortic_aneurysm",
@@ -785,7 +867,8 @@
           "minimum": "1.0",
           "maximum": "15.0",
           "categories": [],
-          "conversion": "A diameter in mm is divided by ten to give cm."
+          "conversion": "A diameter in mm is divided by ten to give cm.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -806,7 +889,8 @@
           },
           "meaning": "no rule; not an aneurysm"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "peripheral_artery_disease",
@@ -829,7 +913,8 @@
           "minimum": "0.00",
           "maximum": "3.00",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -849,6 +934,13 @@
             "words": "resting ankle-brachial index above 0.90 and up to 1.40"
           },
           "meaning": "no rule; a normal or borderline index"
+        }
+      ],
+      "reading_rules": [
+        {
+          "measure": "ankle_brachial_index",
+          "choose": "lowest",
+          "within_months": null
         }
       ]
     },
@@ -873,7 +965,8 @@
           "minimum": "0",
           "maximum": "100",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -894,7 +987,8 @@
           },
           "meaning": "no rule; mild narrowing"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "stroke",
@@ -917,10 +1011,12 @@
           "minimum": "0",
           "maximum": "42",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "venous_thromboembolism",
@@ -943,10 +1039,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "tobacco_use",
@@ -982,7 +1080,8 @@
               "label": "never smoked"
             }
           ],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         },
         {
           "key": "pack_years",
@@ -993,7 +1092,8 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": "Cigarettes a day divided by 20, times the years smoked: 10 a day for 30 years is 15 pack-years."
+          "conversion": "Cigarettes a day divided by 20, times the years smoked: 10 a day for 30 years is 15 pack-years.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1031,7 +1131,8 @@
           },
           "meaning": "no rule for the lifetime total; the status rules still apply"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "alcohol_use",
@@ -1054,7 +1155,8 @@
           "minimum": "0",
           "maximum": "40",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1075,7 +1177,8 @@
           },
           "meaning": "no rule; the low-risk zone"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "long_term_opioid_therapy",
@@ -1098,10 +1201,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": "Multiply each medicine's daily milligrams by its factor and add the results: morphine 1, hydrocodone 1, oxycodone 1.5, hydromorphone 4, codeine 0.15, tramadol 0.1. A fentanyl patch counts 2.4 for each microgram an hour."
+          "conversion": "Multiply each medicine's daily milligrams by its factor and add the results: morphine 1, hydrocodone 1, oxycodone 1.5, hydromorphone 4, codeine 0.15, tramadol 0.1. A fentanyl patch counts 2.4 for each microgram an hour.",
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "asthma",
@@ -1124,10 +1229,12 @@
           "minimum": "5",
           "maximum": "160",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "copd",
@@ -1150,10 +1257,12 @@
           "minimum": "5",
           "maximum": "160",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "obstructive_sleep_apnoea",
@@ -1176,7 +1285,8 @@
           "minimum": "0",
           "maximum": "250",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1197,7 +1307,8 @@
           },
           "meaning": "no rule; not sleep apnoea"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "chronic_kidney_disease",
@@ -1220,7 +1331,8 @@
           "minimum": "0",
           "maximum": "200",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1240,6 +1352,13 @@
             "words": "eGFR of 60 mL/min/1.73 m2 or more"
           },
           "meaning": "no rule of this section; albumin in the urine is read in its own section"
+        }
+      ],
+      "reading_rules": [
+        {
+          "measure": "egfr",
+          "choose": "most_recent",
+          "within_months": null
         }
       ]
     },
@@ -1264,7 +1383,8 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": "A ratio in mg/mmol is multiplied by 8.84 to give mg/g: 3.4 mg/mmol is 30 mg/g and 34 mg/mmol is 300 mg/g."
+          "conversion": "A ratio in mg/mmol is multiplied by 8.84 to give mg/g: 3.4 mg/mmol is 30 mg/g and 34 mg/mmol is 300 mg/g.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1285,7 +1405,8 @@
           },
           "meaning": "no rule; a normal ratio"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "chronic_hepatitis_b",
@@ -1308,10 +1429,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": "A result in copies/mL is divided by 5 to give IU/mL, unless the laboratory report states its own factor."
+          "conversion": "A result in copies/mL is divided by 5 to give IU/mL, unless the laboratory report states its own factor.",
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "chronic_hepatitis_c",
@@ -1334,10 +1457,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "fatty_liver_disease",
@@ -1360,10 +1485,12 @@
           "minimum": "0.00",
           "maximum": null,
           "categories": [],
-          "conversion": "The index is age in years times AST, divided by the platelet count in thousands per microlitre times the square root of ALT."
+          "conversion": "The index is age in years times AST, divided by the platelet count in thousands per microlitre times the square root of ALT.",
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "cirrhosis",
@@ -1386,10 +1513,12 @@
           "minimum": "6",
           "maximum": "40",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "ulcerative_colitis",
@@ -1412,10 +1541,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": "A result in mg/kg is the same number in mcg/g."
+          "conversion": "A result in mg/kg is the same number in mcg/g.",
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "anaemia",
@@ -1438,7 +1569,8 @@
           "minimum": "2.0",
           "maximum": "25.0",
           "categories": [],
-          "conversion": "A result in g/L is divided by ten to give g/dL."
+          "conversion": "A result in g/L is divided by ten to give g/dL.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1459,7 +1591,8 @@
           },
           "meaning": "no rule; mild anaemia or none"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "haemophilia",
@@ -1482,7 +1615,8 @@
           "minimum": "0",
           "maximum": "250",
           "categories": [],
-          "conversion": "A level given as a percentage of normal is the same number in IU/dL."
+          "conversion": "A level given as a percentage of normal is the same number in IU/dL.",
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1503,7 +1637,8 @@
           },
           "meaning": "no rule; not haemophilia by factor level"
         }
-      ]
+      ],
+      "reading_rules": []
     },
     {
       "impairment_id": "hiv_infection",
@@ -1526,10 +1661,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": "A count in cells per microlitre is the same number in cells/mm3."
+          "conversion": "A count in cells per microlitre is the same number in cells/mm3.",
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "depression",
@@ -1552,10 +1689,18 @@
           "minimum": "0",
           "maximum": "27",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": [
+        {
+          "measure": "phq9_score",
+          "choose": "most_recent",
+          "within_months": 12
+        }
+      ]
     },
     {
       "impairment_id": "epilepsy",
@@ -1578,10 +1723,12 @@
           "minimum": "0",
           "maximum": null,
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "rheumatoid_arthritis",
@@ -1604,10 +1751,12 @@
           "minimum": "0.0",
           "maximum": "10.0",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     },
     {
       "impairment_id": "osteoporosis",
@@ -1630,7 +1779,8 @@
           "minimum": "-7.0",
           "maximum": "7.0",
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
       "gaps": [
@@ -1651,6 +1801,13 @@
           },
           "meaning": "no rule; bone density that is normal or only reduced"
         }
+      ],
+      "reading_rules": [
+        {
+          "measure": "bone_density_t_score",
+          "choose": "lowest",
+          "within_months": 36
+        }
       ]
     },
     {
@@ -1658,7 +1815,7 @@
       "code": "MEL",
       "name": "Melanoma of the skin",
       "section": "41",
-      "first_page": 194,
+      "first_page": 195,
       "applies": {
         "basis": "diagnosis",
         "words": "An invasive melanoma of the skin has been removed, with no spread to lymph nodes or beyond.",
@@ -1674,10 +1831,12 @@
           "minimum": "0.0",
           "maximum": null,
           "categories": [],
-          "conversion": null
+          "conversion": null,
+          "other_units": []
         }
       ],
-      "gaps": []
+      "gaps": [],
+      "reading_rules": []
     }
   ],
   "rules": [
@@ -2847,7 +3006,7 @@
       "impairment_id": "hypertension",
       "impairment": "Hypertension",
       "section": "10",
-      "manual_page": 52,
+      "manual_page": 53,
       "edges": [
         {
           "value": "160",
@@ -5157,7 +5316,7 @@
       "impairment_id": "chronic_kidney_disease",
       "impairment": "Chronic kidney disease",
       "section": "27",
-      "manual_page": 136,
+      "manual_page": 137,
       "edges": [
         {
           "value": "15",
@@ -6665,7 +6824,7 @@
       "impairment_id": "osteoporosis",
       "impairment": "Osteoporosis",
       "section": "40",
-      "manual_page": 192,
+      "manual_page": 193,
       "edges": [
         {
           "value": "-2.5",
@@ -6713,7 +6872,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 196,
+      "manual_page": 197,
       "edges": [
         {
           "value": "1.0",
@@ -6753,7 +6912,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 196,
+      "manual_page": 197,
       "edges": [
         {
           "value": "1.0",
@@ -6797,7 +6956,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 196,
+      "manual_page": 197,
       "edges": [
         {
           "value": "2.0",
@@ -6849,7 +7008,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 196,
+      "manual_page": 197,
       "edges": [
         {
           "value": "4.0",
