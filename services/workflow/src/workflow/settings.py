@@ -14,7 +14,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from contracts.enums import ClassifierContender, RetrieverConfig
 from workflow.domain.case_list import DEFAULT_CASE_LIST_LIMIT
-from workflow.domain.cases import DEFAULT_AUDIT_TRAIL_LIMIT
+from workflow.domain.cases import (
+    DEFAULT_AUDIT_TRAIL_LIMIT,
+    DEFAULT_AVAILABLE_RETRIEVER_CONFIGS,
+)
 from workflow.domain.gate import DEFAULT_GATE_THRESHOLD
 from workflow.domain.queue import DEFAULT_PAGE_QUEUE_LIMIT
 
@@ -118,13 +121,14 @@ class Settings(BaseSettings):
         RetrieverConfig.R3
     ]
     # AD-11: the ladder rows a case may run with in this build: the ones
-    # `verdict` and `retrieval` can answer (VERDICT_* and RETRIEVAL_* hold the
-    # same list for now: `r3`). A start, or a request for one more verdict
-    # run, that names another row is refused with `retriever_not_available`
-    # at once, not after every stage and decision.
+    # `verdict` and `retrieval` can answer (each names them in its own code;
+    # a test outside `services/` holds the three lists equal). A start, or a
+    # request for one more verdict run, that names another row is refused
+    # with `retriever_not_available` at once, not after every stage and
+    # decision.
     available_retriever_configs: Annotated[
         list[RetrieverConfig], Field(min_length=1)
-    ] = [RetrieverConfig.R3]
+    ] = sorted(DEFAULT_AVAILABLE_RETRIEVER_CONFIGS)
 
     # AD-7: the gate's threshold. A page classified with this confidence or
     # more is sent on by its label; one below it goes to triage. It is used

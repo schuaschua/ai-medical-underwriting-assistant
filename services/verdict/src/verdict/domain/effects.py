@@ -1,8 +1,8 @@
 """Read a rule's rating off its text, as a run read it (AD-15).
 
 A guard against a made-up number, not an interpreter of the manual. The
-manual prints each rule's definition as `Rule <rule_id>: ...` and names its
-rating in one of three forms: "Probable rating: a debit of +50 %",
+manual prints each rule's definition as one paragraph, `Rule <rule_id>: ...`,
+and names its rating in one of three forms: "Probable rating: a debit of +50 %",
 "Probable rating: decline" (also "decline as a postponement") and
 "Probable rating: no debit, +0 %". Only these are read. A text that names no
 rating in one of them bears out no reason.
@@ -27,16 +27,25 @@ _RATING = re.compile(
 
 
 def definition_of(text: str, rule_id: str) -> str | None:
-    """The part of `text` that defines `rule_id`: from its marker to the next rule's, or the end.
+    """The part of `text` that defines `rule_id`: from its marker to the end of its own paragraph.
 
-    None when the text does not define the rule. A rule that is only
-    mentioned ("see rule UW-HT-002") is not defined there.
+    It ends earlier where the next rule's marker stands in the same
+    paragraph. A text that holds more than one rule (a `fixed` chunk of row
+    `r1`) has its paragraphs a line break apart: what is printed after the
+    definition's paragraph, a worked example say, is not the rule's, and a
+    rating named there bears out nothing. None when the text does not
+    define the rule. A rule that is only mentioned ("see rule UW-HT-002")
+    is not defined there.
     """
-    markers = list(_DEFINITION.finditer(text))
-    for place, marker in enumerate(markers):
-        if marker.group(1) == rule_id:
-            end = markers[place + 1].start() if place + 1 < len(markers) else len(text)
-            return text[marker.start() : end]
+    for marker in _DEFINITION.finditer(text):
+        if marker.group(1) != rule_id:
+            continue
+        rest = text[marker.end() :].splitlines()[:1]
+        own = rest[0] if rest else ""
+        following = _DEFINITION.search(own)
+        if following is not None:
+            own = own[: following.start()]
+        return text[marker.start() : marker.end()] + own
     return None
 
 

@@ -392,10 +392,13 @@ async def _stored(
             chunk_table.c.chunk_id,
             chunk_table.c.content_hash,
             chunk_table.c.manual_page,
+            chunk_table.c.rule_ids,
         ).where(chunk_table.c.chunk_set == chunk_set.value)
     )
     return {
-        row.chunk_id: StoredChunk(row.chunk_id, row.content_hash, row.manual_page)
+        row.chunk_id: StoredChunk(
+            row.chunk_id, row.content_hash, row.manual_page, tuple(row.rule_ids)
+        )
         for row in result
     }
 

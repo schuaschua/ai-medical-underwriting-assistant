@@ -8,9 +8,14 @@ import re
 
 from synthdata_stack import REPOSITORY_ROOT
 
+from contracts.enums import RetrieverConfig
+from retrieval.domain.rows import BUILT_ROWS
 from synthdata.foundry_standin import (
     Mode,
 )
+from verdict.domain.run import RUNNABLE_RETRIEVER_CONFIGS
+from workflow.domain.cases import DEFAULT_AVAILABLE_RETRIEVER_CONFIGS
+from workflow.settings import Settings as WorkflowSettings
 
 # --- The stand-in never ships ------------------------------------------------------------
 
@@ -49,3 +54,18 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
         "low_confidence",
         "invalid_answer",
     ]
+    # Story 3.2: no service imports another, so each names the ladder rows a
+    # case may run with in its own code: `retrieval`'s row table, `verdict`'s
+    # runnable rows and `workflow`'s setting. Held equal here, and with the
+    # list the deploy passes to `workflow`.
+    built = frozenset({RetrieverConfig.R1, RetrieverConfig.R2, RetrieverConfig.R3})
+    assert BUILT_ROWS == built
+    assert RUNNABLE_RETRIEVER_CONFIGS == built
+    assert DEFAULT_AVAILABLE_RETRIEVER_CONFIGS == built
+    assert frozenset(WorkflowSettings().available_retriever_configs) == built
+    (deployed,) = re.findall(
+        r"^available_retriever_configs\s*=\s*(\[[^\]]*\])",
+        (REPOSITORY_ROOT / "infra/demo/app/terraform.tfvars").read_text(),
+        re.MULTILINE,
+    )
+    assert set(re.findall(r"r[1-6]", deployed)) == {row.value for row in built}

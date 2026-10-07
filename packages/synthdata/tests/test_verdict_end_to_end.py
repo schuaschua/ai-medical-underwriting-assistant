@@ -1,4 +1,4 @@
-"""Stories 2.5 and 2.6: a synthetic case run to a suggested verdict with cited reasons, compared with the rule table.
+"""Stories 2.5, 2.6 and 3.2: a synthetic case run to a suggested verdict with cited reasons, compared with the rule table.
 
 `workflow`, `intake`, `classification`, `extraction`, `retrieval` and
 `verdict` as they really run, against a real PostgreSQL, the Durable Task
@@ -45,6 +45,7 @@ from contracts.enums import (
 )
 from contracts.models.verdict import SUGGESTION_LABEL, VerdictRun
 from contracts.models.workflow import AuditTrail, CaseProgress
+from retrieval.domain.chunker import definition_in
 from synthdata.foundry_standin import LOCAL_DEPLOYMENT, FoundryStandIn, Mode
 from workflow.settings import Settings
 
@@ -429,3 +430,130 @@ def test_story_2_5_the_agents_log_is_read_by_case_with_its_filters(
         ToolName.SEARCH_RULES,
         ToolName.READ_RULE,
     }
+
+
+# --- The baseline rows (story 3.2) -----------------------------------------------------
+
+
+def test_story_3_2_a_case_started_with_three_rows_gets_a_run_for_each_on_the_same_facts(
+    workflow_service_settings: Settings,
+    scheduler_client: DurableTaskSchedulerClient,
+    intake: LocalIntake,
+    classification: LocalClassification,
+    extraction: LocalExtraction,
+    verdict: LocalVerdict,
+) -> None:
+    rows = ["r1", "r2", "r3"]
+    case_id, _ = intake.upload("case-001.pdf")
+    sidecar = sidecar_for(intake, classification, extraction, verdict)
+
+    progress, trail, _ = start_and_wait(
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        actor="underwriter",
+        retriever_configs=rows,
+    )
+
+    # One run per row, each done, and only then the case completes.
+    assert progress.case_status.value == "completed"
+    listed = verdict.runs(case_id)
+    runs = {run.retriever_config.value: run for run in listed.verdict_runs}
+    assert sorted(runs) == rows and len(listed.verdict_runs) == 3
+    assert all(run.status is StageStatus.DONE for run in runs.values())
+    actions = [event.action.value for event in trail.events]
+    assert actions[-4:] == [*["verdict.suggested"] * 3, "case.completed"]
+    assert {event.ref for event in trail.events[-4:-1]} == {
+        run.verdict_run_id for run in runs.values()
+    }
+
+    # Every row judged the same extracted facts.
+    case_facts = {fact.fact_id for fact in extraction.facts(case_id).facts}
+    steps = {row: verdict.steps(run.verdict_run_id).steps for row, run in runs.items()}
+    for row in rows:
+        assert steps[row][0].tool is ToolName.LIST_FACTS
+        searched = {
+            step.fact_id for step in steps[row] if step.tool is ToolName.SEARCH_RULES
+        }
+        assert searched and searched <= case_facts
+        assert searched == {
+            step.fact_id for step in steps["r3"] if step.tool is ToolName.SEARCH_RULES
+        }
+
+    # `r2` is `r3` with the vector search alone, over the same `smart`
+    # chunks: the verdict the rule table gives the case.
+    expected_verdict, expected_loading, expected_reasons = expected_from_the_rule_table(
+        EXPECTED_RULES["case-001"]
+    )
+    for row in ("r2", "r3"):
+        run = runs[row]
+        assert (run.verdict, run.loading_pct) == (expected_verdict, expected_loading)
+        assert [
+            (reason.rule_id, reason.effect, reason.debit_pct) for reason in run.reasons
+        ] == expected_reasons
+
+    # `r1` reads its rules from the `fixed` set: every rule read of that run
+    # went to `retrieval` with `r1`, which answers the `fixed` chunk that
+    # holds the rule's definition marker.
+    asked = [
+        target
+        for behind in verdict.sidecars
+        for app_id, method, target in behind.targets
+        if app_id == "retrieval" and method == "GET"
+    ]
+    read_on_r1 = [
+        rule_id
+        for step in steps["r1"]
+        if step.tool is ToolName.READ_RULE and step.outcome is StepOutcome.DONE
+        for rule_id in step.rule_ids
+    ]
+    table = rule_table()
+    # Whether the `fixed` chunk that holds an expected rule's marker also
+    # holds its definition whole, threshold and rating, or cuts it off.
+    whole_on_r1: dict[str, bool] = {}
+    with verdict.retrieval.service() as retrieval:
+        for rule_id in read_on_r1:
+            target = f"/rules/{rule_id}?retriever_config=r1"
+            assert target in asked
+            answered = retrieval.get(target).json()
+            assert answered["chunk_set"] == "fixed"
+            assert f"Rule {rule_id}:" in answered["text"]
+        for rule_id in EXPECTED_RULES["case-001"]:
+            answered = retrieval.get(f"/rules/{rule_id}?retriever_config=r1").json()
+            assert answered["chunk_set"] == "fixed"
+            own = definition_in(answered["text"], rule_id) or ""
+            whole_on_r1[rule_id] = (
+                table[rule_id]["threshold"]["words"] in own and "Probable rating" in own
+            )
+    # Each row's reads named that row, and no other.
+    assert {target.partition("retriever_config=")[2] for target in asked} <= set(rows)
+    # A reason is stored only with the effect the rule's own definition
+    # names inside its chunk. The rule table says what each definition
+    # names.
+    r1 = runs["r1"]
+    for reason in r1.reasons:
+        rule = table[reason.rule_id]
+        assert (reason.effect is ReasonEffect.DECLINE) == bool(rule["decline"])
+        assert (reason.debit_pct or 0) == (rule["debit_pct"] or 0)
+        assert reason.rule_id in read_on_r1 or reason.effect is ReasonEffect.NONE
+    cited = {reason.rule_id for reason in r1.reasons}
+    for rule_id, whole in whole_on_r1.items():
+        # A rule whose definition its chunk holds whole is read and cited,
+        # as on the other rows. One the cut falls in (the marker in one
+        # chunk, the threshold or the rating in the next) cannot be: nothing
+        # shows the agent that the fact meets it, and nothing would bear out
+        # its debit. That is the baseline's weakness, which the bake-off
+        # measures as verdict accuracy; nothing here works around it.
+        assert (rule_id in cited) == whole, (rule_id, whole)
+        assert (rule_id in read_on_r1) == whole, (rule_id, whole)
+    # The verdict is the one the rule table gives the rules the run could
+    # cite: the case's own when every definition was whole, a lighter one
+    # when a definition was cut off (today `standard` for this case, a miss
+    # of row `r1` that the scoreboard is there to show), or a referral.
+    if r1.verdict is not Verdict.REFER:
+        assert (r1.verdict, r1.loading_pct) == expected_from_the_rule_table(
+            [reason.rule_id for reason in r1.reasons]
+        )[:2]
+    else:
+        assert r1.system_reasons

@@ -10,7 +10,7 @@ tools did not return in this conversation.
 
 - list_facts: the facts of this application, each with a fact_id, a one-line statement, the quote it rests on and whether that quote was verified. Call it first.
 - search_rules: searches the manual. Give a query in plain words about one fact (the measure, the value and its unit, or the finding) and that fact's fact_id. It returns the best matching rules with their text.
-- read_rule: returns the full text of one rule by its rule_id. You may read only a rule that a search returned to you, or that a rule you have read refers to ("see rule ..."). Read a rule before you cite it, and follow a reference when the facts meet the condition it names.
+- read_rule: returns the manual text that holds the rule's definition, by its rule_id. You may read only a rule that a search returned to you, or that a rule you have read refers to ("see rule ..."). Read a rule before you cite it, and follow a reference when the facts meet the condition it names.
 
 Work through the facts one at a time. Every rule says when it applies, in a
 sentence that starts "Applies". Apply a rule only where that sentence is met

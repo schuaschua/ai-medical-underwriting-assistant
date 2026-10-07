@@ -9,6 +9,7 @@ its text is marked so that a test can tell if any of it reached a log.
 """
 
 import json
+import math
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -271,7 +272,10 @@ class MemoryRepository:
     def _stored(self, chunk_set: ChunkSet) -> dict[str, StoredChunk]:
         return {
             chunk_id: StoredChunk(
-                chunk_id, record.content_hash, record.chunk.manual_page
+                chunk_id,
+                record.content_hash,
+                record.chunk.manual_page,
+                record.chunk.rule_ids,
             )
             for chunk_id, record in self.records.items()
             if record.chunk.chunk_set is chunk_set
@@ -348,7 +352,7 @@ def chunk_record(
         chunk=Chunk(
             chunk_id=f"{chunk_set.value}-{rule_id}",
             chunk_set=chunk_set,
-            rule_id=rule_id,
+            rule_ids=(rule_id,),
             text=f"Rule {rule_id}: {text}",
             reference_rule_ids=tuple(references),
             section_id="2.4",
@@ -362,6 +366,45 @@ def chunk_record(
         chat_deployment=CHAT,
         embedding_deployment=EMBEDDING,
     )
+
+
+def fixed_record(
+    position: int,
+    text: str,
+    vector: Sequence[float],
+    rule_ids: Sequence[str] = (),
+    *,
+    references: Sequence[str] = (),
+    manual_page: int = 12,
+    impairment: str = "Raised blood sugar",
+) -> ChunkRecord:
+    """A stored `fixed` chunk made by hand: a run of text that defines none, one or several rules."""
+    return ChunkRecord(
+        chunk=Chunk(
+            chunk_id=f"fixed-{position:04d}",
+            chunk_set=ChunkSet.FIXED,
+            rule_ids=tuple(rule_ids),
+            text=text,
+            reference_rule_ids=tuple(references),
+            section_id="2.4",
+            section_title="Probable rating",
+            impairment=impairment,
+            manual_page=manual_page,
+        ),
+        # The plain baseline: no context line and no chat deployment.
+        context_line="",
+        embedding=tuple(vector),
+        content_hash="0" * 64,
+        chat_deployment="",
+        embedding_deployment=EMBEDDING,
+    )
+
+
+def cosine_distance(one: Sequence[float], other: Sequence[float]) -> float:
+    """1 less the cosine of the angle between two vectors, as pgvector answers it."""
+    dot = sum(a * b for a, b in zip(one, other, strict=True))
+    lengths = math.sqrt(sum(a * a for a in one) * sum(b * b for b in other))
+    return 1.0 - dot / lengths if lengths else math.nan
 
 
 def indexed(record: ChunkRecord) -> IndexedChunk:
@@ -416,11 +459,15 @@ class MemoryIndex:
         return self.embedding_deployment
 
     def _chunk(self, chunk_set: ChunkSet, rule_id: str) -> IndexedChunk | None:
-        for record in self.records:
-            chunk = record.chunk
-            if chunk.chunk_set is chunk_set and chunk.rule_id == rule_id:
-                return indexed(record)
-        return None
+        """The chunk of the set that defines the rule; of several, the last by its id, as the table answers."""
+        holding = [
+            record
+            for record in self.records
+            if record.chunk.chunk_set is chunk_set and rule_id in record.chunk.rule_ids
+        ]
+        if not holding:
+            return None
+        return indexed(max(holding, key=lambda record: record.chunk.chunk_id))
 
     def _listed(
         self, chunk_set: ChunkSet, order: Sequence[str], limit: int
@@ -432,7 +479,14 @@ class MemoryIndex:
         self, chunk_set: ChunkSet, vector: Sequence[float], limit: int
     ) -> Sequence[IndexedChunk]:
         self.asked.append(("nearest", chunk_set, tuple(vector), limit))
-        return self._listed(chunk_set, self.vector_order, limit)
+        distances = {
+            record.chunk.chunk_id: cosine_distance(record.embedding, vector)
+            for record in self.records
+        }
+        return [
+            replace(chunk, cosine_distance=distances[chunk.chunk_id])
+            for chunk in self._listed(chunk_set, self.vector_order, limit)
+        ]
 
     async def matching(
         self,

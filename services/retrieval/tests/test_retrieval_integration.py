@@ -1,4 +1,4 @@
-"""Story 2.2, against a real PostgreSQL and the blob emulator.
+"""Stories 2.2 and 3.2, against a real PostgreSQL and the blob emulator.
 
 Run `docker compose up --detach --wait` first. No test here calls Azure or a
 model. The job runs as it really runs (`retrieval.ingest.main`), with a
@@ -354,6 +354,8 @@ class Azure:
     layout_status: int = 202
     analysis: str = "succeeded"
     model_status: int = 200
+    # What a chat call alone is answered with, when the embeddings still work.
+    chat_status: int = 200
     context: Any = field(default_factory=context_answer)
     dimensions: int | None = None
     chat_calls: int = 0
@@ -385,10 +387,10 @@ class Azure:
             self.embedding_calls += 1
         else:
             self.chat_calls += 1
-        if self.model_status != 200:
-            return httpx2.Response(
-                self.model_status, headers={"retry-after": "0"}, json={}
-            )
+        status = self.model_status if embedding else self.chat_status
+        status = self.model_status if self.model_status != 200 else status
+        if status != 200:
+            return httpx2.Response(status, headers={"retry-after": "0"}, json={})
         if embedding:
             texts = json.loads(request.content)["input"]
             return httpx2.Response(200, json=embedding_answer(texts, self.dimensions))
@@ -421,6 +423,9 @@ def job_settings(migrated_database: Settings, tmp_path: Path) -> Iterator[Settin
             "layout_poll_seconds": 0.01,
             # The made-up manual has three rules: losing one is a third of them.
             "ingest_max_removed_share": 0.5,
+            # Story 2.2's tests are about the `smart` set; story 3.2's test
+            # of both sets says so itself.
+            "ingest_chunk_sets": [ChunkSet.SMART],
         }
     )
     upload(settings, tmp_path, PDF)
@@ -576,4 +581,108 @@ def test_story_2_2_a_failed_run_ends_non_zero_with_a_code_and_leaves_the_index_w
     assert query(job_settings, "SELECT manual_sha256 FROM retrieval.ingest_run") == (
         noted
     )
+    assert "SECRET" not in caplog.text
+
+
+# --- Both chunk sets (story 3.2) --------------------------------------------------------------
+
+
+def test_story_3_2_the_job_writes_both_chunk_sets_each_as_a_run_of_its_own(
+    job_settings: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    both = job_settings.model_copy(
+        update={
+            "ingest_chunk_sets": [ChunkSet.SMART, ChunkSet.FIXED],
+            "fixed_chunk_words": 20,
+            "fixed_chunk_overlap_words": 5,
+            "model_retry_seconds": 0.001,
+        }
+    )
+    azure = Azure()
+
+    def of_set(chunk_set: str) -> dict[str, tuple[Any, ...]]:
+        return {i: row for i, row in chunks(both).items() if row[1] == chunk_set}
+
+    with caplog.at_level(logging.INFO):
+        assert run_job(both, azure) == 0
+    smart, fixed = of_set("smart"), of_set("fixed")
+
+    # The `fixed` set: the same manual, parsed once, in runs of 20 words
+    # that cover its body in order, with the rules defined in each run.
+    assert len(azure.submitted) == 1
+    assert list(fixed) == [f"fixed-{n:04d}" for n in range(1, len(fixed) + 1)]
+    assert len(fixed) > 3 and len(smart) == 3
+    assert {rule for row in fixed.values() for rule in row[2]} == {
+        RULE_A,
+        RULE_B,
+        RULE_C,
+    }
+    assert all(len(row[7].split()) == 20 for row in list(fixed.values())[:-1])
+    # The plain baseline: no context line and no chat call, and the same
+    # embedding deployment as the `smart` set. Three chat calls in all.
+    assert {(row[8], row[10], row[11]) for row in fixed.values()} == {
+        ("", "", EMBEDDING)
+    }
+    assert azure.chat_calls == 3
+    # A run record each: what the set was built from, and how.
+    noted = {
+        row[0]: row[1:]
+        for row in query(
+            both,
+            "SELECT chunk_set, manual_sha256, prompt_digest, chat_deployment, "
+            "embedding_deployment, chunk_count FROM retrieval.ingest_run",
+        )
+    }
+    sha = hashlib.sha256(PDF).hexdigest()
+    assert noted["smart"][0] == noted["fixed"][0] == sha
+    assert noted["fixed"][2:] == ("", EMBEDDING, len(fixed))
+    assert noted["smart"][2:] == (CHAT, EMBEDDING, 3)
+    assert f"chunks={len(fixed)} chunk_set=fixed" in caplog.text
+
+    # A second run writes nothing, parses nothing and calls no model.
+    calls = azure.model_calls
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(both, azure) == 0
+    assert chunks(both) == {**smart, **fixed}
+    assert (azure.model_calls, len(azure.submitted)) == (calls, 1)
+    assert caplog.text.count("skipped=yes") == 2
+
+    # Another size: the `fixed` set is cut again, with no chat call, though
+    # it loses more than the share a run may remove; `smart` is untouched,
+    # down to the row version.
+    wider = both.model_copy(update={"fixed_chunk_words": 60})
+    assert run_job(wider, azure) == 0
+    recut = of_set("fixed")
+    assert 0 < len(recut) < len(fixed) * 0.5
+    assert len(recut["fixed-0001"][7].split()) == 60
+    assert of_set("smart") == smart
+    assert azure.chat_calls == 3
+    assert query(
+        wider,
+        "SELECT prompt_digest FROM retrieval.ingest_run WHERE chunk_set = 'fixed'",
+    ) != [(noted["fixed"][1],)]
+
+    # A failure in one set leaves the other as its own run left it: with
+    # the chat model down a changed manual cannot be written as `smart`
+    # chunks, and is written as `fixed` ones.
+    upload(wider, tmp_path, CHANGED_PDF)
+    azure.parsed = manual(first=definition(RULE_A, "A new band."))
+    azure.chat_status = 429
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(wider, azure) == 1
+    assert "ingestion failed: code=model_unavailable" in caplog.text
+    assert "chunk_set=smart" in caplog.text
+    # The two sets now stand on different manuals, and the job says so in
+    # an error of its own that names both.
+    assert (
+        "ingestion failed: code=stage_failed "
+        "reason=chunk_sets_built_from_different_manuals chunk_sets=fixed,smart"
+    ) in caplog.text
+    assert of_set("smart") == smart
+    assert "A new band." in " ".join(row[7] for row in of_set("fixed").values())
+    assert query(
+        wider, "SELECT chunk_set, manual_sha256 FROM retrieval.ingest_run ORDER BY 1"
+    ) == [("fixed", hashlib.sha256(CHANGED_PDF).hexdigest()), ("smart", sha)]
     assert "SECRET" not in caplog.text

@@ -1,4 +1,9 @@
-"""Cut the parsed manual into `smart` chunks: exactly one rule each (spine AD-12).
+"""Cut the parsed manual into chunks (spine AD-12).
+
+Two cuts of the same parsed manual. The `smart` cut gives exactly one rule
+per chunk. The `fixed` cut is the plain baseline of the retrieval ladder
+(AD-11, row `r1`): the body text in reading order, in runs of a fixed number
+of words with an overlap, wherever the rules happen to fall.
 
 The chunker works from what the layout model read, never from what the
 generator of the manual knows. It finds a definition by the contracts'
@@ -6,6 +11,9 @@ marker (`Rule <rule_id>:`), a section by the number printed with its
 heading, and page furniture by the layout model's roles or by its repeating
 on most pages. So it learns the rules from the manual alone, and the layout
 stand-in can be replaced by the real service.
+
+Both cuts walk the manual the same way (`_body`), so both leave out the
+same page furniture and stand under the same headings.
 
 It checks its own result and fails loudly: a partial index, or one whose
 rules stand under the wrong section, is worse than none. The checks need
@@ -17,7 +25,7 @@ defined, and a definition ends where a sentence ends.
 import re
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from contracts.enums import ChunkSet
 from contracts.rules import RULE_DEFINITION_PATTERN, RULE_ID_PATTERN
@@ -74,6 +82,31 @@ def chunk_id_for(chunk_set: ChunkSet, rule_id: str) -> str:
     return f"{chunk_set.value}-{rule_id}"
 
 
+# What a `fixed` chunk that starts before the first numbered section stands
+# under: the title page and the contents have no impairment, and a search
+# result must name one (the contracts' `SearchItem`).
+FRONT_MATTER_SECTION_ID = "0"
+FRONT_MATTER = "Front matter"
+# How many digits a `fixed` chunk's id has, and so how many chunks the set
+# may hold: with more, the ids would no longer sort as text.
+_FIXED_ID_DIGITS = 4
+MAX_FIXED_CHUNKS = 10**_FIXED_ID_DIGITS - 1
+# What stands between two paragraphs in a `fixed` chunk's text; the words of
+# one paragraph are a space apart. The manual prints each definition as one
+# paragraph, so a rule's own definition ends where its line does.
+PARAGRAPH_BREAK = "\n"
+
+
+def fixed_chunk_id(position: int) -> str:
+    """AD-12: the id of the `fixed` chunk at a 1-based position in the manual.
+
+    Derived from the chunk set and the position, so it is the same on every
+    run of the same manual and settings. The digits are padded: the ids sort
+    in the manual's order, also as text, up to `MAX_FIXED_CHUNKS`.
+    """
+    return f"{ChunkSet.FIXED.value}-{position:0{_FIXED_ID_DIGITS}d}"
+
+
 def squash(text: str) -> str:
     """The text with every run of white space as one space, and none at its ends."""
     return " ".join(text.split())
@@ -94,6 +127,9 @@ class _Place:
     section_title: str = ""
     part_id: str = ""
     part_title: str = ""
+    # How often a section numbered 1 was taken: more than once when the
+    # contents page's lines were read as headings before the first section.
+    first_sections: int = 0
 
     def take_heading(self, text: str, defined_any: bool) -> None:
         """Move on if `text` is a numbered heading.
@@ -131,6 +167,7 @@ class _Place:
             )
         self.section_number = number
         self.section_title = section.group(2)
+        self.first_sections += number == 1
         self.part_id, self.part_title = "", ""
 
 
@@ -235,6 +272,33 @@ def _check_chunks(chunks: Sequence[Chunk]) -> None:
                 raise ManualInvalid("reference_not_defined", reference)
 
 
+def _body(
+    layout: ParsedLayout, furniture: set[int]
+) -> Iterator[tuple[LayoutParagraph, list[tuple[str, str]], _Place]]:
+    """Walk the manual's body: each paragraph that is no furniture, the rules it defines, and where it stands.
+
+    The place is the walk's own and moves on with it: a caller reads what
+    it needs of it before asking for the next paragraph. Raises
+    `ManualInvalid` for a heading that cannot be one of this manual.
+    """
+    # With roles, a numbered line is a heading only where the layout model
+    # says so as well; a layout without any heading role has only the numbers.
+    roles = any(paragraph.role in HEADING_ROLES for paragraph in layout.paragraphs)
+    place = _Place()
+    defined_any = False
+    for position, paragraph in enumerate(layout.paragraphs):
+        if position in furniture:
+            continue
+        defined = list(_definitions(paragraph))
+        if defined:
+            # A heading the layout model joined to the definition below it.
+            place.take_heading(_before_first_definition(paragraph), defined_any)
+        elif not roles or paragraph.role in HEADING_ROLES:
+            place.take_heading(squash(paragraph.text), defined_any)
+        yield paragraph, defined, place
+        defined_any = defined_any or bool(defined)
+
+
 def cut_chunks(layout: ParsedLayout) -> list[Chunk]:
     """The `smart` chunks of the manual, one per rule it defines, in the manual's order.
 
@@ -247,21 +311,8 @@ def cut_chunks(layout: ParsedLayout) -> list[Chunk]:
     """
     _check_pages(layout)
     furniture, furniture_texts = _furniture(layout)
-    # With roles, a numbered line is a heading only where the layout model
-    # says so as well; a layout without any heading role has only the numbers.
-    roles = any(paragraph.role in HEADING_ROLES for paragraph in layout.paragraphs)
-    place = _Place()
     chunks: dict[str, Chunk] = {}
-    for position, paragraph in enumerate(layout.paragraphs):
-        if position in furniture:
-            continue
-        defined = list(_definitions(paragraph))
-        if not defined:
-            if not roles or paragraph.role in HEADING_ROLES:
-                place.take_heading(squash(paragraph.text), bool(chunks))
-            continue
-        # A heading the layout model joined to the definition below it.
-        place.take_heading(_before_first_definition(paragraph), bool(chunks))
+    for paragraph, defined, place in _body(layout, furniture):
         for rule_id, text in defined:
             if rule_id in chunks:
                 raise ManualInvalid("rule_defined_twice", rule_id)
@@ -279,7 +330,7 @@ def cut_chunks(layout: ParsedLayout) -> list[Chunk]:
             chunks[rule_id] = Chunk(
                 chunk_id=chunk_id_for(ChunkSet.SMART, rule_id),
                 chunk_set=ChunkSet.SMART,
-                rule_id=rule_id,
+                rule_ids=(rule_id,),
                 text=text,
                 reference_rule_ids=references_in(text, [rule_id]),
                 section_id=place.part_id or str(place.section_number),
@@ -291,3 +342,161 @@ def cut_chunks(layout: ParsedLayout) -> list[Chunk]:
         raise ManualInvalid("no_rules")
     _check_chunks(list(chunks.values()))
     return list(chunks.values())
+
+
+@dataclass(frozen=True, slots=True)
+class _Word:
+    """One word of the body text, and where it is printed."""
+
+    text: str
+    # The position of its paragraph among the body's paragraphs.
+    paragraph: int
+    section_id: str
+    section_title: str
+    impairment: str
+    page_number: int
+    # How many sections numbered 1 the walk had taken when it read the word.
+    first_sections: int
+
+
+def _body_words(
+    layout: ParsedLayout, furniture: set[int], furniture_texts: set[str]
+) -> tuple[list[_Word], list[str]]:
+    """The body text as words in reading order, and the rules it defines, in order."""
+    read: list[_Word] = []
+    defined: dict[str, None] = {}
+    for number, (paragraph, definitions, place) in enumerate(_body(layout, furniture)):
+        for rule_id, _ in definitions:
+            if rule_id in defined:
+                raise ManualInvalid("rule_defined_twice", rule_id)
+            defined[rule_id] = None
+        text = squash(paragraph.text)
+        # Looked for inside one paragraph, never across two; a heading may
+        # print the words of a running header and is not held to it.
+        if not _is_heading(text) and any(line in text for line in furniture_texts):
+            raise ManualInvalid("page_furniture_in_chunk", str(paragraph.page_number))
+        read.extend(
+            _Word(
+                word,
+                number,
+                place.part_id or str(place.section_number),
+                place.part_title,
+                place.section_title,
+                paragraph.page_number,
+                place.first_sections,
+            )
+            for word in text.split()
+        )
+    # Everything before the first section's own heading is front matter:
+    # without roles the walk takes the contents page's lines for headings,
+    # and counts from 1 again when the first section begins.
+    last = read[-1].first_sections if read else 0
+    words = [
+        word
+        if last and word.first_sections == last
+        else replace(
+            word,
+            section_id=FRONT_MATTER_SECTION_ID,
+            section_title="",
+            impairment=FRONT_MATTER,
+        )
+        for word in read
+    ]
+    return words, list(defined)
+
+
+def _joined(run: Sequence[_Word]) -> str:
+    """The words of a run as text: a space inside a paragraph, a line break between two."""
+    parts: list[str] = []
+    for before, word in zip([None, *run], run, strict=False):
+        if before is not None:
+            parts.append(" " if before.paragraph == word.paragraph else PARAGRAPH_BREAK)
+        parts.append(word.text)
+    return "".join(parts)
+
+
+def definition_in(text: str, rule_id: str) -> str | None:
+    """A rule's own definition inside a text that may hold more: from its marker to the end of its paragraph.
+
+    It ends earlier where the next rule's marker stands in the same
+    paragraph. None when the text does not define the rule.
+    """
+    for marker in _DEFINITION.finditer(text):
+        if marker.group(1) != rule_id:
+            continue
+        rest = text[marker.end() :].partition(PARAGRAPH_BREAK)[0]
+        following = _DEFINITION.search(rest)
+        if following is not None:
+            rest = rest[: following.start()]
+        return text[marker.start() : marker.end()] + rest
+    return None
+
+
+def cut_fixed_chunks(
+    layout: ParsedLayout, size_words: int, overlap_words: int
+) -> list[Chunk]:
+    """The `fixed` chunks of the manual: its body text in runs of `size_words` words.
+
+    Each chunk begins `size_words - overlap_words` words after the one
+    before it, so the last `overlap_words` words of a chunk are the first of
+    the next. Page furniture is left out, as in the `smart` cut. In a
+    chunk's text the words of a paragraph are a space apart and two
+    paragraphs a line break. A chunk defines the rules whose definition
+    marker lies inside its text and refers to the other rules it mentions;
+    its section, impairment and page are those of its first word, and text
+    before the first section's heading is front matter. A rule's definition
+    is not kept whole: one that a cut falls in is in two chunks, part in
+    each. That is the baseline's weakness and is left as it is.
+
+    Raises `ManualInvalid` as the walk of the `smart` cut does for pages and
+    headings, and when a rule is defined twice; the manual defines no rule;
+    a paragraph holds page furniture; a rule that is referred to is not
+    defined; a chunk's text reads as defining a rule no paragraph defines (a
+    marker formed across two paragraphs); a rule the body defines has its
+    marker in no chunk (an overlap too small to keep a marker that a cut
+    falls in); or there are more chunks than the ids can number.
+    """
+    if size_words < 1 or not 0 <= overlap_words < size_words:
+        raise ValueError("the overlap must be smaller than the chunk size")
+    _check_pages(layout)
+    furniture, furniture_texts = _furniture(layout)
+    words, defined = _body_words(layout, furniture, furniture_texts)
+    if not defined:
+        raise ManualInvalid("no_rules")
+    chunks: list[Chunk] = []
+    step = size_words - overlap_words
+    for start in range(0, len(words), step):
+        if len(chunks) == MAX_FIXED_CHUNKS:
+            raise ManualInvalid("too_many_chunks", str(MAX_FIXED_CHUNKS))
+        run = words[start : start + size_words]
+        first = run[0]
+        text = _joined(run)
+        rule_ids = tuple(dict.fromkeys(_DEFINITION.findall(text)))
+        for rule_id in rule_ids:
+            if rule_id not in defined:
+                raise ManualInvalid("definition_across_paragraphs", rule_id)
+        chunks.append(
+            Chunk(
+                chunk_id=fixed_chunk_id(len(chunks) + 1),
+                chunk_set=ChunkSet.FIXED,
+                rule_ids=rule_ids,
+                text=text,
+                reference_rule_ids=references_in(text, rule_ids),
+                section_id=first.section_id,
+                section_title=first.section_title,
+                impairment=first.impairment,
+                manual_page=first.page_number,
+            )
+        )
+        if start + size_words >= len(words):
+            # The run reached the end: a further one would only repeat its tail.
+            break
+    in_a_chunk = {rule_id for chunk in chunks for rule_id in chunk.rule_ids}
+    for rule_id in defined:
+        if rule_id not in in_a_chunk:
+            raise ManualInvalid("definition_in_no_chunk", rule_id)
+    for chunk in chunks:
+        for reference in chunk.reference_rule_ids:
+            if reference not in in_a_chunk:
+                raise ManualInvalid("reference_not_defined", reference)
+    return chunks

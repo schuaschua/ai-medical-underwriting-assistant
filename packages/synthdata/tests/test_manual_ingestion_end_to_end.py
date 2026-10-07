@@ -1,4 +1,4 @@
-"""Story 2.2: the manual, ingested by `retrieval`'s job, against the rule table.
+"""Stories 2.2 and 3.2: the manual, ingested by `retrieval`'s job, against the rule table.
 
 The job runs as it really runs, over the project's manual in a blob container
 of the test's own and a real PostgreSQL, with this package's stand-ins where
@@ -37,10 +37,17 @@ def vector_of(chunk: dict[str, Any]) -> list[float]:
 
 
 def test_story_2_2_the_manual_is_ingested_as_one_smart_chunk_per_rule_of_the_rule_table(
-    ingested_manual: LocalRetrieval,
+    ingested_manual: LocalRetrieval, caplog: pytest.LogCaptureFixture
 ) -> None:
     rules = rule_table()
-    chunks = ingested_manual.chunks()
+    every_chunk = ingested_manual.chunks()
+    # The `smart` set; the `fixed` set the same job writes is story 3.2's
+    # (`test_manual_search_end_to_end.py`).
+    chunks = {
+        chunk_id: chunk
+        for chunk_id, chunk in every_chunk.items()
+        if chunk["chunk_set"] == "smart"
+    }
 
     # Every rule of the table is defined by exactly one chunk, and no chunk
     # defines a rule the table lacks.
@@ -70,14 +77,7 @@ def test_story_2_2_the_manual_is_ingested_as_one_smart_chunk_per_rule_of_the_rul
         # A 3,072-dimension vector.
         assert len(vector_of(chunk)) == EMBEDDING_DIMENSIONS == 3072
 
-
-# --- Reruns ----------------------------------------------------------------------------
-
-
-def test_story_2_2_a_second_run_changes_nothing_and_calls_no_model(
-    ingested_manual: LocalRetrieval, caplog: pytest.LogCaptureFixture
-) -> None:
-    before = ingested_manual.chunks()
+    # A second run changes nothing and calls no model, for either chunk set.
     calls = ingested_manual.model_calls
 
     with caplog.at_level(logging.INFO):
@@ -85,10 +85,11 @@ def test_story_2_2_a_second_run_changes_nothing_and_calls_no_model(
 
     assert status == 0
     # Same ids, text and vectors; not one row was written again.
-    assert ingested_manual.chunks() == before
+    assert ingested_manual.chunks() == every_chunk
     # No chat call and no embedding call.
     assert ingested_manual.model_calls == calls
     assert "written=0 moved=0 removed=0 unchanged=111 skipped=yes" in caplog.text
+    assert caplog.text.count("skipped=yes") == 2
     # The manual is the one the index was built from: it was not sent to the
     # layout model a second time.
     assert ingested_manual.layout.submits == 1

@@ -375,6 +375,7 @@ def test_story_1_8_a_failed_classification_is_stored_as_failed_and_lists_nothing
 
     with service(settings, sidecar, deployment) as client:
         response = client.post("/classifications", json=command_for(case_id, page_id))
+        made = deployment.calls
         listed = client.get(f"/cases/{case_id}/classifications")
         again = client.post("/classifications", json=command_for(case_id, page_id))
 
@@ -387,14 +388,16 @@ def test_story_1_8_a_failed_classification_is_stored_as_failed_and_lists_nothing
         "stage.failed",
         page_id,
     )
-    assert deployment.calls == calls
+    # At most this many: a run that fails ends the others, so how many of
+    # them had already asked the model depends on timing.
+    assert 1 <= made <= calls
     assert listed.json()["classifications"] == []
     assert rows(migrated_database) == [
         (case_id, page_id, "llm", "failed", None, None, None)
     ]
     # The stored failure is the answer from then on: the model is not asked again.
     assert again.json() == response.json()
-    assert deployment.calls == calls
+    assert deployment.calls == made
 
 
 def test_story_1_8_when_intake_is_down_for_the_page_no_row_is_left_and_the_repeat_works(

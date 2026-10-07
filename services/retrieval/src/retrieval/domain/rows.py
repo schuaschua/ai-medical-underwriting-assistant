@@ -14,13 +14,6 @@ from types import MappingProxyType
 from contracts.enums import ChunkSet, RetrieverConfig
 from contracts.errors import DomainError, ErrorCode
 
-ROW_NOT_AVAILABLE_MESSAGE = (
-    "That retrieval row is not available yet. Only row r3 can be used for now."
-)
-CHUNK_SET_NOT_AVAILABLE_MESSAGE = (
-    "That retrieval row reads a set of chunks that is not available yet."
-)
-
 
 class SearchMethod(StrEnum):
     """How a row finds its chunks."""
@@ -43,8 +36,8 @@ class RetrieverRow:
 
 
 _ROWS = (
-    RetrieverRow(RetrieverConfig.R1, ChunkSet.FIXED, SearchMethod.VECTOR),
-    RetrieverRow(RetrieverConfig.R2, ChunkSet.SMART, SearchMethod.VECTOR),
+    RetrieverRow(RetrieverConfig.R1, ChunkSet.FIXED, SearchMethod.VECTOR, built=True),
+    RetrieverRow(RetrieverConfig.R2, ChunkSet.SMART, SearchMethod.VECTOR, built=True),
     RetrieverRow(RetrieverConfig.R3, ChunkSet.SMART, SearchMethod.HYBRID, built=True),
     RetrieverRow(RetrieverConfig.R4, ChunkSet.SMART, SearchMethod.HYBRID_RERANKED),
     RetrieverRow(RetrieverConfig.R5, ChunkSet.SMART, SearchMethod.AI_SEARCH_HYBRID),
@@ -53,8 +46,27 @@ _ROWS = (
 ROWS: Mapping[RetrieverConfig, RetrieverRow] = MappingProxyType(
     {row.config: row for row in _ROWS}
 )
-# The chunk sets the ingestion writes so far: the `fixed` set comes with Epic 3.
-INGESTED_CHUNK_SETS: frozenset[ChunkSet] = frozenset({ChunkSet.SMART})
+# AD-11: the rows this build can search with. `workflow` and `verdict` each
+# name the rows a case may run with; a test outside `services/` holds the
+# three lists equal.
+BUILT_ROWS: frozenset[RetrieverConfig] = frozenset(
+    row.config for row in _ROWS if row.built
+)
+
+
+def rows_in_words(configs: frozenset[RetrieverConfig]) -> str:
+    """The rows as a message names them: `Rows r1, r2 and r3`, or `Only row r3`."""
+    *others, last = sorted(config.value for config in configs)
+    return f"Rows {', '.join(others)} and {last}" if others else f"Only row {last}"
+
+
+ROW_NOT_AVAILABLE_MESSAGE = (
+    "That retrieval row is not available yet. "
+    f"{rows_in_words(BUILT_ROWS)} can be used for now."
+)
+CHUNK_SET_NOT_INGESTED_MESSAGE = (
+    "That retrieval row is not available: the manual has not been ingested for it yet."
+)
 
 
 def row_to_search(config: RetrieverConfig) -> RetrieverRow:
@@ -68,12 +80,7 @@ def row_to_search(config: RetrieverConfig) -> RetrieverRow:
 def chunk_set_to_read(config: RetrieverConfig | None) -> ChunkSet:
     """The chunk set a rule is read from: the row's, or `smart` when no row is named.
 
-    A rule read needs the row's chunks, not its search: every row on an
-    ingested set answers, built or not.
+    A rule read needs the row's chunks, not its search: every row answers,
+    built or not, and the ingestion writes both chunk sets.
     """
-    chunk_set = ChunkSet.SMART if config is None else ROWS[config].chunk_set
-    if chunk_set not in INGESTED_CHUNK_SETS:
-        raise DomainError(
-            ErrorCode.RETRIEVER_NOT_AVAILABLE, CHUNK_SET_NOT_AVAILABLE_MESSAGE
-        )
-    return chunk_set
+    return ChunkSet.SMART if config is None else ROWS[config].chunk_set

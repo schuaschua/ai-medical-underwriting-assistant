@@ -153,7 +153,7 @@ def test_story_2_5_post_verdict_runs_answers_the_stored_result_in_the_contracts_
     assert "SECRET" not in response.text
 
 
-@pytest.mark.parametrize("row", ["r1"])
+@pytest.mark.parametrize("row", ["r4"])
 def test_story_2_5_a_row_that_is_not_built_is_409_retriever_not_available(
     client: TestClient,
     facts: FakeFacts,

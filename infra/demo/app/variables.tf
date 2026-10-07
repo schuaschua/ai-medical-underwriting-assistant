@@ -164,6 +164,41 @@ variable "retrieval_model_max_concurrent_calls" {
   }
 }
 
+variable "ingest_chunk_sets" {
+  description = "The chunk sets the ingestion job writes, each as a run of its own (spine AD-12): smart is read by rows r2 to r6, fixed by row r1."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.ingest_chunk_sets) >= 1 && length(distinct(var.ingest_chunk_sets)) == length(var.ingest_chunk_sets) && alltrue([for chunk_set in var.ingest_chunk_sets : contains(["smart", "fixed"], chunk_set)])
+    error_message = "ingest_chunk_sets must name smart, fixed or both, each once."
+  }
+}
+
+variable "fixed_chunk_words" {
+  description = "Retrieval row r1: how many words a fixed chunk holds. A change cuts the fixed chunk set again on the next run of the ingestion job."
+  type        = number
+
+  validation {
+    condition     = var.fixed_chunk_words == floor(var.fixed_chunk_words) && var.fixed_chunk_words >= 20 && var.fixed_chunk_words <= 2000
+    error_message = "fixed_chunk_words must be a whole number from 20 to 2000."
+  }
+}
+
+variable "fixed_chunk_overlap_words" {
+  description = "Retrieval row r1: how many words a fixed chunk shares with the chunk before it. At least 1, so that a definition marker a cut falls in stays whole in the next chunk, and not more than half of fixed_chunk_words."
+  type        = number
+
+  validation {
+    condition     = var.fixed_chunk_overlap_words == floor(var.fixed_chunk_overlap_words) && var.fixed_chunk_overlap_words >= 1 && var.fixed_chunk_overlap_words <= 1000
+    error_message = "fixed_chunk_overlap_words must be a whole number from 1 to 1000."
+  }
+
+  validation {
+    condition     = var.fixed_chunk_overlap_words * 2 <= var.fixed_chunk_words
+    error_message = "fixed_chunk_overlap_words must not be more than half of fixed_chunk_words."
+  }
+}
+
 variable "search_candidate_depth" {
   description = "Retrieval row r3: how many chunks the vector search and the full-text search each hand to the rank fusion. Never fewer than the most items a search may ask for (50)."
   type        = number
@@ -231,6 +266,16 @@ variable "gate_threshold" {
   validation {
     condition     = var.gate_threshold >= 0 && var.gate_threshold <= 1
     error_message = "gate_threshold must be from 0 to 1."
+  }
+}
+
+variable "available_retriever_configs" {
+  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow, which refuses a start or a verdict run that names another row."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3"], row)])
+    error_message = "available_retriever_configs must name at least one of the rows that are built (r1, r2, r3), each once. Add a row here when retrieval and verdict can answer it."
   }
 }
 

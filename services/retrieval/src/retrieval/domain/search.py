@@ -1,13 +1,15 @@
 """The two reads of `retrieval`: the search and the rule read (spine AD-11, AD-12).
 
-One search operation for every ladder row; row `r3` is the one built. Its
-steps, each a function of its own: the query is embedded (`embed_query`),
-the vector search and the full-text search each answer a ranked list of
-candidates (the index port), the two lists are fused
+One search operation for every ladder row; rows `r1`, `r2` and `r3` are
+built. The steps of `r3`, each a function of its own: the query is embedded
+(`embed_query`), the vector search and the full-text search each answer a
+ranked list of candidates (the index port), the two lists are fused
 (`fusion.reciprocal_rank_fusion`), and the best of the fused list become the
-ranked items (`rank_items`). Nothing is stored, nothing is cached, and no
-model rewrites the query. Both lists are read from one unchanging view of
-the index, and one deadline covers the whole search.
+ranked items (`rank_items`). The baseline rows `r1` and `r2` embed the query
+the same way and answer the vector search's list alone (`vector_search`),
+over the `fixed` and the `smart` chunks. Nothing is stored, nothing is
+cached, and no model rewrites the query. Every read of a search is from one
+unchanging view of the index, and one deadline covers the whole search.
 """
 
 import asyncio
@@ -26,6 +28,7 @@ from contracts.models.retrieval import (
     SearchRequest,
     SearchResponse,
 )
+from retrieval.domain.chunker import definition_in, references_in
 from retrieval.domain.entities import EMBEDDING_DIMENSIONS, IndexedChunk
 from retrieval.domain.fusion import Fused, reciprocal_rank_fusion
 from retrieval.domain.ports import (
@@ -38,6 +41,7 @@ from retrieval.domain.ports import (
     QueryEmbedder,
 )
 from retrieval.domain.rows import (
+    CHUNK_SET_NOT_INGESTED_MESSAGE,
     ROW_NOT_AVAILABLE_MESSAGE,
     SearchMethod,
     chunk_set_to_read,
@@ -229,15 +233,75 @@ async def hybrid_search(
     return rank_items(fused, chunks, top_k)
 
 
+def similarity(cosine_distance: float | None) -> float:
+    """A vector search's score: 1 for the same direction, 0.5 for none in common, 0 for the opposite.
+
+    The cosine similarity, moved from its -1 to 1 onto the contract's 0 to
+    1 without cutting anything off, so that the order of the scores is the
+    order of the distances. A distance that is no number (a stored vector
+    without a direction) scores 0.
+    """
+    if cosine_distance is None or not math.isfinite(cosine_distance):
+        return 0.0
+    return min(1.0, max(0.0, 1.0 - cosine_distance / 2.0))
+
+
+async def vector_search(
+    query: str,
+    chunk_set: ChunkSet,
+    top_k: int,
+    *,
+    ports: SearchPorts,
+    options: SearchOptions,
+    stats: SearchStats,
+) -> list[SearchItem]:
+    """Rows `r1` and `r2`: the chunks nearest the query's vector, and nothing else.
+
+    No full-text search and no fusion. The items come in the index's order:
+    nearest first, and chunks equally near in the order of their `chunk_id`.
+    """
+    stats.depth = top_k
+    vector = await embed_query(query, ports.model)
+    stats.embedded = True
+    async with ports.index.snapshot() as index:
+        check_deployment(await index.embedded_with(chunk_set), options)
+        nearest = await index.nearest(chunk_set, vector, top_k)
+    stats.vector_candidates = len(nearest)
+    return [
+        SearchItem(
+            chunk_id=chunk.chunk_id,
+            rule_ids=list(chunk.rule_ids),
+            rank=rank,
+            score=similarity(chunk.cosine_distance),
+            text=chunk.text,
+            manual_page=chunk.manual_page,
+            impairment=chunk.impairment,
+        )
+        for rank, chunk in enumerate(nearest[:top_k], start=1)
+    ]
+
+
+# How each built row searches. A row the table marks as built and that has
+# no entry here is refused, never answered with another row's results.
+_SEARCHES = {
+    SearchMethod.VECTOR: vector_search,
+    SearchMethod.HYBRID: hybrid_search,
+}
+
+
 def check_deployment(indexed_with: str | None, options: SearchOptions) -> None:
     """Refuse a search whose query was embedded by another deployment than the chunks.
 
     Vectors of two models are not comparable, and the search would answer
-    plausible nonsense. An index that records no run (an empty one) has
-    nothing to compare.
+    plausible nonsense. A chunk set that records no run was never ingested:
+    its row is refused as not available, not answered as "nothing found".
     """
+    if indexed_with is None:
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE, CHUNK_SET_NOT_INGESTED_MESSAGE
+        )
     configured = options.embedding_deployment
-    if indexed_with is None or configured is None or indexed_with == configured:
+    if configured is None or indexed_with == configured:
         return
     # Deployment names are settings, not content.
     logger.error(
@@ -267,14 +331,15 @@ async def search_rules(
     if _NUL in request.query:
         raise DomainError(ErrorCode.VALIDATION_FAILED, INVALID_QUERY_MESSAGE)
     row = row_to_search(request.retriever_config)
-    if row.method is not SearchMethod.HYBRID:
+    search = _SEARCHES.get(row.method)
+    if search is None:
         # A row marked as built without a search of its own: said as what it
         # is to the caller, never answered with another row's results.
         raise DomainError(ErrorCode.RETRIEVER_NOT_AVAILABLE, ROW_NOT_AVAILABLE_MESSAGE)
     started = clock()
     try:
         async with asyncio.timeout(options.deadline_seconds) as deadline:
-            items = await hybrid_search(
+            items = await search(
                 request.query,
                 row.chunk_set,
                 request.top_k,
@@ -324,17 +389,34 @@ async def search_rules(
 async def read_rule(
     rule_id: str, retriever_config: RetrieverConfig | None, *, index: ChunkIndex
 ) -> RuleText:
-    """The chunk that defines a rule, from the chunk set of the row named; `not_found` when none does."""
+    """The chunk that defines a rule, from the chunk set of the row named; `not_found` when none does.
+
+    `retriever_not_available` when that chunk set was never ingested. From
+    the `fixed` set the references answered are those of the rule's own
+    definition, from its marker to the end of its paragraph: the chunk's
+    text holds other rules as well, and a read of one rule does not open
+    what its neighbours refer to. A rule defined elsewhere in the same
+    chunk is among them when this rule refers to it.
+    """
     chunk_set = chunk_set_to_read(retriever_config)
     try:
-        chunk = await index.defining(chunk_set, rule_id)
+        async with index.snapshot() as view:
+            ingested = await view.embedded_with(chunk_set) is not None
+        chunk = await index.defining(chunk_set, rule_id) if ingested else None
     except IndexUnavailable as error:
         logger.warning("rule read failed: index unavailable: reason=%s", error.reason)
         raise DomainError(
             ErrorCode.UPSTREAM_UNAVAILABLE, INDEX_UNAVAILABLE_MESSAGE
         ) from None
+    if not ingested:
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE, CHUNK_SET_NOT_INGESTED_MESSAGE
+        )
     if chunk is None:
         raise DomainError(ErrorCode.NOT_FOUND, RULE_NOT_FOUND_MESSAGE)
+    references = chunk.reference_rule_ids
+    if chunk.chunk_set is ChunkSet.FIXED:
+        references = references_in(definition_in(chunk.text, rule_id) or "", [rule_id])
     return RuleText(
         rule_id=rule_id,
         chunk_id=chunk.chunk_id,
@@ -342,5 +424,5 @@ async def read_rule(
         text=chunk.text,
         manual_page=chunk.manual_page,
         impairment=chunk.impairment,
-        reference_rule_ids=list(chunk.reference_rule_ids),
+        reference_rule_ids=list(references),
     )

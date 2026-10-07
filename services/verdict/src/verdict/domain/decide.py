@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from contracts.enums import ReasonEffect, SystemReason, Verdict
 from contracts.models.verdict import Reason, VerdictOutput
-from verdict.domain.effects import agreed_effect, rating_in
+from verdict.domain.effects import agreed_effect, definition_of, rating_in
 from verdict.domain.entities import Suggestion
 from verdict.domain.state import RunState
 
@@ -198,18 +198,32 @@ def keep_reasons(proposed: Sequence[Reason], state: RunState) -> KeptReasons:
 
 
 def rules_conflict(reasons: Sequence[Reason], state: RunState) -> bool:
-    """Whether two kept reasons cite different rules of one impairment, whatever their facts.
+    """Whether two kept reasons cite rules of one impairment that cannot both apply.
 
-    The rules of an impairment are the bands of its measure: an applicant
-    meets one band, so two of them cannot both apply and their debits are
-    never added up.
+    The rules of an impairment are mostly the bands of its measure: an
+    applicant meets one band, so two of them cannot both apply and their
+    debits are never added up, whatever their facts. Two rules of one
+    impairment do add where the manual says so, which it does by having one
+    rule's definition refer to the other ("If the record also shows ..., see
+    rule ..."): a smoker's status and the lifetime total, a systolic and a
+    diastolic crisis. The manual never lets a band refer to another band of
+    its own measure.
     """
-    impairments = [
-        state.impairments[reason.rule_id]
-        for reason in reasons
-        if reason.rule_id in state.impairments
+
+    def refers(rule_id: str, other: str) -> bool:
+        definition = definition_of(state.rule_texts.get(rule_id, ""), rule_id)
+        return definition is not None and other in definition
+
+    cited = [
+        reason.rule_id for reason in reasons if reason.rule_id in state.impairments
     ]
-    return len(set(impairments)) < len(impairments)
+    return any(
+        state.impairments[first] == state.impairments[second]
+        and not refers(first, second)
+        and not refers(second, first)
+        for index, first in enumerate(cited)
+        for second in cited[index + 1 :]
+    )
 
 
 def cites_unverified_quote(reasons: Sequence[Reason], state: RunState) -> bool:

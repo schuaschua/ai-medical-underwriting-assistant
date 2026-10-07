@@ -112,5 +112,10 @@ export RETRIEVAL_MODEL_ENTRA_AUTH=false
 # Local names for the two deployments; they are stored with every chunk.
 export RETRIEVAL_CHAT_DEPLOYMENT="local-stand-in"
 export RETRIEVAL_EMBEDDING_DEPLOYMENT="local-stand-in-embedding"
+# Both chunk sets (spine AD-11): `smart` for rows r2 and r3, and `fixed`,
+# row r1's baseline, at its default size and overlap in words.
+export RETRIEVAL_INGEST_CHUNK_SETS='["smart", "fixed"]'
+export RETRIEVAL_FIXED_CHUNK_WORDS=350
+export RETRIEVAL_FIXED_CHUNK_OVERLAP_WORDS=35
 
 uv run python -m retrieval.ingest

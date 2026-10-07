@@ -1,12 +1,20 @@
 """The ingestion of the manual: one run, the same result every time (spine AD-12).
 
-A run reads what is stored and then the manual. When the manual, the prompt
-and the deployments are those of the last successful run it ends there.
-Otherwise it has the manual parsed, cuts it into chunks, and brings the
-stored chunk set to what it found. A chunk whose text is as it was stored
-costs no model call; a changed one gets a new context line and vector; a
-chunk whose rule is gone is removed. Everything is written in one
-transaction at the end, so a run that fails leaves the index as it was.
+A run is for one chunk set. It reads what is stored and then the manual.
+When the manual, the recipe and the deployments are those of the last
+successful run it ends there. Otherwise it has the manual parsed, cuts it
+into chunks, and brings the stored chunk set to what it found. A chunk whose
+text is as it was stored costs no model call; a changed one gets a new
+vector (and, in the `smart` set, a new context line); a chunk the manual no
+longer has is removed. Everything is written in one transaction at the end,
+so a run that fails leaves the index as it was.
+
+The `fixed` set (AD-11, row `r1`) is the plain baseline: the same parsed
+manual and the same embedding deployment, no chat model and no context
+line. `ingest_chunk_sets` runs several sets over one read of the manual and
+one parse, under one deadline; each set is a run of its own, and one that
+fails leaves the others as they were. `built_from_different_manuals` says
+afterwards whether the stored sets still stand on one manual.
 """
 
 import asyncio
@@ -14,13 +22,13 @@ import hashlib
 import json
 import logging
 import math
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
 from contracts.enums import ChunkSet
 from contracts.errors import DomainError, ErrorCode
-from retrieval.domain.chunker import ManualInvalid, cut_chunks
+from retrieval.domain.chunker import ManualInvalid, cut_chunks, cut_fixed_chunks
 from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
     Chunk,
@@ -28,6 +36,7 @@ from retrieval.domain.entities import (
     IngestPlan,
     IngestReport,
     IngestRun,
+    ParsedLayout,
     StoredChunk,
 )
 from retrieval.domain.ports import (
@@ -100,12 +109,20 @@ class IngestOptions:
     # A digest of the prompt the context line is asked for with: a changed
     # prompt writes every context line again.
     prompt_digest: str
+    # The chunk set the run writes.
+    chunk_set: ChunkSet = ChunkSet.SMART
+    # AD-11, row `r1`: how many words a `fixed` chunk holds, and how many of
+    # them it shares with the chunk before it. Words, not model tokens: the
+    # baseline only has to be fixed and stated.
+    fixed_chunk_words: int = 350
+    fixed_overlap_words: int = 35
     context_line_max_chars: int = 300
     embedding_batch_size: int = 16
-    # A run that would remove more than this share of the stored chunks is
-    # refused: a manual that was read badly looks just like one that lost
-    # its rules. `allow_large_removal` lets such a run through, for a manual
-    # that really did lose them.
+    # A run after which more than this share of the rules the stored chunks
+    # define would be defined by none is refused: a manual that was read
+    # badly looks just like one that lost its rules. `allow_large_removal`
+    # lets such a run of this chunk set through, for a manual that really
+    # did lose them.
     max_removed_share: float = 0.1
     allow_large_removal: bool = False
     # Everything before the one transaction that stores the result ends
@@ -127,13 +144,47 @@ def embedding_text(context_line: str, text: str) -> str:
     return f"{context_line}\n{text}"
 
 
+def recipe_digest(options: IngestOptions) -> str:
+    """A digest of how the run's chunk set is made, besides the manual and the deployments.
+
+    For the `smart` set the prompt's digest; for the `fixed` set the chunk
+    size and the overlap. It is part of the run record, so a change of it
+    is a run with work to do.
+    """
+    if options.chunk_set is ChunkSet.SMART:
+        return options.prompt_digest
+    made_with = [
+        options.chunk_set.value,
+        options.fixed_chunk_words,
+        options.fixed_overlap_words,
+    ]
+    return hashlib.sha256(json.dumps(made_with).encode()).hexdigest()
+
+
+def chat_deployment_of(options: IngestOptions) -> str:
+    """The chat deployment the run's chunks are made with: none for the `fixed` set."""
+    return options.chat_deployment if options.chunk_set is ChunkSet.SMART else ""
+
+
 def fingerprint(chunk: Chunk, options: IngestOptions) -> str:
     """A hash of everything a chunk's context line and vector are made from.
 
-    The chunk as the chat model is shown it, the prompt, and the two
-    deployment names. The manual page is not part of it: a rule that only
-    moved to another page keeps its context line and its vector.
+    For a `smart` chunk: the chunk as the chat model is shown it, the
+    prompt, and the two deployment names. For a `fixed` chunk: its text,
+    where it starts, and the embedding deployment. The manual page is not
+    part of it: a chunk that only moved to another page keeps its vector.
     """
+    if chunk.chunk_set is ChunkSet.FIXED:
+        made_from: list[object] = [
+            chunk.chunk_set.value,
+            chunk.section_id,
+            chunk.section_title,
+            chunk.impairment,
+            chunk.text,
+            options.embedding_deployment,
+            EMBEDDING_DIMENSIONS,
+        ]
+        return hashlib.sha256(json.dumps(made_from).encode()).hexdigest()
     made_from = [
         rule_in_its_place(chunk),
         options.prompt_digest,
@@ -260,30 +311,33 @@ async def _embed(
 async def write_records(
     chunks: Sequence[Chunk], model: ChunkModel, options: IngestOptions
 ) -> list[ChunkRecord]:
-    """A context line and a vector for each chunk: the records to store."""
+    """A vector for each chunk, and a context line for each `smart` one: the records to store."""
     if not chunks:
         return []
     # One small call first: a deployment that is not there, or whose vectors
     # have another size, is found before any context line is paid for.
     await _embed([EMBEDDING_PROBE], model, options)
-    lines = await _all_or_none(
-        [_context_line(chunk, model, options) for chunk in chunks]
-    )
-    vectors = await _embed(
-        [
+    if options.chunk_set is ChunkSet.FIXED:
+        # The plain baseline: no model writes about the chunk, and what is
+        # embedded is its own text.
+        lines = ["" for _ in chunks]
+        texts = [chunk.text for chunk in chunks]
+    else:
+        lines = await _all_or_none(
+            [_context_line(chunk, model, options) for chunk in chunks]
+        )
+        texts = [
             embedding_text(line, chunk.text)
             for chunk, line in zip(chunks, lines, strict=True)
-        ],
-        model,
-        options,
-    )
+        ]
+    vectors = await _embed(texts, model, options)
     return [
         ChunkRecord(
             chunk=chunk,
             context_line=line,
             embedding=vector,
             content_hash=fingerprint(chunk, options),
-            chat_deployment=options.chat_deployment,
+            chat_deployment=chat_deployment_of(options),
             embedding_deployment=options.embedding_deployment,
         )
         for chunk, line, vector in zip(chunks, lines, vectors, strict=True)
@@ -303,37 +357,57 @@ class _Prepared:
 
 
 def check_removal(
-    plan: IngestPlan, stored: Mapping[str, StoredChunk], options: IngestOptions
+    plan: IngestPlan,
+    chunks: Sequence[Chunk],
+    stored: Mapping[str, StoredChunk],
+    options: IngestOptions,
 ) -> None:
-    """Say which chunks a run removes, and refuse a run that removes too many."""
-    if not plan.remove:
+    """Say which chunks a run removes, and refuse a run that loses too many rules.
+
+    What is counted is the rules the stored chunks define and the new
+    chunks no longer do, not the chunks: a `fixed` set cut to another size
+    has another number of chunks and still defines every rule, whatever
+    else changed, while a manual that was read badly loses rules in either
+    set. In the `smart` set a chunk is a rule, so the two counts are one.
+    """
+    if plan.remove:
+        # Ids only: a chunk id is its chunk set and its rule id or its position.
+        logger.warning(
+            "chunks to remove: count=%d of=%d chunk_ids=%s",
+            len(plan.remove),
+            len(stored),
+            ",".join(plan.remove),
+        )
+    had = {rule_id for chunk in stored.values() for rule_id in chunk.rule_ids}
+    lost = sorted(had - {rule_id for chunk in chunks for rule_id in chunk.rule_ids})
+    if not lost:
         return
-    # Ids only: a chunk id is its chunk set and its rule id.
     logger.warning(
-        "chunks to remove: count=%d of=%d chunk_ids=%s",
-        len(plan.remove),
-        len(stored),
-        ",".join(plan.remove),
+        "rules no longer defined: count=%d of=%d chunk_set=%s rule_ids=%s",
+        len(lost),
+        len(had),
+        options.chunk_set.value,
+        ",".join(lost),
     )
-    if (
-        len(plan.remove) > len(stored) * options.max_removed_share
-        and not options.allow_large_removal
+    if len(lost) > len(had) * options.max_removed_share and (
+        not options.allow_large_removal
     ):
         raise IngestError(
             ErrorCode.STAGE_FAILED,
             TOO_MANY_REMOVED_MESSAGE,
             "too_many_chunks_removed",
-            str(len(plan.remove)),
+            str(len(lost)),
         )
 
 
 async def _prepare(
     ports: IngestPorts, options: IngestOptions
 ) -> _Prepared | IngestReport:
+    chunk_set = options.chunk_set
     # The database first: a store that cannot be read is found before the
     # layout analysis and the models are spent on a run that could not end.
-    stored = await ports.repository.stored(ChunkSet.SMART)
-    last = await ports.repository.last_run(ChunkSet.SMART)
+    stored = await ports.repository.stored(chunk_set)
+    last = await ports.repository.last_run(chunk_set)
     try:
         pdf = await ports.manual.read()
     except ManualMissing:
@@ -342,18 +416,20 @@ async def _prepare(
         ) from None
     run = IngestRun(
         manual_sha256=hashlib.sha256(pdf).hexdigest(),
-        prompt_digest=options.prompt_digest,
-        chat_deployment=options.chat_deployment,
+        prompt_digest=recipe_digest(options),
+        chat_deployment=chat_deployment_of(options),
         embedding_deployment=options.embedding_deployment,
         chunk_count=len(stored),
     )
     if stored and last == run:
-        # The same manual, prompt and deployments as the run that left these
+        # The same manual, recipe and deployments as the run that left these
         # chunks: nothing is parsed and no model is asked.
         logger.info(
-            "manual unchanged since the last run: manual_sha256=%s chunks=%d",
+            "manual unchanged since the last run: manual_sha256=%s chunks=%d "
+            "chunk_set=%s",
             run.manual_sha256,
             len(stored),
+            chunk_set.value,
         )
         return IngestReport(
             pages=0,
@@ -371,7 +447,7 @@ async def _prepare(
             ErrorCode.UPSTREAM_UNAVAILABLE, LAYOUT_FAILED_MESSAGE, error.reason
         ) from None
     try:
-        chunks = cut_chunks(layout)
+        chunks = _cut(layout, options)
     except ManualInvalid as error:
         raise IngestError(
             ErrorCode.STAGE_FAILED, MANUAL_INVALID_MESSAGE, error.reason, error.where
@@ -382,10 +458,10 @@ async def _prepare(
         run.manual_sha256,
         len(layout.pages),
         len(chunks),
-        ChunkSet.SMART.value,
+        chunk_set.value,
     )
     plan = plan_ingestion(chunks, stored, options)
-    check_removal(plan, stored, options)
+    check_removal(plan, chunks, stored, options)
     records = await write_records(plan.write, ports.model, options)
     return _Prepared(
         pages=len(layout.pages),
@@ -397,8 +473,17 @@ async def _prepare(
     )
 
 
+def _cut(layout: ParsedLayout, options: IngestOptions) -> list[Chunk]:
+    """The chunks of the run's chunk set, cut from the parsed manual."""
+    if options.chunk_set is ChunkSet.FIXED:
+        return cut_fixed_chunks(
+            layout, options.fixed_chunk_words, options.fixed_overlap_words
+        )
+    return cut_chunks(layout)
+
+
 async def ingest_manual(ports: IngestPorts, options: IngestOptions) -> IngestReport:
-    """Run the ingestion once; `IngestError` when it could not be done.
+    """Run the ingestion of one chunk set once; `IngestError` when it could not be done.
 
     Nothing is written before every chunk has its context line and vector.
     The deadline covers everything up to there. The one transaction that
@@ -421,7 +506,7 @@ async def ingest_manual(ports: IngestPorts, options: IngestOptions) -> IngestRep
     plan = prepared.plan
     try:
         await ports.repository.apply(
-            ChunkSet.SMART,
+            options.chunk_set,
             planned_from=prepared.stored,
             write=prepared.records,
             move={chunk.chunk_id: chunk.manual_page for chunk in plan.move},
@@ -442,3 +527,98 @@ async def ingest_manual(ports: IngestPorts, options: IngestOptions) -> IngestRep
         removed=len(plan.remove),
         unchanged=plan.unchanged,
     )
+
+
+class _ReadOnce:
+    """The manual and its parsed layout, fetched once for every chunk set of a job.
+
+    A failure is kept as well: a manual that could not be read or parsed for
+    one set is not asked for again for the next. So is a parse that was
+    stopped half way, by the deadline or by anything else.
+    """
+
+    def __init__(self, manual: ManualStore, layout: LayoutParser) -> None:
+        self._manual = manual
+        self._layout = layout
+        self._pdf: bytes | ManualMissing | None = None
+        self._parsed: dict[bytes, ParsedLayout | LayoutFailed] = {}
+
+    async def read(self) -> bytes:
+        if self._pdf is None:
+            try:
+                self._pdf = await self._manual.read()
+            except ManualMissing as error:
+                self._pdf = error
+        if isinstance(self._pdf, ManualMissing):
+            raise self._pdf
+        return self._pdf
+
+    async def parse(self, pdf: bytes) -> ParsedLayout:
+        if pdf not in self._parsed:
+            try:
+                self._parsed[pdf] = await self._layout.parse(pdf)
+            except LayoutFailed as error:
+                self._parsed[pdf] = error
+            except BaseException:
+                # Stopped before it ended: the next set does not send the
+                # manual to the layout model a second time.
+                self._parsed[pdf] = LayoutFailed("layout_not_finished")
+                raise
+        parsed = self._parsed[pdf]
+        if isinstance(parsed, LayoutFailed):
+            raise parsed
+        return parsed
+
+
+async def ingest_chunk_sets(
+    ports: IngestPorts,
+    options: IngestOptions,
+    chunk_sets: Sequence[ChunkSet],
+    *,
+    allow_large_removal: Collection[ChunkSet] = (),
+) -> dict[ChunkSet, IngestReport | Exception]:
+    """Run the ingestion of each chunk set named, over one read and one parse of the manual.
+
+    Each set is a run of its own, with its own checks, removal guard,
+    transaction and run record; the removal guard is open only for the sets
+    in `allow_large_removal`. `options.deadline_seconds` is one deadline
+    over all of them: a set gets what the sets before it left. A set whose
+    run could not be done has its error here in place of a report (an
+    `IngestError`, or whatever else was raised), and the other sets are run
+    all the same: each is left as its own run left it.
+    """
+    once = _ReadOnce(ports.manual, ports.layout)
+    shared = replace(ports, manual=once, layout=once)
+    clock = asyncio.get_running_loop().time
+    ends_at = (
+        None if options.deadline_seconds is None else clock() + options.deadline_seconds
+    )
+    outcomes: dict[ChunkSet, IngestReport | Exception] = {}
+    for chunk_set in dict.fromkeys(chunk_sets):
+        of_set = replace(
+            options,
+            chunk_set=chunk_set,
+            allow_large_removal=chunk_set in allow_large_removal,
+            deadline_seconds=None if ends_at is None else max(0.0, ends_at - clock()),
+        )
+        try:
+            outcomes[chunk_set] = await ingest_manual(shared, of_set)
+        except Exception as error:  # noqa: BLE001 - whatever one set raised, the others are still run and reported
+            outcomes[chunk_set] = error
+    return outcomes
+
+
+async def built_from_different_manuals(
+    repository: ChunkRepository,
+) -> dict[ChunkSet, str]:
+    """The manual each stored chunk set was last built from, when they are not all the same one; else empty.
+
+    Rows of the ladder are compared with each other: sets cut from two
+    editions of the manual would be compared as if they were one.
+    """
+    manuals: dict[ChunkSet, str] = {}
+    for chunk_set in ChunkSet:
+        last = await repository.last_run(chunk_set)
+        if last is not None:
+            manuals[chunk_set] = last.manual_sha256
+    return manuals if len(set(manuals.values())) > 1 else {}

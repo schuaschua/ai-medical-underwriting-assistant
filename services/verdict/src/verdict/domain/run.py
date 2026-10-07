@@ -24,6 +24,7 @@ from contracts.models.retrieval import DEFAULT_TOP_K
 from contracts.models.verdict import (
     AgentStepList,
     AgentStepQuery,
+    RunStepQuery,
     VerdictRun,
     VerdictRunCommand,
     VerdictRunList,
@@ -62,10 +63,6 @@ logger = logging.getLogger(__name__)
 
 IN_PROGRESS_MESSAGE = "The verdict run is still under way."
 NOT_RECORDED_MESSAGE = "The verdict run could not be recorded. Please try again."
-ROW_NOT_AVAILABLE_MESSAGE = (
-    "A verdict cannot be suggested with that retrieval row yet. "
-    "Only row r3 can be used for now."
-)
 UNKNOWN_RUN_MESSAGE = "That verdict run could not be found."
 MODEL_UNAVAILABLE_MESSAGE = "The model is not available. Please try again shortly."
 UPSTREAM_UNAVAILABLE_MESSAGE = (
@@ -99,6 +96,30 @@ class RunPorts:
     agent: VerdictAgent
 
 
+# AD-11: the ladder rows a verdict can be run with: the ones `retrieval`
+# searches. `workflow` names the same rows as the ones a case may run with,
+# and a test outside `services/` holds the three lists equal. On `r1` the
+# rules come from `fixed` chunks, which may hold several definitions or the
+# start of one: a reason is checked against the rule's own definition inside
+# the chunk (`effects.definition_of`), and a definition cut off before its
+# rating bears out nothing.
+RUNNABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
+    {RetrieverConfig.R1, RetrieverConfig.R2, RetrieverConfig.R3}
+)
+
+
+def _rows_in_words(configs: frozenset[RetrieverConfig]) -> str:
+    """The rows as a message names them: `Rows r1, r2 and r3`, or `Only row r3`."""
+    *others, last = sorted(config.value for config in configs)
+    return f"Rows {', '.join(others)} and {last}" if others else f"Only row {last}"
+
+
+ROW_NOT_AVAILABLE_MESSAGE = (
+    "A verdict cannot be suggested with that retrieval row yet. "
+    f"{_rows_in_words(RUNNABLE_RETRIEVER_CONFIGS)} can be used for now."
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RunOptions:
     """The settings a verdict run works with (VERDICT_*: see the settings)."""
@@ -117,7 +138,7 @@ class RunOptions:
     confidence_floor: float = DEFAULT_CONFIDENCE_FLOOR
     search_top_k: int = DEFAULT_TOP_K
     # AD-11: the ladder rows this build can run a verdict with.
-    retriever_configs: frozenset[RetrieverConfig] = frozenset({RetrieverConfig.R3})
+    retriever_configs: frozenset[RetrieverConfig] = RUNNABLE_RETRIEVER_CONFIGS
 
 
 @dataclass(slots=True)
@@ -590,15 +611,22 @@ async def list_verdict_runs(
 
 async def list_run_steps(
     verdict_run_id: str,
+    query: RunStepQuery,
     *,
     repository: RunRepository,
     limit: int = DEFAULT_STEP_LIST_LIMIT,
 ) -> AgentStepList:
-    """One run's tool calls in order, at most `limit`; `not_found` for a run that is not stored."""
+    """One run's tool calls in order, at most `limit`, from the cursor on; only matching ones with a filter.
+
+    `not_found` for a run that is not stored.
+    """
     if not await repository.run_exists(verdict_run_id):
         raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_RUN_MESSAGE)
     steps, has_more = _bounded(
-        await repository.steps_of_run(verdict_run_id, limit + 1), limit
+        await repository.steps_of_run(
+            verdict_run_id, query.tool, query.rule_id, query.after_step_no, limit + 1
+        ),
+        limit,
     )
     return AgentStepList(steps=steps, has_more=has_more)
 
@@ -610,9 +638,16 @@ async def list_case_agent_steps(
     repository: RunRepository,
     limit: int = DEFAULT_STEP_LIST_LIMIT,
 ) -> AgentStepList:
-    """The tool calls of every run of a case in order, at most `limit`; only matching ones with a filter."""
+    """The tool calls of every run of a case in order, at most `limit`, from the cursor on; only matching ones with a filter."""
+    after = (
+        (query.after_verdict_run_id, query.after_step_no)
+        if query.after_verdict_run_id is not None and query.after_step_no is not None
+        else None
+    )
     steps, has_more = _bounded(
-        await repository.steps_of_case(case_id, query.tool, query.rule_id, limit + 1),
+        await repository.steps_of_case(
+            case_id, query.tool, query.rule_id, after, limit + 1
+        ),
         limit,
     )
     return AgentStepList(steps=steps, has_more=has_more)

@@ -53,6 +53,10 @@ redaction_categories = [
 # extraction, non-medical at it or more back to the customer, anything under
 # it to triage. Only workflow is given it.
 gate_threshold = 0.90
+# The retrieval ladder rows built so far (spine AD-11): the two baselines and
+# the hybrid row. A new row is added here when retrieval and verdict can
+# answer it.
+available_retriever_configs = ["r1", "r2", "r3"]
 
 # Classification (spine AD-13): the LLM classifier's confidence is the share
 # of this many runs that agree. Whether the runs differ at all on the real
@@ -90,6 +94,13 @@ layout_api_version = "2024-11-30"
 # The job makes one chat call per rule (about a hundred) on the deployment the
 # other services share: lower this if its token rate limit is hit.
 retrieval_model_max_concurrent_calls = 5
+# The job writes both chunk sets from the one parsed manual. The fixed set is
+# row r1's plain baseline: 350 words a chunk, 35 of them shared with the
+# chunk before, about 150 chunks, embedded with the same deployment and with
+# no chat call.
+ingest_chunk_sets         = ["smart", "fixed"]
+fixed_chunk_words         = 350
+fixed_chunk_overlap_words = 35
 # Row r3 (spine AD-11): how many chunks the vector search and the full-text
 # search each hand to the rank fusion. The manual has about a hundred rules.
 search_candidate_depth = 50

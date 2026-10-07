@@ -40,7 +40,13 @@ from retrieval_fakes import (
 from contracts.enums import ChunkSet
 from contracts.errors import ErrorCode
 from contracts.rules import rule_ids_defined_in
-from retrieval.domain.chunker import ManualInvalid, chunk_id_for, cut_chunks
+from retrieval.domain.chunker import (
+    FURNITURE_ROLES,
+    ManualInvalid,
+    chunk_id_for,
+    cut_chunks,
+    cut_fixed_chunks,
+)
 from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
     Chunk,
@@ -97,6 +103,21 @@ def test_story_2_2_a_smart_chunk_holds_exactly_one_rule_with_its_place_in_the_ma
             list(chunk.rule_ids) == rule_ids_defined_in(chunk.text) == [chunk.rule_id]
         )
     assert second.manual_page == 3
+    # The chunk id is derived from the chunk set and the rule: the same on
+    # every run, and when the rest of the manual moves. Letters, digits and
+    # dashes, a form Azure AI Search takes as a key (Epic 3).
+    assert first.chunk_id == chunk_id_for(ChunkSet.SMART, RULE_A) == f"smart-{RULE_A}"
+    again = cut_chunks(manual(filler_pages=2))[0]
+    assert again.chunk_id == first.chunk_id
+    assert again.manual_page == first.manual_page + 2
+    assert first.chunk_id.replace("-", "").isalnum()
+    # Two definitions the layout model read as one paragraph are two chunks.
+    both = f"{definition(RULE_A, 'First band.')} {definition(RULE_B, 'Second band.')}"
+    joined = cut_chunks(layout(["1 Gout", "1.4 Probable rating", f"Before. {both}"]))
+    assert [(chunk.rule_id, chunk.text) for chunk in joined] == [
+        (RULE_A, f"Rule {RULE_A}: First band."),
+        (RULE_B, f"Rule {RULE_B}: Second band."),
+    ]
 
 
 def test_story_2_2_a_rule_a_chunk_refers_to_is_a_reference_never_one_of_its_rule_ids() -> (
@@ -113,20 +134,6 @@ def test_story_2_2_a_rule_a_chunk_refers_to_is_a_reference_never_one_of_its_rule
     # A mention outside a definition defines nothing: `3.5 ... Under rule`
     # and the table cell that holds an id are no chunks.
     assert len(cut_chunks(manual())) == 3
-
-
-def test_story_2_2_the_chunk_id_is_derived_from_the_chunk_set_and_the_rule() -> None:
-    first, _, _ = cut_chunks(manual())
-
-    assert first.chunk_id == chunk_id_for(ChunkSet.SMART, RULE_A) == f"smart-{RULE_A}"
-    # The same on every run, and when the rest of the manual moves.
-    again = cut_chunks(manual(filler_pages=2))[0]
-    assert again.chunk_id == first.chunk_id
-    assert again.manual_page == first.manual_page + 2
-    # Another chunk set gets ids of its own (Epic 3), in a form Azure AI
-    # Search takes as a key: letters, digits and dashes.
-    assert chunk_id_for(ChunkSet.FIXED, RULE_A) == f"fixed-{RULE_A}"
-    assert first.chunk_id.replace("-", "").isalnum()
 
 
 def test_story_2_2_page_furniture_is_in_no_chunk_with_or_without_roles() -> None:
@@ -155,14 +162,105 @@ def test_story_2_2_a_header_or_footer_inside_a_rules_text_fails_the_run() -> Non
     )
 
 
-def test_story_2_2_two_definitions_in_one_paragraph_are_two_chunks() -> None:
-    both = f"{definition(RULE_A, 'First band.')} {definition(RULE_B, 'Second band.')}"
-    chunks = cut_chunks(layout(["1 Gout", "1.4 Probable rating", f"Before. {both}"]))
+def test_story_3_2_the_fixed_cut_is_the_body_text_in_order_in_runs_of_a_fixed_size() -> (
+    None
+):
+    size, overlap = 12, 4
+    chunks = cut_fixed_chunks(manual(), size, overlap)
 
-    assert [(chunk.rule_id, chunk.text) for chunk in chunks] == [
-        (RULE_A, f"Rule {RULE_A}: First band."),
-        (RULE_B, f"Rule {RULE_B}: Second band."),
+    # The body text in reading order, page furniture left out: every chunk
+    # but the last has the fixed size, and begins with the last words of
+    # the one before it.
+    body = [
+        word
+        for paragraph in manual().paragraphs
+        if paragraph.role not in FURNITURE_ROLES
+        for word in paragraph.text.split()
     ]
+    rebuilt = chunks[0].text.split()
+    for chunk in chunks[1:]:
+        words = chunk.text.split()
+        assert words[:overlap] == rebuilt[-overlap:]
+        rebuilt += words[overlap:]
+    assert rebuilt == body
+    assert all(len(chunk.text.split()) == size for chunk in chunks[:-1])
+    for chunk in chunks:
+        assert chunk.chunk_set is ChunkSet.FIXED
+        assert HEADER not in chunk.text and FOOTER not in chunk.text
+        assert "Page " not in chunk.text
+        # AD-12: the rules whose definition marker lies inside its text, by
+        # the contracts' function; a rule it only mentions is a reference.
+        assert list(chunk.rule_ids) == rule_ids_defined_in(chunk.text)
+        assert not set(chunk.rule_ids) & set(chunk.reference_rule_ids)
+    # Every rule of the manual is defined by a chunk, and referred to by another.
+    assert {rule for chunk in chunks for rule in chunk.rule_ids} == {
+        RULE_A,
+        RULE_B,
+        RULE_C,
+    }
+    assert any(RULE_B in chunk.reference_rule_ids for chunk in chunks)
+    # The id is the chunk set and the position: the same on every run of
+    # the same manual and settings, sorted in the manual's order, and of
+    # the form Azure AI Search takes as a key.
+    assert [chunk.chunk_id for chunk in chunks] == [
+        f"fixed-{position:04d}" for position in range(1, len(chunks) + 1)
+    ]
+    assert cut_fixed_chunks(manual(), size, overlap) == chunks
+    # Two paragraphs are a line break apart, the words of one a space.
+    assert f"1 Introduction\nThis manual is made up. {MARK}" in "\n".join(
+        chunk.text for chunk in chunks
+    )
+    # Section, impairment and page are those of where the chunk starts; one
+    # that starts before the first numbered section stands in the front matter.
+    assert (chunks[0].section_id, chunks[0].impairment, chunks[0].manual_page) == (
+        "0",
+        "Front matter",
+        1,
+    )
+    assert {c.impairment for c in chunks if c.manual_page == 3} == {
+        "Raised blood sugar"
+    }
+    last = chunks[-1]
+    assert (last.impairment, last.manual_page) == ("Gout", 4)
+    assert last.section_id.startswith("3")
+    # Without roles the contents page's lines read as headings: what stands
+    # before the first section's own heading is front matter all the same.
+    no_roles = cut_fixed_chunks(
+        without_roles(manual(), "3 Months after diagnosis"), size, overlap
+    )
+    assert {c.impairment for c in no_roles if c.manual_page == 1} == {"Front matter"}
+    assert {c.impairment for c in no_roles if c.manual_page == 3} == {
+        "Raised blood sugar"
+    }
+    # Another size is another cut.
+    assert len(cut_fixed_chunks(manual(), 30, overlap)) < len(chunks)
+    # It checks its own result: with no overlap, a cut that falls inside a
+    # definition marker leaves the rule defined by no chunk.
+    split = layout(["1 Gout", f"Before Rule {RULE_A}: Threshold: a reading."])
+    assert cut_fixed_chunks(split, 4, 1)[1].rule_ids == (RULE_A,)
+    with pytest.raises(ManualInvalid) as raised:
+        cut_fixed_chunks(split, 4, 0)
+    assert (raised.value.reason, raised.value.where) == (
+        "definition_in_no_chunk",
+        RULE_A,
+    )
+    # A marker that only the joining of two paragraphs forms defines nothing,
+    # and a footer the layout model merged into a paragraph is refused there.
+    for parsed, reason, where in (
+        (
+            layout(["1 Gout", definition(RULE_A), "See the Rule", f"{RULE_B}: no."]),
+            "definition_across_paragraphs",
+            RULE_B,
+        ),
+        (
+            layout(["1 Gout", definition(RULE_A), f"Text. {FOOTER}"]),
+            "page_furniture_in_chunk",
+            "1",
+        ),
+    ):
+        with pytest.raises(ManualInvalid) as raised:
+            cut_fixed_chunks(parsed, 12, 4)
+        assert (raised.value.reason, raised.value.where) == (reason, where)
 
 
 @pytest.mark.parametrize(

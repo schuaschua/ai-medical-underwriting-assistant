@@ -38,29 +38,35 @@ class ParsedLayout:
 
 @dataclass(frozen=True, slots=True)
 class Chunk:
-    """AD-12: one rule of the manual, cut from the parsed layout."""
+    """AD-12: one piece of the manual, cut from the parsed layout.
+
+    A `smart` chunk is one rule's definition. A `fixed` chunk is a run of
+    the body text of a fixed size, and defines whatever rules have their
+    definition marker inside it: none, one or several.
+    """
 
     chunk_id: str
     chunk_set: ChunkSet
-    # The one rule the text defines.
-    rule_id: str
-    # The rule's definition, with the text that belongs to it.
+    # Only the rules the text defines, never ones it refers to (AD-12).
+    rule_ids: tuple[str, ...]
+    # The text: a rule's definition, or the run of body text.
     text: str
     # The rules the text refers to and does not define, in order of first mention.
     reference_rule_ids: tuple[str, ...]
-    # The numbered part of the manual the definition is printed in, such as
-    # `2.4`, and that part's heading.
+    # The numbered part of the manual the chunk starts in, such as `2.4`,
+    # and that part's heading.
     section_id: str
     section_title: str
     # The heading of the numbered section the part belongs to.
     impairment: str
-    # The 1-based page the definition is printed on.
+    # The 1-based page the chunk starts on.
     manual_page: int
 
     @property
-    def rule_ids(self) -> tuple[str, ...]:
-        """Only the rules the chunk defines, never ones it refers to (AD-12)."""
-        return (self.rule_id,)
+    def rule_id(self) -> str:
+        """The one rule a `smart` chunk defines."""
+        (rule_id,) = self.rule_ids
+        return rule_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +74,11 @@ class ChunkRecord:
     """A chunk as it is stored: the one source for every store (Epic 3 loads the same records)."""
 
     chunk: Chunk
-    # One line, written by the chat model, that says where the rule sits in the manual.
+    # One line, written by the chat model, that says where the rule sits in
+    # the manual. Empty for a `fixed` chunk: the plain baseline has none.
     context_line: str
-    # The vector of the context line followed by the chunk text.
+    # The vector of what was embedded: the context line followed by the
+    # chunk text, or a `fixed` chunk's own text.
     embedding: tuple[float, ...]
     # What the context line and the vector were made from: see `fingerprint`.
     content_hash: str
@@ -85,18 +93,24 @@ class StoredChunk:
     chunk_id: str
     content_hash: str
     manual_page: int
+    # The rules the chunk defines: what a run must not lose too many of.
+    rule_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class IngestRun:
     """What the stored chunk set was last built from, by a run that succeeded.
 
-    A run that finds the same manual, prompt and deployments, and as many
+    A run that finds the same manual, recipe and deployments, and as many
     chunks as that run left, has nothing to do.
     """
 
     manual_sha256: str
+    # A digest of how the chunks are made, besides the manual and the
+    # deployments: the context-line prompt for the `smart` set, the chunk
+    # size and overlap for the `fixed` set (`ingest.recipe_digest`).
     prompt_digest: str
+    # Empty for the `fixed` set, which asks no chat model.
     chat_deployment: str
     embedding_deployment: str
     chunk_count: int
@@ -144,3 +158,6 @@ class IndexedChunk:
     text: str
     manual_page: int
     impairment: str
+    # The cosine distance from the query's vector, 0 to 2, when the chunk
+    # was found by the vector search; None otherwise.
+    cosine_distance: float | None = None

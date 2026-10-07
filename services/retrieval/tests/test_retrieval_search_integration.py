@@ -1,4 +1,4 @@
-"""Story 2.3, against a real PostgreSQL with pgvector.
+"""Stories 2.3 and 3.2, against a real PostgreSQL with pgvector.
 
 Run `docker compose up --detach --wait` first. No test here calls Azure or a
 model. The chunks and their vectors are made by hand, so that the order each
@@ -25,6 +25,7 @@ from retrieval_fakes import (
     MemorySchemaRevision,
     axis,
     chunk_record,
+    fixed_record,
 )
 from sqlalchemy import func, literal, select, text
 from sqlalchemy.exc import DBAPIError
@@ -55,8 +56,10 @@ RULE_E = "UW-CC-001"
 SMART = ChunkSet.SMART
 EVERY_ROW = "SELECT chunk_id, xmin::text FROM retrieval.chunk ORDER BY chunk_id"
 
-# Five `smart` chunks and one `fixed` chunk that no search of `r3` may find.
-# The words and the vectors are chosen so that the two sides disagree.
+# Five `smart` chunks, and four `fixed` chunks that no search of `r2` or `r3`
+# may find. The words and the vectors are chosen so that the two sides
+# disagree. The `fixed` chunks are runs of the same text: the first holds two
+# definitions, and the second begins inside its overlap with the first.
 CHUNKS = [
     chunk_record(
         RULE_A,
@@ -93,12 +96,31 @@ CHUNKS = [
         impairment="Unnamed",
         manual_page=50,
     ),
-    chunk_record(
-        RULE_A,
-        "Glycated haemoglobin below seven per cent, cut by size.",
+    fixed_record(
+        1,
+        f"2.4 Probable rating Rule {RULE_A}: Glycated haemoglobin below seven per "
+        f"cent. Probable rating: debit 25. Rule {RULE_B}: Glycated haemoglobin from "
+        "seven to eight",
         axis(1),
-        chunk_set=ChunkSet.FIXED,
+        [RULE_A, RULE_B],
     ),
+    fixed_record(
+        2,
+        f"Rule {RULE_B}: Glycated haemoglobin from seven to eight per cent. Probable "
+        f"rating: debit 50. If the kidneys are affected, see rule {RULE_C}.",
+        axis(1, 2),
+        [RULE_B],
+        references=[RULE_C],
+    ),
+    fixed_record(
+        3,
+        "What does not change the rating. Serum urate above the range, with tophi.",
+        axis(3),
+        impairment="Gout",
+        manual_page=40,
+    ),
+    # As near the query as the second, and after it by its id.
+    fixed_record(4, "Worked examples.", axis(1, 2), manual_page=41),
 ]
 
 
@@ -233,19 +255,13 @@ def test_story_2_3_a_rule_id_in_a_query_is_found_whole_and_its_own_chunk_first(
     assert index.matching("UW-QQ-999", named=["UW-QQ-999"]) == []
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "urate & | ! ( ) <-> :*",
-        "urate'); DROP TABLE retrieval.chunk; --",
-    ],
-)
 def test_story_2_3_nothing_in_a_query_is_read_as_an_operator_or_as_sql(
-    index: Index, indexed_database: Settings, query: str
+    index: Index, indexed_database: Settings
 ) -> None:
     before = rows(indexed_database)
 
-    assert index.matching(query) == smart(RULE_D)
+    for query in ("urate & | ! ( ) <-> :*", "urate'); DROP TABLE retrieval.chunk; --"):
+        assert index.matching(query) == smart(RULE_D)
     assert rows(indexed_database) == before
 
 
@@ -255,21 +271,21 @@ BOUNDARY_CASES = [
 ]
 
 
-@pytest.mark.parametrize("query", BOUNDARY_CASES)
 def test_story_2_3_python_and_sql_agree_on_what_a_rule_id_in_a_query_is(
-    index: Index, query: str
+    index: Index,
 ) -> None:
-    # The pattern the full-text search rewrites a query with, run by PostgreSQL.
-    by_sql = index.column(
-        select(
-            func.array_to_string(
-                func.regexp_matches(literal(query), NAMED_RULE_ID, "g"), "-"
+    for query in BOUNDARY_CASES:
+        # The pattern the full-text search rewrites a query with, run by PostgreSQL.
+        by_sql = index.column(
+            select(
+                func.array_to_string(
+                    func.regexp_matches(literal(query), NAMED_RULE_ID, "g"), "-"
+                )
             )
         )
-    )
-    in_sql = tuple(dict.fromkeys(f"UW-{found.upper()}" for found in by_sql))
+        in_sql = tuple(dict.fromkeys(f"UW-{found.upper()}" for found in by_sql))
 
-    assert in_sql == rule_ids_named_in(query)
+        assert in_sql == rule_ids_named_in(query)
 
 
 # --- The search, whole ------------------------------------------------------------------------
@@ -470,6 +486,78 @@ def test_story_2_3_both_reads_of_a_search_see_one_index_and_cannot_write(
     assert len(rows(indexed_database)) == len(CHUNKS) - 1
 
 
+# --- The baseline rows (story 3.2) ----------------------------------------------------------
+
+
+def test_story_3_2_rows_r1_and_r2_search_by_vector_alone_each_over_its_own_chunk_set(
+    service: TestClient, model: Model
+) -> None:
+    # The only chunks that hold the query's one word are the farthest from
+    # the query's vector, which is A's.
+    r1 = search(service, "urate", retriever_config="r1", top_k=3)
+    r2 = search(service, "urate", retriever_config="r2")
+    r3 = search(service, "urate", retriever_config="r3")
+    defined_twice = service.get(f"/rules/{RULE_B}", params={"retriever_config": "r1"})
+    defined_once = service.get(f"/rules/{RULE_A}", params={"retriever_config": "r1"})
+    by_smart_row = service.get(f"/rules/{RULE_B}", params={"retriever_config": "r2"})
+    undefined = service.get(f"/rules/{RULE_D}", params={"retriever_config": "r1"})
+    not_built = [
+        service.post("/searches", json={"query": "urate", "retriever_config": row})
+        for row in ("r4", "r5", "r6")
+    ]
+
+    # `r1`: the `fixed` chunks by cosine similarity, nearest first, and the
+    # two that are equally near in the order of their ids.
+    assert [item.chunk_id for item in r1.items] == [
+        "fixed-0001",
+        "fixed-0002",
+        "fixed-0004",
+    ]
+    assert [item.rank for item in r1.items] == [1, 2, 3]
+    # The score is the similarity on 0 to 1: 1 for the same direction, and
+    # (1 + cos 45 degrees) / 2 for the two that share one of two dimensions.
+    assert [item.score for item in r1.items] == pytest.approx(
+        [1.0, (1 + 0.5**0.5) / 2, (1 + 0.5**0.5) / 2], abs=1e-6
+    )
+    # The common shape: a chunk names the rules it defines, none or several.
+    assert [item.rule_ids for item in r1.items] == [[RULE_A, RULE_B], [RULE_B], []]
+    assert (r1.items[2].manual_page, r1.items[0].impairment) == (
+        41,
+        "Raised blood sugar",
+    )
+    # `r2`: the same over the `smart` chunks. The chunk whose words match is
+    # last, at a right angle to the query; `r3` puts it first for its words.
+    assert [item.chunk_id for item in r2.items] == smart(
+        RULE_A, RULE_B, RULE_E, RULE_C, RULE_D
+    )
+    assert [item.score for item in r2.items] == pytest.approx(
+        [1.0, (1 + 0.5**0.5) / 2, (1 + 0.5**0.5) / 2, 0.5, 0.5], abs=1e-6
+    )
+    assert r3.items[0].chunk_id == f"smart-{RULE_D}"
+    assert (r1.retriever_config.value, r2.retriever_config.value) == ("r1", "r2")
+    for result in (r1, r2, r3):
+        assert all(0 <= item.score <= 1 for item in result.items)
+    # The query was embedded once per search, the same way for every row.
+    assert model.embedded == [["urate"]] * 3
+
+    # A rule read on `r1` answers the `fixed` chunk that holds the rule's
+    # marker; of two that hold it, the later one, where the definition goes on.
+    twice = RuleText.model_validate(defined_twice.json())
+    assert (twice.chunk_id, twice.chunk_set) == ("fixed-0002", ChunkSet.FIXED)
+    assert twice.reference_rule_ids == [RULE_C]
+    once = RuleText.model_validate(defined_once.json())
+    assert (once.rule_id, once.chunk_id) == (RULE_A, "fixed-0001")
+    assert f"Rule {RULE_B}:" in once.text
+    # A row on the `smart` set answers the `smart` chunk, as before.
+    assert by_smart_row.json()["chunk_id"] == f"smart-{RULE_B}"
+    # A rule no `fixed` chunk defines is not found; the rows not built yet
+    # are refused as not available.
+    assert answered(undefined) == (404, ErrorCode.NOT_FOUND)
+    assert [answered(response) for response in not_built] == [
+        (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
+    ] * 3
+
+
 def remove_chunk(settings: Settings, rule_id: str) -> None:
     with psycopg.connect(
         host=settings.database_host,
@@ -505,7 +593,7 @@ def test_story_2_3_a_rule_is_read_from_the_chunk_that_defines_it(
     assert index.defining(RULE_C).chunk_id == f"smart-{RULE_C}"
     # The `fixed` chunk of the same rule is another chunk set's.
     assert service.get(f"/rules/{RULE_A}").json()["chunk_id"] == f"smart-{RULE_A}"
-    assert index.defining(RULE_A, ChunkSet.FIXED).chunk_id == f"fixed-{RULE_A}"
+    assert index.defining(RULE_A, ChunkSet.FIXED).chunk_id == "fixed-0001"
     assert index.defining("UW-QQ-999") is None
 
 

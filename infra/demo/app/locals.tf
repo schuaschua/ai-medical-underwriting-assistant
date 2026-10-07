@@ -114,6 +114,12 @@ locals {
     # The job's own deadline: under the platform's limit on one execution
     # (var.ingest_timeout_seconds), so that the job ends itself and says why.
     { name = "RETRIEVAL_INGEST_DEADLINE_SECONDS", value = tostring(var.ingest_deadline_seconds) },
+    # Spine AD-11 and AD-12: the chunk sets the job writes, and the cut of
+    # the `fixed` set that row r1 reads. A changed size or overlap cuts that
+    # set again on the next run of the job.
+    { name = "RETRIEVAL_INGEST_CHUNK_SETS", value = jsonencode(var.ingest_chunk_sets) },
+    { name = "RETRIEVAL_FIXED_CHUNK_WORDS", value = tostring(var.fixed_chunk_words) },
+    { name = "RETRIEVAL_FIXED_CHUNK_OVERLAP_WORDS", value = tostring(var.fixed_chunk_overlap_words) },
   ]
 
   # What the verdict service is given. No password and no model key: the

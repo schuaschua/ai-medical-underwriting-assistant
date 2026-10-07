@@ -72,6 +72,9 @@ _EVERY_MATCH = "g"
 _AND_BETWEEN_WORDS = "' & '"
 _OR_BETWEEN_WORDS = "' | '"
 
+# The name the vector search gives the distance it orders by.
+COSINE_DISTANCE = "cosine_distance"
+
 _CHUNK = (
     chunk_table.c.chunk_id,
     chunk_table.c.chunk_set,
@@ -92,6 +95,8 @@ def _chunk(row: Any) -> IndexedChunk:
         text=row.text,
         manual_page=row.manual_page,
         impairment=row.impairment,
+        # Only the vector search selects it.
+        cosine_distance=getattr(row, COSINE_DISTANCE, None),
     )
 
 
@@ -115,10 +120,13 @@ def any_word_of(query: ColumnElement[str]) -> ColumnElement[Any]:
 def nearest_statement(
     chunk_set: ChunkSet, vector: Sequence[float], limit: int
 ) -> Select[Any]:
-    """Exact cosine nearest-neighbour: every chunk of the set is compared (AD-12)."""
+    """Exact cosine nearest-neighbour: every chunk of the set is compared (AD-12).
+
+    Each chunk comes with its distance, which the vector-only rows score by.
+    """
     distance = chunk_table.c.embedding.cosine_distance(list(vector))
     return (
-        select(*_CHUNK)
+        select(*_CHUNK, cast(distance, Float).label(COSINE_DISTANCE))
         .where(chunk_table.c.chunk_set == chunk_set.value)
         .order_by(distance, chunk_table.c.chunk_id)
         .limit(limit)
@@ -154,13 +162,19 @@ def matching_statement(
 
 
 def defining_statement(chunk_set: ChunkSet, rule_id: str) -> Select[Any]:
+    """The chunk of the set that holds the rule's definition marker.
+
+    One chunk in the `smart` set. In the `fixed` set a marker inside an
+    overlap is in two chunks: the later one is answered, in which the
+    marker stands near the start and most of the definition follows it.
+    """
     return (
         select(*_CHUNK)
         .where(
             chunk_table.c.chunk_set == chunk_set.value,
             chunk_table.c.rule_ids.contains([rule_id]),
         )
-        .order_by(chunk_table.c.chunk_id)
+        .order_by(chunk_table.c.chunk_id.desc())
         .limit(1)
     )
 

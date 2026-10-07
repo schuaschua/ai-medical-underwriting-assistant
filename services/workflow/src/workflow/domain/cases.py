@@ -44,7 +44,9 @@ DEFAULT_AUDIT_TRAIL_LIMIT = 500
 
 # AD-11: the ladder rows a case may run with unless the settings say otherwise
 # (WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS).
-DEFAULT_AVAILABLE_RETRIEVER_CONFIGS = frozenset({RetrieverConfig.R3})
+DEFAULT_AVAILABLE_RETRIEVER_CONFIGS = frozenset(
+    {RetrieverConfig.R1, RetrieverConfig.R2, RetrieverConfig.R3}
+)
 ROW_NOT_AVAILABLE_MESSAGE = "That retrieval row cannot be used yet."
 
 

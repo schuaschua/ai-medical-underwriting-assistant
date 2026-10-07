@@ -1,4 +1,4 @@
-"""Stories 2.5 and 2.6: a verdict run, the three tools and the rules that decide what is stored, on fakes.
+"""Stories 2.5, 2.6 and 3.2: a verdict run, the three tools and the rules that decide what is stored, on fakes.
 
 Unit tests of the domain: no database, no other service and no model. The
 agent is a stub whose script names the tool calls it makes and the answer it
@@ -19,6 +19,7 @@ from verdict_fakes import (
     DM_50,
     DM_DECLINE,
     HT_50,
+    HYPERTENSION,
     NOT_IN_MANUAL,
     PD_NONE,
     TOB_25,
@@ -36,6 +37,7 @@ from verdict_fakes import (
 from contracts.audit import AuditAction
 from contracts.enums import (
     ActorKind,
+    ChunkSet,
     ReasonEffect,
     RetrieverConfig,
     StageStatus,
@@ -47,11 +49,14 @@ from contracts.enums import (
 from contracts.errors import ErrorCode
 from contracts.ids import is_uuid7, new_id
 from contracts.models.extraction import Fact
+from contracts.models.retrieval import RuleText
 from contracts.models.verdict import (
     SUGGESTION_LABEL,
+    Reason,
     VerdictRunCommand,
     VerdictRunResult,
 )
+from verdict.domain.decide import rules_conflict
 from verdict.domain.effects import rating_in
 from verdict.domain.entities import Rating
 from verdict.domain.run import (
@@ -59,6 +64,7 @@ from verdict.domain.run import (
     RunPorts,
     run_verdict,
 )
+from verdict.domain.state import RunState
 from verdict.domain.toolbox import Toolbox
 
 SECRETS = ("SECRET", "HbA1c", "7.4", "Probable rating", "blood pressure query")
@@ -134,13 +140,90 @@ def case_facts(facts: FakeFacts, case_id: str, *verified: bool) -> list[Fact]:
 # --- the rating a rule's text names --------------------------------------------
 
 
-def test_story_2_6_the_rating_is_read_off_the_rules_own_definition() -> None:
+def test_story_3_2_on_r1_a_reason_is_checked_against_the_rules_own_definition_inside_a_fixed_chunk(
+    case_id: str,
+    ports: RunPorts,
+    facts: FakeFacts,
+    rules: FakeRules,
+    repository: MemoryRepository,
+    options: RunOptions,
+    fixed_now: datetime,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Story 2.6: the rating is read off the rule's own definition, in the
+    # forms the manual prints.
     for rating, expected in (
         ("a debit of +50 %", Rating(ReasonEffect.DEBIT, 50)),
         ("decline as a postponement", Rating(ReasonEffect.DECLINE)),
         ("to be agreed with the chief underwriter", None),
     ):
         assert rating_in(rule_text(DM_50, DIABETES, rating), DM_50) == expected
+    # A `fixed` chunk as row `r1` reads it: the end of one definition, a
+    # whole one, and the start of a third, cut off before its rating.
+    cut_off = rule_text(HT_50, HYPERTENSION, "a debit of +50 %").partition("rating")[0]
+    chunk = (
+        f"{rule_text(DM_25, DIABETES, 'a debit of +25 %')} "
+        f"{rule_text(DM_50, DIABETES, 'a debit of +50 %')} {cut_off}"
+    )
+    assert rating_in(chunk, DM_50) == Rating(ReasonEffect.DEBIT, 50)
+    assert rating_in(chunk, DM_25) == Rating(ReasonEffect.DEBIT, 25)
+    assert rating_in(chunk, HT_50) is None
+    # A definition is one paragraph. A rating printed after it, in a worked
+    # example of the same chunk, is not the rule's and bears out nothing.
+    example = "Worked example. Probable rating: a debit of +75 %."
+    assert rating_in(f"{cut_off}\n{example}", HT_50) is None
+    whole = rule_text(HT_50, HYPERTENSION, "a debit of +50 %")
+    assert rating_in(f"{whole}\n{example}", HT_50) == Rating(ReasonEffect.DEBIT, 50)
+    for rule_id in (DM_50, HT_50):
+        rules.manual[rule_id] = RuleText(
+            rule_id=rule_id,
+            chunk_id="fixed-0007",
+            chunk_set=ChunkSet.FIXED,
+            text=chunk,
+            manual_page=12,
+            impairment=DIABETES,
+            reference_rule_ids=[],
+        )
+    glucose, pressure = case_facts(facts, case_id, True, True)
+    rules.by_query = {"glucose": [DM_50], "pressure": [HT_50]}
+    agent = agent_that(
+        LIST,
+        search(glucose.fact_id, "glucose"),
+        read(DM_50),
+        search(pressure.fact_id, "pressure"),
+        read(HT_50),
+        answers=final_answer(
+            reason(DM_50, glucose.fact_id), reason(HT_50, pressure.fact_id)
+        ),
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = suggest(
+            case_id,
+            with_agent(ports, agent),
+            options,
+            fixed_now,
+            retriever_config=RetrieverConfig.R1,
+        )
+
+    # A run keyed on the case and `r1`, whose searches and reads all went
+    # to `retrieval` with that row.
+    assert (result.status, result.retriever_config) == (
+        StageStatus.DONE,
+        RetrieverConfig.R1,
+    )
+    assert {config for _, config, _ in rules.searches} == {RetrieverConfig.R1}
+    assert {config for _, config in rules.reads} == {RetrieverConfig.R1}
+    run = repository.stored_run()
+    # The debit of the rule defined whole in the chunk is its own +50, not
+    # its neighbour's +25. The definition cut off before its rating bears
+    # out nothing: that reason is dropped, and the run refers.
+    assert [(item.rule_id, item.effect, item.debit_pct) for item in run.reasons] == [
+        (DM_50, ReasonEffect.DEBIT, 50)
+    ]
+    assert (run.verdict, run.loading_pct) == (Verdict.REFER, None)
+    assert run.system_reasons == [SystemReason.NO_MATCHING_RULE]
+    assert "rating_not_read:1" in caplog.text
 
 
 # --- the matrix: what a run stores ---------------------------------------------
@@ -569,6 +652,38 @@ def test_story_2_6_two_bands_of_one_impairment_conflict_also_on_different_facts(
     assert run.system_reasons == [SystemReason.CONFLICTING_RULES]
     assert [item.rule_id for item in run.reasons] == [DM_25, DM_50]
     assert run.loading_pct is None
+
+    # Two rules of one impairment add where one's definition refers to the
+    # other, as the manual does for a smoker's status and the lifetime total:
+    # that is no conflict. A chunk that merely holds both definitions is.
+    def cited(*texts: str) -> bool:
+        state = RunState()
+        for rule_id, text in zip((DM_25, DM_50), texts, strict=True):
+            state.rule_texts[rule_id] = text
+            state.impairments[rule_id] = DIABETES
+        both = [
+            Reason(
+                rule_id=DM_25,
+                fact_ids=[first.fact_id],
+                effect=ReasonEffect.NONE,
+                debit_pct=None,
+            ),
+            Reason(
+                rule_id=DM_50,
+                fact_ids=[second.fact_id],
+                effect=ReasonEffect.NONE,
+                debit_pct=None,
+            ),
+        ]
+        return rules_conflict(both, state)
+
+    plain = [
+        rule_text(rule_id, DIABETES, "no debit, +0 %") for rule_id in (DM_25, DM_50)
+    ]
+    assert cited(*plain)
+    assert cited("\n".join(plain), "\n".join(plain))
+    assert not cited(rule_text(DM_25, DIABETES, "no debit, +0 %", DM_50), plain[1])
+    assert not cited(plain[0], rule_text(DM_50, DIABETES, "no debit, +0 %", DM_25))
 
 
 @pytest.mark.parametrize(

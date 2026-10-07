@@ -30,6 +30,7 @@ from retrieval_fakes import (
     StubModel,
     axis,
     chunk_record,
+    fixed_record,
     vector_for,
 )
 
@@ -117,7 +118,7 @@ def found(response: httpx2.Response) -> SearchResponse:
 # --- The row table ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("config", ["r1"])
+@pytest.mark.parametrize("config", ["r4"])
 def test_story_2_3_a_row_that_is_not_built_is_refused_as_not_available(
     config: str,
 ) -> None:
@@ -144,10 +145,8 @@ def test_story_2_3_fusion_adds_one_over_sixty_plus_rank_for_each_list() -> None:
     ]
     # The largest score two lists can give is inside the contract's 0 to 1.
     assert reciprocal_rank_fusion(["a"], ["a"]) == [Fused("a", 2 / 61)]
-
-
-def test_story_2_3_fusion_breaks_ties_by_chunk_id() -> None:
-    # Each chunk is first in one list and second in the other: equal scores.
+    # Ties are broken by chunk id. Each chunk is first in one list and
+    # second in the other: equal scores.
     one_way = reciprocal_rank_fusion(["z", "a"], ["a", "z"])
     other_way = reciprocal_rank_fusion(["a", "z"], ["z", "a"])
 
@@ -393,3 +392,53 @@ def test_story_2_3_an_unknown_rule_is_not_found_and_a_malformed_id_is_refused(
         )
     # A malformed id is refused before anything is looked up.
     assert len(index.asked) == asked
+
+
+# --- The baseline rows (story 3.2) ------------------------------------------------------------
+
+
+def test_story_3_2_a_row_whose_chunk_set_was_never_ingested_is_refused_not_answered_empty(
+    client: TestClient, index: MemoryIndex
+) -> None:
+    # No run record: the job never wrote the set this row reads.
+    index.embedding_deployment = None
+
+    searched = search(client, retriever_config="r1")
+    read = client.get(f"/rules/{RULE_A}", params={"retriever_config": "r1"})
+
+    # Not "nothing found": a search with no items and a rule that is not
+    # in the manual would both be untrue.
+    assert error_of(searched) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
+    assert error_of(read) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
+    assert "not been ingested" in read.json()["error"]["message"]
+    # Neither list was read, and no chunk looked for.
+    assert index.asked == []
+
+
+def test_story_3_2_a_rule_read_on_r1_answers_the_references_of_that_rules_own_definition(
+    client: TestClient, index: MemoryIndex
+) -> None:
+    # One `fixed` chunk: two definitions, each a paragraph, and a worked
+    # example after them that mentions a rule neither refers to.
+    index.records.append(
+        fixed_record(
+            1,
+            f"Rule {RULE_A}: Mild. See rule {RULE_B}.\n"
+            f"Rule {RULE_B}: Worse. See rule {RULE_C}.\n"
+            f"Worked example: under rule {RULE_D} nothing changes.",
+            axis(1),
+            [RULE_A, RULE_B],
+            references=[RULE_C, RULE_D],
+        )
+    )
+
+    first = client.get(f"/rules/{RULE_A}", params={"retriever_config": "r1"}).json()
+    second = client.get(f"/rules/{RULE_B}", params={"retriever_config": "r1"}).json()
+
+    # The rule it refers to is defined in the same chunk, and is answered;
+    # what its neighbour and the example mention is not: reading one rule
+    # does not open the others' references to the agent.
+    assert (first["chunk_id"], first["reference_rule_ids"]) == ("fixed-0001", [RULE_B])
+    assert second["reference_rule_ids"] == [RULE_C]
+    # The text is the chunk, whole.
+    assert first["text"] == second["text"]

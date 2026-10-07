@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from contracts.enums import ChunkSet
 from contracts.models.retrieval import MAX_TOP_K
 
 # The Dapr app id; also the service name telemetry is reported under, and the
@@ -140,11 +141,26 @@ class Settings(BaseSettings):
     # The job gives up after this long, and leaves the index as it was. The
     # one transaction that stores a finished run is not cut off by it.
     ingest_deadline_seconds: Annotated[float, Field(gt=0)] = 1800.0
-    # A run that would remove more than this share of the stored chunks is
-    # refused: a manual that was parsed badly looks like one that lost its
-    # rules. Set the second for the one run of a manual that really lost them.
+    # A run after which more than this share of the rules a chunk set
+    # defines would be defined by none of its chunks is refused: a manual
+    # that was parsed badly looks like one that lost its rules. The second
+    # names the chunk sets for which the one run of a manual that really
+    # lost them is let through (`["smart"]`, `["fixed"]` or both).
     ingest_max_removed_share: Annotated[float, Field(ge=0.0, le=1.0)] = 0.1
-    ingest_allow_large_removal: bool = False
+    ingest_allow_large_removal: list[ChunkSet] = []
+    # AD-11: the chunk sets the job writes, in this order, each as a run of
+    # its own. `smart` is what rows `r2` to `r6` read, `fixed` what `r1` reads.
+    ingest_chunk_sets: Annotated[list[ChunkSet], Field(min_length=1)] = [
+        ChunkSet.SMART,
+        ChunkSet.FIXED,
+    ]
+    # Row `r1`: how many words a `fixed` chunk holds, and how many of them it
+    # shares with the chunk before it. They are part of what a run records:
+    # a change cuts the `fixed` set again. The overlap is at least one word:
+    # without any, a cut that falls inside a definition marker leaves that
+    # rule in no chunk, and the run fails.
+    fixed_chunk_words: Annotated[int, Field(ge=20, le=2000)] = 350
+    fixed_chunk_overlap_words: Annotated[int, Field(ge=1, le=1000)] = 35
 
     # AD-11, row `r3`: how many chunks the vector search and the full-text
     # search each hand to the fusion. Never fewer than the most items a search
@@ -218,6 +234,18 @@ class Settings(BaseSettings):
             _reached_safely("MODEL", self.model_endpoint, self.model_entra_auth)
         if self.layout_endpoint is not None:
             _reached_safely("LAYOUT", self.layout_endpoint, self.layout_entra_auth)
+        return self
+
+    @model_validator(mode="after")
+    def _the_fixed_cut_moves_on(self) -> Self:
+        if len(set(self.ingest_chunk_sets)) != len(self.ingest_chunk_sets):
+            raise ValueError("RETRIEVAL_INGEST_CHUNK_SETS must not repeat a value")
+        if self.fixed_chunk_overlap_words * 2 > self.fixed_chunk_words:
+            # Each chunk must bring more new words than it repeats.
+            raise ValueError(
+                "RETRIEVAL_FIXED_CHUNK_OVERLAP_WORDS must not be more than half of "
+                "RETRIEVAL_FIXED_CHUNK_WORDS"
+            )
         return self
 
     @model_validator(mode="after")

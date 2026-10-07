@@ -517,14 +517,27 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
             runner.run(repository.append_step(step))
 
         def of_case(
-            tool: ToolName | None = None, rule_id: str | None = None, limit: int = 50
+            tool: ToolName | None = None,
+            rule_id: str | None = None,
+            limit: int = 50,
+            after: tuple[str, int] | None = None,
         ) -> list[tuple[str, int]]:
-            listed = runner.run(repository.steps_of_case(case_id, tool, rule_id, limit))
+            listed = runner.run(
+                repository.steps_of_case(case_id, tool, rule_id, after, limit)
+            )
             return [(step.verdict_run_id, step.step_no) for step in listed]
 
-        of_run = runner.run(repository.steps_of_run(first_run, 50))
-        first_two = runner.run(repository.steps_of_run(first_run, 2))
-        of_no_run = runner.run(repository.steps_of_run(new_id(), 50))
+        of_run = runner.run(repository.steps_of_run(first_run, None, None, None, 50))
+        first_two = runner.run(repository.steps_of_run(first_run, None, None, None, 2))
+        of_no_run = runner.run(repository.steps_of_run(new_id(), None, None, None, 50))
+        # Story 2.8: the cursor and the filters of the read by run.
+        after_two = runner.run(repository.steps_of_run(first_run, None, None, 2, 50))
+        run_searches = runner.run(
+            repository.steps_of_run(first_run, ToolName.SEARCH_RULES, DM_50, None, 50)
+        )
+        after_third = of_case(after=(second_run, 1))
+        searches_after_third = of_case(ToolName.SEARCH_RULES, after=(first_run, 2))
+        after_no_step = of_case(after=(other_run, 1))
         everything = of_case()
         searches = of_case(ToolName.SEARCH_RULES)
         with_rule = of_case(rule_id=DM_50)
@@ -557,6 +570,14 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
     assert second_rule == [(first_run, 2)]
     assert unseen == []
     assert bounded == everything[:3]
+    # Story 2.8: the rest is read from the last step seen on. By run that is
+    # a step number; by case the step's place in the log, and a step the
+    # case does not have gives nothing.
+    assert [step.step_no for step in after_two] == [3]
+    assert [step.step_no for step in run_searches] == [2]
+    assert after_third == everything[2:]
+    assert searches_after_third == [(second_run, 3)]
+    assert after_no_step == []
 
 
 # --- The real service ---------------------------------------------------------------------

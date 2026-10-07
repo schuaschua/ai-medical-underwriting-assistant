@@ -646,6 +646,9 @@ module "workflow" {
         { name = "WORKFLOW_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
         # Spine AD-7: only workflow gets the gate's threshold.
         { name = "WORKFLOW_GATE_THRESHOLD", value = tostring(var.gate_threshold) },
+        # Spine AD-11: the ladder rows a case may run with. `retrieval` and
+        # `verdict` name the rows they can answer in their own code.
+        { name = "WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS", value = jsonencode(var.available_retriever_configs) },
       ]
 
       # azure.md rule 22. Startup and liveness ask the process; readiness

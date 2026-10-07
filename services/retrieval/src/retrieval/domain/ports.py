@@ -164,7 +164,7 @@ class IndexSnapshot(Protocol):
         """The chunks whose vectors are nearest the given one by cosine, nearest first.
 
         Exact, not approximate (AD-12). Chunks equally near come in the
-        order of their `chunk_id`.
+        order of their `chunk_id`. Each chunk carries its `cosine_distance`.
         """
         ...
 
@@ -193,5 +193,8 @@ class ChunkIndex(Protocol):
         ...
 
     async def defining(self, chunk_set: ChunkSet, rule_id: str) -> IndexedChunk | None:
-        """The chunk of the set that defines the rule, or None when none does."""
+        """The chunk of the set that holds the rule's definition marker, or None when none does.
+
+        When two `fixed` chunks hold it (a marker inside an overlap), the later one.
+        """
         ...
