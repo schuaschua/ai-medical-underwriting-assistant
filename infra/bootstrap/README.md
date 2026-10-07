@@ -10,7 +10,7 @@ The environment has a fixed cost of roughly USD 91 a month while it is up (Azure
 - `gh` signed in with admin rights on `schuaschua/ai-medical-underwriting-assistant`.
 - Terraform 1.16.5 exactly (the stack pins it).
 
-Nothing in this file has been run yet (see the log at the end). Where it says what a command prints or how long it takes, that is what the code is written to do, not something observed.
+Most of this file has now been run; the log at the end says what and when. Where a passage still says "not yet run" or "expected", that part is written from the code and has not been observed.
 
 ## 1. Bootstrap (once)
 
@@ -132,7 +132,7 @@ What to expect on a teardown and re-create:
 
 ## 4. Database role for `intake`
 
-Added by story 1.5. **None of the commands in this section has been run yet**: they are written from the configuration and from Azure's documentation, so read each step's output before going on. Add each run to the log below.
+Added by story 1.5. Steps 0 to 3 were run as written on 2026-10-07 (test session 3) and worked; the upgrade note at the end has not been run. Add each run to the log below.
 
 `intake` is the first service with a database schema (spine AD-4). PostgreSQL access is not an Azure role, so Terraform cannot grant it: after the `foundation` stack is up, an operator does the steps below once, and again after every teardown, because the re-created identity has a new principal id. The deploy workflow has no migration step yet (`terraform.md` rule 36), so the migrations are run here by hand as well. Until this section is done, `intake` reports "not ready" and an upload is answered with 502.
 
@@ -250,7 +250,7 @@ Then the `intake` app's latest revision becomes ready within a minute or so, and
 
 ## 5. Database role for `workflow`
 
-Added by story 1.6. **None of the commands in this section has been run yet**: they are written from the configuration and from section 4, so read each step's output before going on. Add each run to the log below.
+Added by story 1.6. Steps 0 to 3 were run as written on 2026-10-07 (test session 3) and worked, giving the rights table below; the upgrade note at the end has not been run. Add each run to the log below.
 
 `workflow` owns schema `workflow`: case status, page status and the audit trail (spine AD-4, AD-8). As for `intake`, an operator does these steps once after the `foundation` stack is up, and again after every teardown. Until this section is done, `workflow` reports "not ready", a case cannot be started, and the upload screen shows an uploaded case as received but not started.
 
@@ -385,3 +385,4 @@ Every command that changed Azure or GitHub outside the pipeline, newest last (`t
 | 2026-10-06 | Coding agent, as operator | `terraform init`, `plan -out=tfplan`, `apply tfplan` (test session 1) | Applied the `foundation` stack locally under the recorded exception to `terraform.md` rules 26 and 33. The first apply failed on the Foundry project (409, fixed in code); a second apply completed. |
 | 2026-10-06 | Coding agent, as operator | `terraform state rm azurerm_resource_group.this`, `plan -destroy`, `apply`, `az cognitiveservices account purge` x3, `az resource delete` on the auto-created alert rule | Tore down test session 1. The resource group, state container and deployment identity were kept. |
 | 2026-10-06 | Coding agent, as operator | Bring-up and tear-down again (test session 2) | Fresh apply in one run (1 imported, 103 added); the plan straight after showed no changes; then torn down the same way. Nothing is left running. |
+| 2026-10-07 | Coding agent, as operator | Bring-up; sections 4 and 5 as written; `az acr build` for `web`, `intake`, `workflow`; `terraform apply` of `infra/demo/app`; tear-down of both stacks (test session 3) | First deploy, done by hand from the branch because the deploy workflow runs only from `main`. Sections 4 and 5 ran without change. Three Container Apps came up ready; an upload and a case start worked against the public address. The `app` stack was destroyed (33 resources); the foundation tear-down was still running when this entry was written, so check that the resource group is empty. |

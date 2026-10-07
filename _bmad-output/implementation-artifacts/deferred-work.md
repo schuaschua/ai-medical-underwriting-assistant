@@ -69,3 +69,9 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-6-case-lifecycle-and-audit-trail.md`
   summary: Confirm the recording rules and the status transition table that later stories inherit.
   evidence: Chosen here without a stage to test them against: a failed page stage fails the whole case; a failed case takes no further result; a page number is the position in `page_ids`; a page reaches `extracted` only from `extracting`, which the gate or a decision must set first (`workflow/domain/transitions.py`). A case whose orchestration cannot go on is marked failed by the orchestration; if that last activity also fails on every retry, the case stays `running` until a repeat start finds the dead orchestration. Pick up in stories 1.7 to 1.9.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-5-upload-a-document-and-see-the-case.md`
+  summary: Hold the services at one replica for the demo, and find out whether a Dapr call wakes a service scaled to zero.
+  evidence: Observed 2026-10-07: after 8 idle minutes `web` was at zero replicas and the next request took 30 s; `intake` had not scaled down, so the Dapr wake question is still open. `min_replicas` exists as a variable. Owner decision for the demo.
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-deployable-web-entry-with-the-role-switcher.md`
+  summary: Run the deploy workflow itself from `main`, and the CI and infrastructure pull-request workflows.
+  evidence: The first deploy was done by hand from the branch; no GitHub workflow has run yet. Needs a pull request and a merge (owner).

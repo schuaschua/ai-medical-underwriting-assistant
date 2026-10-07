@@ -105,6 +105,17 @@ context:
 - Through the sidecars: an upload of `data/cases/case-002.pdf` answered 201; a retry with the same idempotency key returned the same case; a 6.3 MB PDF answered 201 (so the 16 MB sidecar limit holds above Dapr's 4 MB default); an 11 MB file answered 413 `file_too_large`; start answered 200 `running` and a repeat gave the same answer; a customer start with options answered 403; progress answered 200 with no pages; audit answered 403 for the customer and 200 for the underwriter; an underwriter upload answered 403.
 - Still unproven: the same path in the deployed Azure environment.
 
+
+### Proven in the deployed Azure environment (2026-10-07, test session 3, main session as operator)
+
+- Foundation brought up in one apply (1 imported, 103 added, 11 minutes 21 seconds).
+- The database setup in `infra/bootstrap/README.md` sections 4 and 5 was extracted and run unchanged: both exited 0, the temporary firewall rule was gone after each, and the service role's rights on the `workflow` tables were `audit_event` INSERT and SELECT, `alembic_version` SELECT, `case_status` and `page_status` INSERT, SELECT and UPDATE.
+- The three images were built in the registry with `az acr build` at commit `d55b526`; the `app` stack applied in 2 minutes 18 seconds (33 added). The role assignments were accepted. All three revisions became ready; only `web` has external ingress.
+- Against the public address: `/api/health` 200; `/` 200 as HTML with the security headers; `/api/me` 200 with a role and 400 `invalid_role` without one, carrying a real trace id; an upload of a synthetic case PDF 201 in 2.3 s; the same idempotency key returned the same case; a 6 MB PDF 201 in 3.5 s; start 200 `running`, twice; progress 200; audit 200 for the underwriter and 403 for the customer.
+- After 8 idle minutes `web` had scaled to zero and `intake` still had one replica. The first `/api/health` then took 30 s and an upload 32 s. So a cold start costs about half a minute, and whether a Dapr call wakes a service that has scaled to zero is still unanswered, because `intake` did not scale down in that time.
+- Not done in this session: the deploy workflow itself (it runs only from `main`); the same steps were run by hand from the branch. The blob count in `originals` could not be read, because the operator has no data-plane role on the storage account.
+- The tear-down of both stacks was started at the end of the session and was still running when this was written (the `app` stack was already destroyed); the next session confirms the resource group is empty.
+
 ## Spec Change Log
 
 ## Review Triage Log
