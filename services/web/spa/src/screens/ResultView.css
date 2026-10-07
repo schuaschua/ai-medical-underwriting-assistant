@@ -79,3 +79,41 @@
 .result-rule-text {
   white-space: pre-wrap;
 }
+
+/* Compare (story 3.6): the two runs side by side, half the room each. */
+.result-compare {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.result-compare > * {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+
+/* A pane is half as wide as the findings: an opened rule goes under the
+   reasons, not beside them. */
+.result-compare .result-reasons {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* The findings are half the window, or all of it in a narrow one. Until
+   they are wide enough for two readable panes, one run is above the other. */
+.result-findings {
+  container-type: inline-size;
+}
+
+@container (max-width: 44rem) {
+  .result-compare {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* A difference is said in words; the outline only helps the eye find it. */
+.result-difference {
+  outline: 1px solid;
+  padding: 0 0.25em;
+}

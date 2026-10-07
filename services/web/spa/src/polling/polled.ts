@@ -47,6 +47,12 @@ export function usePolled<T>(
   state: Polled<T>;
   /** Read again now: something was changed, or the user asked. */
   refresh: () => void;
+  /**
+   * Read again at the usual pace although the value was judged settled:
+   * the caller awaits something the value does not tell of. Unlike
+   * `refresh` it keeps the wait after reads that failed.
+   */
+  follow: () => void;
 } {
   const [state, setState] = useState<Polled<T>>({ kind: "reading" });
   const mounted = useRef(true);
@@ -153,5 +159,9 @@ export function usePolled<T>(
   }, [readNow, everyMs]);
 
   const refresh = useCallback(() => readNow(true), [readNow]);
-  return { state, refresh };
+  const follow = useCallback(() => {
+    settled.current = false;
+    readNow(false);
+  }, [readNow]);
+  return { state, refresh, follow };
 }

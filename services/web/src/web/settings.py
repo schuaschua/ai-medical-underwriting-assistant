@@ -7,6 +7,8 @@ from typing import Annotated
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from contracts.enums import RetrieverConfig
+
 # The Dapr app id; also the service name telemetry is reported under.
 APP_ID = "web"
 # The probe target. It is kept out of traces: the platform calls it every few seconds.
@@ -74,6 +76,20 @@ class Settings(BaseSettings):
     # This one bounds the whole call to `intake`, from first byte sent to answer.
     upload_timeout_seconds: Annotated[float, Field(gt=0)] = 120.0
 
+    # AD-11: the two ladder rows the Compare toggle shows side by side, and
+    # the pair it uses when a row of the first is not built here. Each is
+    # set as a JSON list of two rows (`WEB_COMPARE_PAIR='["r4","r5"]'`).
+    # `web` only answers them to the SPA: which rows can run is `workflow`'s
+    # to say, by refusing one.
+    compare_pair: tuple[RetrieverConfig, RetrieverConfig] = (
+        RetrieverConfig.R4,
+        RetrieverConfig.R5,
+    )
+    compare_fallback_pair: tuple[RetrieverConfig, RetrieverConfig] = (
+        RetrieverConfig.R3,
+        RetrieverConfig.R5,
+    )
+
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.
     applicationinsights_connection_string: SecretStr | None = None
@@ -81,6 +97,15 @@ class Settings(BaseSettings):
     otel_sampling_ratio: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
     # Client id of the service's user-assigned identity; unset on a developer machine.
     azure_client_id: str | None = None
+
+    @field_validator("compare_pair", "compare_fallback_pair")
+    @classmethod
+    def _two_different_rows(
+        cls, pair: tuple[RetrieverConfig, RetrieverConfig]
+    ) -> tuple[RetrieverConfig, RetrieverConfig]:
+        if pair[0] is pair[1]:
+            raise ValueError("a pair names two different rows")
+        return pair
 
     @field_validator(
         "applicationinsights_connection_string", "azure_client_id", mode="before"

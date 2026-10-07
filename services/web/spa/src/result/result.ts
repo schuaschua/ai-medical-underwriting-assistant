@@ -133,6 +133,8 @@ export function useResult(caseId: string): {
   state: Polled<CaseResult>;
   /** Read the result again now: the user asked. */
   refresh: () => void;
+  /** Read it again at the usual pace, keeping the wait after failed reads (see `usePolled`). */
+  follow: () => void;
 } {
   const read = useMemo(() => resultReader(caseId), [caseId]);
   return usePolled(read, RESULT_POLL_MS, judge);

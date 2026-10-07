@@ -305,6 +305,10 @@ def test_story_1_5_no_route_returns_an_original_and_asking_for_one_is_404(
         # and counts, no document and no page text. No route takes a score.
         ("GET", "/api/scoreboards/retrieval"),
         ("GET", "/api/scoreboards/redaction"),
+        # Story 3.6: Compare's pairs of rows, a setting, and its request
+        # for one more verdict run. Neither returns a file.
+        ("GET", "/api/compare-pairs"),
+        ("POST", "/api/cases/{case_id}/verdict-runs"),
     }
 
     # Asking for the original, under any name one might try, is 404.

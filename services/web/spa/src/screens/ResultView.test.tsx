@@ -1,12 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { CASE_LIST_PATH } from "../cases/caseList";
 import { PAGE_WIDTH_PX } from "../components/PdfDocument";
+import { AWAITED_RUN_READS } from "../result/compare";
 import { FINAL_CASE_RETRIES, RESULT_POLL_MS } from "../result/result";
 import { resultPath } from "../result/resultPath";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
@@ -114,8 +115,53 @@ interface Held {
   file: () => Response;
   boxes: () => Response;
   rule: () => Response;
-  /** Story 2.8: the steps of the run on screen. */
-  steps: () => Response;
+  /** Story 2.8: the steps of a run, by the address they were asked for with. */
+  steps: (address: string) => Response;
+  /** Story 3.6: the pairs of rows of Compare, as `web` holds them. */
+  pairs: () => Response;
+  /** Story 3.6: the answer to a request for one more run with that row. */
+  requestRun: (row: string) => Response;
+}
+
+/** The second run of a case, made with `r5`: standard rates, no reasons, unless changed. */
+function otherRun(changes: Record<string, unknown> = {}) {
+  return run({
+    verdict_run_id: "019a0000-0000-7000-8000-000000000502",
+    retriever_config: "r5",
+    verdict: "standard",
+    loading_pct: null,
+    reasons: [],
+    ...changes,
+  });
+}
+
+/** One search of the agent's log that returned those rules, as `verdict` lists it. */
+function step(runId: string, stepNo: number, ruleIds: string[]) {
+  return {
+    verdict_run_id: runId,
+    case_id: CASE,
+    step_no: stepNo,
+    tool: "search_rules",
+    arguments: { query: "HbA1c 7.4 %" },
+    fact_id: null,
+    rule_ids: ruleIds,
+    outcome: "done",
+    error_code: null,
+    latency_ms: 19,
+    occurred_at: "2026-10-08T09:00:00Z",
+  };
+}
+
+/** What `workflow` answers a request for one more run with. */
+function runRequested(row: string, changes: Record<string, unknown> = {}) {
+  return {
+    case_id: CASE,
+    retriever_config: row,
+    status: "running",
+    verdict_run_id: null,
+    error_code: null,
+    ...changes,
+  };
 }
 
 /** A stand-in for the server that holds one case's result; it can change while the screen is open. */
@@ -145,6 +191,19 @@ function resultServer(changes: Partial<Held> = {}) {
         reference_rule_ids: [],
       }),
     steps: () => json(200, { steps: [], has_more: false }),
+    pairs: () =>
+      json(200, {
+        default_pair: { first: "r4", second: "r5" },
+        fallback_pair: { first: "r3", second: "r5" },
+      }),
+    // As long as story 3.7 has not built `r4`: every other row can be run.
+    requestRun: (row) =>
+      row === "r4"
+        ? json(
+            409,
+            errorBody("retriever_not_available", "That row is not available."),
+          )
+        : json(200, runRequested(row)),
     ...changes,
   };
   const server = fakeServer((call) => {
@@ -190,6 +249,15 @@ function resultServer(changes: Partial<Held> = {}) {
         held.factsFault?.() ?? json(200, { case_id: CASE, facts: held.facts })
       );
     }
+    if (path === "/api/compare-pairs") {
+      return held.pairs();
+    }
+    if (path === `/api/cases/${CASE}/verdict-runs` && call.method === "POST") {
+      const wanted = JSON.parse(String(call.body)) as {
+        retriever_config: string;
+      };
+      return held.requestRun(wanted.retriever_config);
+    }
     if (path === `/api/cases/${CASE}/verdict-runs`) {
       return json(200, {
         case_id: CASE,
@@ -207,7 +275,7 @@ function resultServer(changes: Partial<Held> = {}) {
       return held.rule();
     }
     if (path?.startsWith("/api/verdict-runs/")) {
-      return held.steps();
+      return held.steps(call.path);
     }
     return undefined;
   });
@@ -392,6 +460,8 @@ describe("2.7 the underwriter's result view", () => {
       .map((control) => control.textContent);
     expect(controls).toEqual([
       "Check again",
+      // Story 3.6: shows a second run beside this one; it decides nothing.
+      "Compare two retrieval rows",
       // Story 2.8: opens the agent's steps, which are only read.
       "How was this reached?",
       "Rule UW-DM-002",
@@ -946,6 +1016,7 @@ describe("2.7 the underwriter's result view", () => {
       "src/components/AgentSteps.tsx",
       "src/components/PdfDocument.tsx",
       "src/result/result.ts",
+      "src/result/compare.ts",
       "src/result/resultPath.ts",
       "src/api/client.ts",
       "src/strings.ts",
@@ -970,5 +1041,342 @@ describe("2.7 the underwriter's result view", () => {
       // security rule 22: nothing is rendered as HTML.
       expect(source).not.toMatch(/dangerouslySetInnerHTML|innerHTML|__html/);
     }
+  });
+});
+
+describe("3.6 Compare two retrieval rows on one case", () => {
+  const TOGGLE = "Compare two retrieval rows";
+  const DIFFERS = "Differs from the other run";
+  const ONLY_HERE = "Only in this run";
+
+  function runRequests(server: { calls: RecordedCall[] }): string[] {
+    return callsTo(server, `/api/cases/${CASE}/verdict-runs`)
+      .filter((call) => call.method === "POST")
+      .map((call) => String(call.body));
+  }
+
+  async function pane(row: string) {
+    return within(
+      await screen.findByRole("region", {
+        name: `Run with retrieval row ${row}`,
+      }),
+    );
+  }
+
+  /** The rules a pane lists as retrieved, each with its mark if it has one. */
+  async function retrieved(row: string) {
+    const list = await (
+      await pane(row)
+    ).findByRole("list", { name: "Rules it retrieved" });
+    return within(list)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+  }
+
+  it("asks for the run the pair lacks, uses the fallback pair while r4 is not built, and marks what differs once both runs are done", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const first = run().verdict_run_id;
+    const server = resultServer({
+      // The steps of the first run come in two answers; each rule is listed once.
+      steps: (address) =>
+        address.endsWith("after_step_no=1")
+          ? json(200, {
+              steps: [step(first, 2, ["UW-DM-001", "UW-TOB-001"])],
+              has_more: false,
+            })
+          : address.startsWith(`/api/verdict-runs/${first}/`)
+            ? json(200, {
+                steps: [step(first, 1, [RULE, "UW-DM-001"])],
+                has_more: true,
+              })
+            : json(200, {
+                steps: [step(otherRun().verdict_run_id, 1, ["UW-DM-001"])],
+                has_more: false,
+              }),
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    openResult();
+    const toggle = await screen.findByRole("button", { name: TOGGLE });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(toggle);
+
+    // `r4` is refused as not available: that is no error, the fallback pair
+    // is shown. The case has a run on `r3`, so only `r5` is asked for.
+    const waiting = await pane("r5");
+    expect(waiting.getByText("The suggestion is being made.")).toBeVisible();
+    expect((await pane("r3")).getByText("Loaded premium, +75 %")).toBeVisible();
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(runRequests(server)).toEqual([
+      '{"retriever_config":"r4"}',
+      '{"retriever_config":"r5"}',
+    ]);
+    expect(screen.queryByRole("alert")).toBeNull();
+    // One run is not done: nothing is marked as a difference.
+    expect(screen.queryByText(DIFFERS)).toBeNull();
+    expect(screen.queryByText(ONLY_HERE)).toBeNull();
+
+    // Turned off and on again while the run is awaited: no row is asked
+    // for a second time, and what was answered for `r5` is still known.
+    await user.click(toggle);
+    await user.click(toggle);
+    expect(
+      await (await pane("r5")).findByText("The suggestion is being made."),
+    ).toBeVisible();
+    expect(runRequests(server)).toHaveLength(2);
+
+    // The run ends: the screen read again by itself, and asked for nothing more.
+    server.held.runs = [run(), otherRun()];
+    await act(() => vi.advanceTimersByTimeAsync(RESULT_POLL_MS));
+
+    const second = await pane("r5");
+    expect(await second.findByText("Standard rates")).toBeVisible();
+    expect(second.getByText("Made with retrieval row r5.")).toBeVisible();
+    expect(second.getByText(LABEL)).toBeVisible();
+    expect(second.getByText("Confidence: 90%")).toBeVisible();
+    // `standard` beside `loaded`: both verdict lines are marked.
+    expect(second.getByText(DIFFERS)).toBeVisible();
+    const one = await pane("r3");
+    expect(one.getByText(DIFFERS)).toBeVisible();
+    // The other run cites neither rule: both reasons are only in this run.
+    expect(
+      one
+        .getAllByRole("listitem")
+        .filter((item) => item.textContent?.startsWith("Rule "))
+        .map((item) => item.textContent?.split("Facts it cites:")[0]),
+    ).toEqual([
+      `Rule UW-DM-002 Debit +50 % ${ONLY_HERE}`,
+      `Rule UW-TOB-001 Debit +25 % ${ONLY_HERE}`,
+    ]);
+    // The rules each run retrieved, each once in the order first seen; a
+    // rule both retrieved is not marked.
+    expect(await retrieved("r3")).toEqual([
+      `UW-DM-002 ${ONLY_HERE}`,
+      "UW-DM-001",
+      `UW-TOB-001 ${ONLY_HERE}`,
+    ]);
+    expect(await retrieved("r5")).toEqual(["UW-DM-001"]);
+    expect(runRequests(server)).toHaveLength(2);
+    // Both runs are final: nothing more is read.
+    const before = server.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(RESULT_POLL_MS * 3));
+    expect(server.calls.length).toBe(before);
+
+    // Turned off: the result view as it was, one run on screen.
+    await user.click(toggle);
+
+    expect(
+      screen.queryByRole("region", { name: /^Run with retrieval row/ }),
+    ).toBeNull();
+    const verdict = await verdictPane();
+    expect(verdict.getByText("Made with retrieval row r3.")).toBeVisible();
+    expect(screen.queryByText(DIFFERS)).toBeNull();
+    expect(screen.queryByText(ONLY_HERE)).toBeNull();
+  });
+
+  it("shows two runs that exist at once without asking for one, and marks only what differs", async () => {
+    const server = resultServer({
+      runs: [
+        run(),
+        // The same verdict and loading, and one of the two rules.
+        otherRun({
+          verdict: "loaded",
+          loading_pct: 75,
+          reasons: [run().reasons[0]],
+        }),
+      ],
+      pairs: () =>
+        json(200, {
+          default_pair: { first: "r3", second: "r5" },
+          fallback_pair: { first: "r1", second: "r2" },
+        }),
+      // The steps of neither run can be read.
+      steps: () =>
+        json(502, errorBody("upstream_unavailable", "Not available.")),
+    });
+    const user = userEvent.setup();
+    openResult();
+    // The second run is picked for the screen before Compare is turned on.
+    await user.selectOptions(
+      await screen.findByRole("combobox", {
+        name: "Suggestion on screen, by retrieval row",
+      }),
+      "r5 (done)",
+    );
+
+    await user.click(await screen.findByRole("button", { name: TOGGLE }));
+
+    const one = await pane("r3");
+    const second = await pane("r5");
+    expect(one.getByText("Loaded premium, +75 %")).toBeVisible();
+    expect(second.getByText("Loaded premium, +75 %")).toBeVisible();
+    expect(runRequests(server)).toEqual([]);
+    expect(screen.queryByText(DIFFERS)).toBeNull();
+    // Only the reason whose rule the other run does not cite is marked.
+    expect(one.getAllByText(ONLY_HERE)).toHaveLength(1);
+    expect(
+      one
+        .getAllByRole("listitem")
+        .find((item) => item.textContent?.startsWith("Rule UW-TOB-001"))
+        ?.textContent,
+    ).toContain(ONLY_HERE);
+    expect(second.queryByText(ONLY_HERE)).toBeNull();
+    // Retrieved rules that could not be read are said so, and mark nothing.
+    expect(
+      await one.findByText("The rules it retrieved could not be read."),
+    ).toBeVisible();
+
+    // The same verdict with another loading: both verdict lines are marked.
+    server.held.runs = [
+      run(),
+      otherRun({ verdict: "loaded", loading_pct: 50, reasons: run().reasons }),
+    ];
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    expect(
+      await (await pane("r5")).findByText("Loaded premium, +50 %"),
+    ).toBeVisible();
+    expect((await pane("r3")).getByText(DIFFERS)).toBeVisible();
+    expect((await pane("r5")).getByText(DIFFERS)).toBeVisible();
+
+    // Turned off: the run that was picked before is the one on screen.
+    await user.click(screen.getByRole("button", { name: TOGGLE }));
+    expect(
+      (await verdictPane()).getByText("Made with retrieval row r5."),
+    ).toBeVisible();
+  });
+
+  it("says that Compare is not available, with the rows, when a row of the fallback pair is refused too", async () => {
+    const server = resultServer({
+      requestRun: () =>
+        json(
+          409,
+          errorBody("retriever_not_available", "That row is not available."),
+        ),
+    });
+    const user = userEvent.setup();
+    const view = openResult();
+
+    await user.click(await screen.findByRole("button", { name: TOGGLE }));
+
+    expect(
+      await screen.findByText(
+        "Compare is not available here. It needs retrieval rows r4 and r5, or r3 and r5, and at least one row of each pair cannot be run here.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: /^Run with retrieval row/ }),
+    ).toBeNull();
+    // Nothing after a refused row was asked for, and no row twice.
+    expect(runRequests(server)).toEqual([
+      '{"retriever_config":"r4"}',
+      '{"retriever_config":"r5"}',
+    ]);
+    view.unmount();
+
+    // Any other failure is an error, and Compare can be tried again.
+    const good = server.held.pairs;
+    const failing = resultServer({
+      pairs: () =>
+        json(502, errorBody("upstream_unavailable", "Not available.")),
+    });
+    const again = openResult();
+    await user.click(await screen.findByRole("button", { name: TOGGLE }));
+    expect(
+      await screen.findByText(
+        "The service is not available right now. Please try again.",
+      ),
+    ).toBeVisible();
+    expect(runRequests(failing)).toEqual([]);
+    failing.held.pairs = good;
+    await user.click(screen.getByRole("button", { name: "Try Compare again" }));
+    expect(
+      await (await pane("r5")).findByText("The suggestion is being made."),
+    ).toBeVisible();
+    again.unmount();
+
+    // A case that is not finished has no Compare toggle.
+    resultServer({ status: "awaiting_human", runs: [] });
+    openResult();
+    await (await verdictPane()).findByText("No suggestion yet.");
+    expect(screen.queryByRole("button", { name: TOGGLE })).toBeNull();
+  });
+
+  it("shows a failed run's failure in its pane and marks nothing as a difference", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The run ended before `verdict` stored one: `workflow` says why.
+    const server = resultServer({
+      requestRun: (row) =>
+        row === "r4"
+          ? json(
+              409,
+              errorBody(
+                "retriever_not_available",
+                "That row is not available.",
+              ),
+            )
+          : json(
+              200,
+              runRequested(row, {
+                status: "failed",
+                error_code: "model_unavailable",
+              }),
+            ),
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const view = openResult();
+    await user.click(await screen.findByRole("button", { name: TOGGLE }));
+
+    const failed = await pane("r5");
+    expect(failed.getByRole("alert").textContent).toMatch(/^This run failed\./);
+    expect((await pane("r3")).getByText("Loaded premium, +75 %")).toBeVisible();
+    expect(screen.queryByText(DIFFERS)).toBeNull();
+    expect(screen.queryByText(ONLY_HERE)).toBeNull();
+    // Nothing is awaited: the screen does not read again, and asks for no run again.
+    const before = server.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(RESULT_POLL_MS * 3));
+    expect(server.calls.length).toBe(before);
+    view.unmount();
+
+    // A failed run that `verdict` lists is shown as it is, and is not asked for.
+    const listed = resultServer({
+      runs: [
+        run(),
+        otherRun({
+          status: "failed",
+          verdict: null,
+          confidence: null,
+          error_code: "invalid_model_output",
+        }),
+      ],
+    });
+    openResult();
+    await user.click(await screen.findByRole("button", { name: TOGGLE }));
+
+    expect(
+      await (
+        await pane("r5")
+      ).findByText("This run failed. The model's answer could not be used."),
+    ).toBeVisible();
+    expect(runRequests(listed)).toEqual(['{"retriever_config":"r4"}']);
+    expect(screen.queryByText(DIFFERS)).toBeNull();
+    expect(screen.queryByText(ONLY_HERE)).toBeNull();
+    cleanup();
+
+    // A run that was asked for and is never listed: the reading for it has
+    // an end, and the pane says so.
+    const never = resultServer();
+    openResult();
+    await user.click(await screen.findByRole("button", { name: TOGGLE }));
+    await (await pane("r5")).findByText("The suggestion is being made.");
+    await act(() =>
+      vi.advanceTimersByTimeAsync(RESULT_POLL_MS * AWAITED_RUN_READS),
+    );
+    expect(
+      (await pane("r5")).getByText(/^The run has not appeared/),
+    ).toBeVisible();
+    const after = never.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(RESULT_POLL_MS * 3));
+    expect(never.calls.length).toBe(after);
+    expect(runRequests(never)).toHaveLength(2);
   });
 });

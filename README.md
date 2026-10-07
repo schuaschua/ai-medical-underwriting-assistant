@@ -437,6 +437,47 @@ cursor: its step number for a run (`after_step_no`), and its run and step number
 (`after_verdict_run_id` with `after_step_no`, because a step number is one run's own). The screen
 uses the read by run; the read by case is there for the API.
 
+**Compare (story 3.6).** On the result of a completed case the underwriter has the button "Compare
+two retrieval rows". Turned on, it shows two verdict runs of that case side by side, each made with
+another retrieval row, in place of the one run; turned off, the result view is as it was. Each pane
+shows what the result view shows of a run (the row, the label, the verdict with its loading, the
+confidence, the system reasons, the reasons with rule and effect, "How was this reached?") and the
+rules the run retrieved: the rule ids of its agent steps, each once, in the order first seen. What
+differs is marked in words, not by colour: "Differs from the other run" beside a verdict or loading
+that is not the other run's, and "Only in this run" beside a reason whose rule the other run does
+not cite and beside a retrieved rule the other run did not retrieve. Nothing is marked unless both
+runs are done, and neither run is marked as right: the browser compares ids and values the services
+answered and holds no rule and no expected answer. A run that is still being made says so, and the
+screen reads again every 3 s (further apart while reads fail) until both runs are final; a failed
+run shows its failure.
+
+Which two rows are shown is a setting of `web`: `WEB_COMPARE_PAIR` (default `["r4","r5"]`) and
+`WEB_COMPARE_FALLBACK_PAIR` (default `["r3","r5"]`), each a JSON list of two different rows. `web`
+does not know which rows are built. The screen asks for a run with each row of the default pair
+that the case has no run for; when `workflow` refuses a row as not available (409
+`retriever_not_available`), it does the same with the fallback pair, and when a row of that pair is
+refused too it reads "Compare is not available here" with the rows. So while `r4` is not built the
+pair shown is `r3` and `r5`, and once the three services list `r4` the default pair is shown with no
+change here. A run that exists, whatever its state, is shown as it is, and the screen sends one
+request for a row for as long as it is open (Compare turned off and on again asks for nothing
+more), because a repeat can make `workflow` schedule a run again. A run that was asked for and is
+not listed after about five minutes of reading (100 reads) is said not to have appeared; "Check
+again" reads again.
+
+`web` gains two routes for it, for the underwriter only:
+
+| `web` route | What it does |
+|---|---|
+| `GET /api/compare-pairs` | The two pairs, from `web`'s settings. No service is asked. |
+| `POST /api/cases/<case_id>/verdict-runs` with `{"retriever_config": "r5"}` | `workflow`'s request for one more verdict run, passed on. Idempotent on the case and the row, with one exception: a run that ended without a stored result is scheduled again by a repeat. The run is an orchestration of its own on the facts already extracted and never changes the case's status. Answers the run's state (`running`, `done` with its `verdict_run_id`, or `failed` with an `error_code`); the run itself is read from `GET /api/cases/<case_id>/verdict-runs`. |
+
+`workflow`'s refusals are passed on as they are: 404 `not_found`, 422 `validation_failed`, 409
+`pages_not_terminal` for a case that is not completed, and 409 `retriever_not_available`; anything
+else is 502 `upstream_unavailable`. To see it locally a second row must be switched on in
+`workflow`, `verdict` and `retrieval`, and only `r3` has a local store: `r5` needs Azure AI Search,
+so Compare on a real case is a check of the final Azure session
+(`_bmad-output/implementation-artifacts/deferred-work.md`).
+
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
 the service's REST job routes, reads the original from the blob emulator and writes the redacted PDF

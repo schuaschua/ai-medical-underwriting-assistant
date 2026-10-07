@@ -2,7 +2,8 @@
 title: 'Story 3.6: Compare two rows on one case'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: '4991d657389a26ce6348c739fc9b41eb79426d87'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -64,9 +65,9 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `packages/contracts/`, `services/web/` -- the pair setting and its read, the verdict-run request route passed on to `workflow`; schema and SPA types regenerated; tests inside the budget (merge to stay at 45)
-- [ ] `services/web/spa/` -- the Compare toggle, the requests with the fallback, the two panes, the retrieved rules of a run, the marking of differences, strings; tests over the matrix in the result view's test file
-- [ ] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; the Azure check of Compare on a real case
+- [x] `packages/contracts/`, `services/web/` -- the pair setting and its read, the verdict-run request route passed on to `workflow`; schema and SPA types regenerated; tests inside the budget (merge to stay at 45)
+- [x] `services/web/spa/` -- the Compare toggle, the requests with the fallback, the two panes, the retrieved rules of a run, the marking of differences, strings; tests over the matrix in the result view's test file
+- [x] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; the Azure check of Compare on a real case
 
 **Acceptance Criteria:**
 - Given a completed case and the Compare toggle, when the underwriter turns it on, then `web` asks `workflow` for a verdict run with each row of the pair that has none, and the two results are shown side by side with their differences marked.
@@ -75,9 +76,45 @@ context:
 
 ## Implementation Notes
 
+- `web`: `GET /api/compare-pairs` answers the settings `WEB_COMPARE_PAIR` (`r4`, `r5`) and `WEB_COMPARE_FALLBACK_PAIR` (`r3`, `r5`) as `ComparePairs`; `POST /api/cases/{case_id}/verdict-runs` passes `request_verdict_run` on to `workflow` with `not_found`, `validation_failed`, `pages_not_terminal` and `retriever_not_available` passed on as they are. Both underwriter only.
+- SPA: `result/compare.ts` (the pair with its fallback, the requests, the retrieved rules of a run, the two comparisons), `Compare` and `ComparePane` in `screens/ResultView.tsx`, which reuse `RunOnScreen`. The run picked in the one-run view is held by the screen, so it is still picked after Compare.
+- A row is asked for once for as long as the screen is open (a repeat can reschedule a run that ended without a result): the request is kept in `Result`. The run list is read every 3 s, with `usePolled`'s back-off, until `verdict` lists the run or 100 reads have been made; then the result's own reading follows it.
+- No change to `workflow`, `verdict`, `retrieval`, `dapr.yaml` or `infra/`. Choices and the Azure check are in `deferred-work.md`.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 1 (2026-10-08): blind hunter (B), edge-case hunter (E), verification-gap (V). No intent gap, no bad spec.
+
+| # | Finding | Verdict | Route | Evidence |
+| --- | --- | --- | --- | --- |
+| B5, E1, E4, E5, E6 | A row can be asked for more than once: "Try again" after a later row failed, Compare turned off and on, a pair tried after a row of it was accepted, a double mount | medium | patch | `rowsAtStart` and the answers live in `Compare`, which is unmounted by the toggle; `workflow` schedules a run again when the earlier one ended without a stored result, so a repeat can spend model tokens. |
+| B1, E8 | Compare's own reading skips the back-off of `usePolled` | medium | patch | `refresh` is `readNow(true)`; with the services failing the screen reads four routes every 3 s where every other screen slows down. |
+| B2, E7 | Waiting for a run that is never listed has no end | medium | patch | The pane says the suggestion is being made for as long as Compare is on. |
+| B7, E13 | "Safe to repeat, starts nothing new" is said beside "asking again can start a run once more" | low | patch | `workflow/domain/verdicts.py` schedules again when no run was stored; a direct correction of the wording. |
+| B10 | `requestVerdictRun` accepts any text as the status | low | patch | A direct tightening of the guard to the three statuses. |
+| B12 | The two panes stack only under the breakpoint of the whole screen, so each is about a quarter of the window | low | patch | One breakpoint in the stylesheet. |
+| B13 | The pane's heading and the heading inside it are the same level; an expected "not available" is an alert | low | patch | Direct corrections. |
+| B15 | The wording "not both rows of a pair can be run here" is hard to read | low | patch | A direct correction. The settings being absent from `dapr.yaml` and the rule held in two places are rejected: the defaults serve both environments. |
+| B9, E2, E15, V-other 1 | A run started for the first row of a pair is not shown when the second row is refused | low | reject | With the shipped pairs the row that is not built is asked first, so nothing is started; the order is recorded for the owner in `deferred-work.md`. No service can say a row is available without starting a run. |
+| B3, E12 | `has_more` of the run list is ignored | low | reject | A case has at most one run per row, six in all, far under the list's bound. |
+| B4 | The first run of a row is the oldest | false | reject | `verdict` stores one run per case and row. |
+| B6 | A failed run cannot be tried again | low | reject | The spec: a run that exists is shown as it is. |
+| B8 | A reason with the same rule and another effect is not marked | low | reject | The spec marks a reason by its rule; a different loading is marked on the verdict line. |
+| B11 | Branches without a test | low | reject | Counted as V's findings. |
+| B14 | Status and budget bookkeeping; the story's checks sit in tests named for story 2.7 | low | reject | Sprint status moves at the end of the review; the overs predate the story; merging into existing tests is the owner's budget rule, and the story is named in the test's comments. |
+| E3 | A fallback pair that is the default pair reversed is asked again | low | reject | A setting nobody ships. |
+| E9, E10 | A failed read of a run's steps has no retry; pages are still read after the pane is gone | low | reject | "Check again" on the screen reads again; a few reads for nobody. |
+| E11 | A pane with neither a run nor an answer says "being made" | false | reject | A row is either in the list at the start or asked for. |
+| E14 | A listed running run relies on the result view's own reading, which settles after failed reads | low | reject | The result view's behaviour since story 2.7, not this story's. |
+| V1 | A loading that differs under the same verdict is seen by no test | medium | patch | Filed evidence; money is on that half of the mark. |
+| V2 | The run picked before Compare is not checked to be still picked after it | low | patch | Filed evidence; the refactor exists for it. |
+| V3 | `workflow`'s `validation_failed` is passed on and never exercised | low | patch | Filed evidence; one line in the existing tuple. |
+| V4 | The skip for a fallback pair equal to the default is not exercised | low | defer | Filed disposition. |
+| V5 | The SPA's shape guards for the two Compare answers are not exercised | low | defer | Filed disposition; the server side is tested. |
+| V6 | The hidden-tab rule of Compare's own reading is not tested | low | defer | Filed disposition. |
+| V-other 2 | Sprint status beside spec status | false | reject | As B14. |
 
 ## Design Notes
 

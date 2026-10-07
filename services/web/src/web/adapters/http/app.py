@@ -7,8 +7,14 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
+from contracts.models.web import ComparePairs, RetrieverPair
 from web.adapters.dapr import ServiceClient, build_http_client
-from web.adapters.http.api import SCOREBOARDS_STATE, SERVICES_STATE, TRIAGE_STATE
+from web.adapters.http.api import (
+    COMPARE_PAIRS_STATE,
+    SCOREBOARDS_STATE,
+    SERVICES_STATE,
+    TRIAGE_STATE,
+)
 from web.adapters.http.api import router as api_router
 from web.adapters.http.errors import API_ROUTES_STATE, install_error_handlers
 from web.adapters.http.middleware import (
@@ -62,6 +68,16 @@ def create_app(
         ),
     )
     setattr(app.state, SCOREBOARDS_STATE, ScoreboardReader(settings.scoreboards_dir))
+    first, second = settings.compare_pair
+    fallback_first, fallback_second = settings.compare_fallback_pair
+    setattr(
+        app.state,
+        COMPARE_PAIRS_STATE,
+        ComparePairs(
+            default_pair=RetrieverPair(first=first, second=second),
+            fallback_pair=RetrieverPair(first=fallback_first, second=fallback_second),
+        ),
+    )
     # Said once: a folder that is wrong or missing answers 404 like a
     # bake-off that has not been run, and nothing else tells them apart.
     scoreboards_dir = settings.scoreboards_dir.resolve()

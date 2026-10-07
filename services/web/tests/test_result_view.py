@@ -1,7 +1,7 @@
-"""Stories 2.7, 2.8 and 3.4: `web` passes the result view's six reads, the two reads of the agent's log and the bake-off runner's page text and eval search on to the services that own them.
+"""Stories 2.7, 2.8, 3.4 and 3.6: `web` passes the result view's six reads, the two reads of the agent's log, the bake-off runner's page text and eval search and Compare's request for one more verdict run on to the services that own them, and answers Compare's pairs of rows from its settings.
 
 The Dapr sidecar is a fake here: a transport that records what `web` sent and
-answers as `extraction`, `verdict`, `retrieval` and `intake` would.
+answers as `extraction`, `verdict`, `retrieval`, `intake` and `workflow` would.
 """
 
 import json
@@ -19,6 +19,7 @@ from contracts.models.extraction import FactList
 from contracts.models.intake import PageBoxes, PageList
 from contracts.models.retrieval import RuleText, SearchResponse
 from contracts.models.verdict import SUGGESTION_LABEL, VerdictRunList
+from contracts.models.workflow import VerdictRunRequested
 from web.adapters.http.app import create_app
 from web.settings import Settings
 
@@ -45,6 +46,13 @@ SEARCH_ANSWER = {
             "impairment": "Type 2 diabetes mellitus",
         }
     ],
+}
+
+
+# Story 3.6: the pairs of rows of the Compare toggle, as `web` answers them unset.
+COMPARE_PAIRS = {
+    "default_pair": {"first": "r4", "second": "r5"},
+    "fallback_pair": {"first": "r3", "second": "r5"},
 }
 
 
@@ -85,6 +93,16 @@ class Result:
                 }
             ],
             "has_more": True,
+        }
+
+    def run_requested(self) -> dict[str, Any]:
+        """What `workflow` answers a request for one more run with on `r5`: under way."""
+        return {
+            "case_id": self.case_id,
+            "retriever_config": "r5",
+            "status": "running",
+            "verdict_run_id": None,
+            "error_code": None,
         }
 
     def answers(self) -> dict[tuple[str, str], Any]:
@@ -256,7 +274,10 @@ def routes(result: Result) -> dict[tuple[str, str], str]:
 
 
 def test_story_2_7_the_underwriter_reads_each_part_of_a_result_from_its_owner_and_the_customer_none(
-    client: TestClient, sidecar: FakeSidecar
+    client: TestClient,
+    sidecar: FakeSidecar,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = Result()
     sidecar.answers = result.answers()
@@ -319,6 +340,51 @@ def test_story_2_7_the_underwriter_reads_each_part_of_a_result_from_its_owner_an
     assert json.loads(asked.content) == SEARCH
     assert searched.status_code == 200 and searched.json() == SEARCH_ANSWER
     assert SearchResponse.model_validate(searched.json()).latency_ms == 17
+
+    # Story 3.6: the pairs of Compare are `web`'s setting, answered as they
+    # are with no service asked: `r4` and `r5`, falling back to `r3` and `r5`.
+    asked_so_far = len(sidecar.requests)
+    assert error_of(client.get("/api/compare-pairs", headers=CUSTOMER))[0] == 403
+    pairs = client.get("/api/compare-pairs", headers=UNDERWRITER)
+    assert pairs.status_code == 200 and pairs.json() == COMPARE_PAIRS
+    monkeypatch.setenv("WEB_COMPARE_PAIR", '["r3","r5"]')
+    monkeypatch.setenv("WEB_COMPARE_FALLBACK_PAIR", '["r1","r2"]')
+    with TestClient(create_app(Settings(spa_dir=settings.spa_dir))) as other:
+        assert other.get("/api/compare-pairs", headers=UNDERWRITER).json() == {
+            "default_pair": {"first": "r3", "second": "r5"},
+            "fallback_pair": {"first": "r1", "second": "r2"},
+        }
+    # A pair is two rows: one row twice is refused when the service starts.
+    monkeypatch.setenv("WEB_COMPARE_PAIR", '["r5","r5"]')
+    with pytest.raises(ValueError, match="two different rows"):
+        Settings()
+
+    # Story 3.6: the request for one more verdict run is `workflow`'s
+    # operation passed on, with the row the body names, for the underwriter
+    # only. The run list of the same path is still read from `verdict`.
+    runs_path = f"/api/cases/{result.case_id}/verdict-runs"
+    wanted = {"retriever_config": "r5"}
+    assert error_of(client.post(runs_path, json=wanted, headers=CUSTOMER)) == (
+        403,
+        "role_not_allowed",
+    )
+    assert len(sidecar.requests) == asked_so_far
+    sidecar.answers["workflow", f"/cases/{result.case_id}/verdict-runs"] = (
+        result.run_requested()
+    )
+    requested = client.post(
+        runs_path, json=wanted, headers={**UNDERWRITER, "traceparent": TRACEPARENT}
+    )
+    asked = sidecar.requests.pop()
+    assert (asked.method, asked.url.path) == (
+        "POST",
+        f"/v1.0/invoke/workflow/method/cases/{result.case_id}/verdict-runs",
+    )
+    assert json.loads(asked.content) == wanted
+    assert asked.headers["traceparent"] == TRACEPARENT
+    assert requested.status_code == 200
+    assert requested.json() == result.run_requested()
+    assert VerdictRunRequested.model_validate(requested.json()).verdict_run_id is None
 
     # Each answer is the contract's shape, and the verdict carries its label.
     read = {
@@ -396,6 +462,42 @@ def test_story_2_7_an_owners_refusal_of_the_request_is_passed_on_and_anything_el
     for body in ({**SEARCH, "retriever_config": "r9"}, {**SEARCH, "top_k": 0}):
         assert (
             error_of(client.post("/api/searches", json=body, headers=UNDERWRITER))[0]
+            == 422
+        )
+    assert len(sidecar.requests) == asked_so_far
+
+    # Story 3.6: what `workflow` says of a request for one more run is the
+    # caller's to know, as it is: the case is unknown, it is not finished, or
+    # the row cannot be run here (the SPA then uses the other pair). A fault
+    # of `workflow` is not passed on, and a row that is no row never reaches it.
+    runs_path = f"/api/cases/{result.case_id}/verdict-runs"
+    wanted = {"retriever_config": "r4"}
+    assert error_of(client.post(runs_path, json=wanted, headers=UNDERWRITER)) == (
+        404,
+        "not_found",
+    )
+    for refused_code, expected in (
+        (ErrorCode.PAGES_NOT_TERMINAL, (409, "pages_not_terminal")),
+        (ErrorCode.VALIDATION_FAILED, (422, "validation_failed")),
+        (ErrorCode.RETRIEVER_NOT_AVAILABLE, (409, "retriever_not_available")),
+        (ErrorCode.UPSTREAM_UNAVAILABLE, (502, "upstream_unavailable")),
+        (ErrorCode.IN_PROGRESS, (502, "upstream_unavailable")),
+    ):
+        sidecar.answers["workflow", f"/cases/{result.case_id}/verdict-runs"] = refusal(
+            refused_code, "Refused."
+        )
+        assert (
+            error_of(client.post(runs_path, json=wanted, headers=UNDERWRITER))
+            == expected
+        )
+    asked_so_far = len(sidecar.requests)
+    for unusable in (
+        {"retriever_config": "r9"},
+        {},
+        {**wanted, "actor": "underwriter"},
+    ):
+        assert (
+            error_of(client.post(runs_path, json=unusable, headers=UNDERWRITER))[0]
             == 422
         )
     assert len(sidecar.requests) == asked_so_far

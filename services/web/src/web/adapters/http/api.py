@@ -1,4 +1,4 @@
-"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage, the result view's reads, the bake-off runner's two and the scoreboard files.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage, the result view's reads, the bake-off runner's two, the scoreboard files and the two of Compare.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
 to `intake`, asks `workflow` to start the case, reads progress, the audit
@@ -29,6 +29,11 @@ The scoreboard (story 3.5, AD-17) is the two files the runner wrote, read
 from `web`'s own folder and answered as they are. There is no route that
 takes a score.
 
+Compare (story 3.6, AD-11) is two routes: the pair of ladder rows to show,
+which is a setting of `web` answered as it is, and the request for one more
+verdict run on a finished case, which is `workflow`'s operation passed on.
+`web` keeps no list of the rows that are built and decides nothing.
+
 The uploaded original is never served by any service (AD-21). The one
 document file served is the redacted PDF, and the one image a page's
 thumbnail, which `intake` makes from that PDF.
@@ -53,6 +58,7 @@ from contracts.models.verdict import (
     VerdictRunList,
 )
 from contracts.models.web import (
+    ComparePairs,
     Health,
     Me,
     PageDecisionRequest,
@@ -70,6 +76,8 @@ from contracts.models.workflow import (
     DecisionRequest,
     StartCaseOptions,
     StartCaseRequest,
+    VerdictRunRequest,
+    VerdictRunRequested,
 )
 from contracts.operations import get_operation
 from contracts.rules import RULE_ID_PATTERN
@@ -94,6 +102,10 @@ SCOREBOARDS_STATE = "scoreboards"
 # The scoreboard files. They are `web`'s own resource: no service owns a score.
 RETRIEVAL_SCOREBOARD_PATH = "/scoreboards/retrieval"
 REDACTION_SCOREBOARD_PATH = "/scoreboards/redaction"
+# Where it keeps the pairs of rows of the Compare toggle.
+COMPARE_PAIRS_STATE = "compare_pairs"
+# The pairs. They are `web`'s own resource: a setting, not a service's data.
+COMPARE_PAIRS_PATH = "/compare-pairs"
 
 any_role = role_for(RouteGroup.ANY_ROLE)
 customer_only = role_for(RouteGroup.CUSTOMER)
@@ -451,6 +463,42 @@ def read_redaction_scoreboard(
     request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
 ) -> RedactionScoreboard:
     return _scoreboards(request).redaction()
+
+
+# --- Compare (story 3.6) -------------------------------------------------------------
+#
+# AD-11: two verdict runs of one finished case side by side, for the
+# underwriter only (AD-9). `web` holds the pair as a setting and passes the
+# request for a run on; whether a row can run, and whether the case is
+# finished, is `workflow`'s to say.
+
+
+@role_checked.get(COMPARE_PAIRS_PATH)
+async def read_compare_pairs(
+    request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
+) -> ComparePairs:
+    pairs: ComparePairs = getattr(request.app.state, COMPARE_PAIRS_STATE)
+    return pairs
+
+
+# One more verdict run on a case, with the row the body names. `workflow`
+# makes it idempotent on the case and the row (but schedules a run that ended
+# without a stored result again), runs it as an orchestration of
+# its own on the facts already extracted, and never changes the case's status
+# for it. 409 `pages_not_terminal` for a case that is not finished and 409
+# `retriever_not_available` for a row that cannot be run here are passed on.
+# The same resource path as on the owning service; the read above it in this
+# file is `verdict`'s GET.
+@role_checked.post(get_operation("request_verdict_run").path)
+async def request_verdict_run(
+    case_id: CaseIdPath,
+    wanted: VerdictRunRequest,
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> VerdictRunRequested:
+    return await _services(request).request_verdict_run(
+        case_id, wanted, traceparent=request.headers.get("traceparent")
+    )
 
 
 router = APIRouter(prefix=API_PREFIX)

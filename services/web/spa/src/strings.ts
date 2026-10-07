@@ -484,6 +484,30 @@ export const strings = {
   // A screen whose code is fetched when it is first opened.
   screenLoading: "Opening the screen…",
   // Story 2.8: the agent's log of one verdict run.
+  compare: {
+    // The toggle on the result of a finished case: pressed while Compare is on.
+    toggle: "Compare two retrieval rows",
+    intro:
+      "The same case, with a suggestion made with each of two retrieval rows. What differs between the two runs is marked in words. Neither run is marked as the right one.",
+    asking: "Asking for the two runs…",
+    pair: (first: string, second: string) => `${first} and ${second}`,
+    orPair: ", or ",
+    // A row of every pair was refused as not available: the pairs that were tried.
+    notAvailable: (pairs: string) =>
+      `Compare is not available here. It needs retrieval rows ${pairs}, and at least one row of each pair cannot be run here.`,
+    tryAgain: "Try Compare again",
+    pane: (row: string) => `Run with retrieval row ${row}`,
+    // A run that was asked for and is still not listed after the reads made for it.
+    notAppeared:
+      "The run has not appeared, and this screen has stopped reading for it. Choose “Check again” to read again.",
+    // The marks of a difference: words, so a colour is never the only sign.
+    differs: "Differs from the other run",
+    onlyHere: "Only in this run",
+    retrievedHeading: "Rules it retrieved",
+    retrievedReading: "Reading the rules it retrieved…",
+    retrievedFault: "The rules it retrieved could not be read.",
+    noRetrieved: "It retrieved no rule.",
+  },
   steps: {
     // On a "verdict suggested" row of the trail, and on the run of the result view.
     openFromTrail: "Show the agent's steps",
@@ -625,6 +649,7 @@ export const strings = {
       not_found: "That could not be found.",
       not_awaiting_decision: "This page is no longer waiting for that answer.",
       not_redacted: "The document is not ready yet.",
+      pages_not_terminal: "This case is not finished yet.",
       method_not_allowed: "That action is not available here.",
       file_too_large: TOO_LARGE,
       payload_too_large: TOO_LARGE,

@@ -368,6 +368,11 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "unscored_cases": [UNSCORED_CASE],
     },
     "RedactionLeak": LEAK,
+    "RetrieverPair": {"first": "r4", "second": "r5"},
+    "ComparePairs": {
+        "default_pair": {"first": "r4", "second": "r5"},
+        "fallback_pair": {"first": "r3", "second": "r5"},
+    },
     "RedactionScoreboard": {
         "run": SCOREBOARD_RUN,
         "clean": False,

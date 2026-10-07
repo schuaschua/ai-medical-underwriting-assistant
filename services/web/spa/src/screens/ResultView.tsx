@@ -1,10 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
   ApiError,
   getDocumentFile,
   getPageBoxes,
   getRule,
+  requestVerdictRun,
 } from "../api/client";
 import type {
   CaseProgress,
@@ -12,9 +13,11 @@ import type {
   FactList,
   PageList,
   Reason,
+  RetrieverConfig,
   RuleText,
   VerdictRun,
   VerdictRunList,
+  VerdictRunRequested,
 } from "../api/contracts.gen";
 import {
   auditTrailPath,
@@ -29,7 +32,22 @@ import {
   PdfDocument,
   type CitedQuote,
 } from "../components/PdfDocument";
-import { judge, useResult, type Part } from "../result/result";
+import {
+  AWAITED_RUN_READS,
+  onlyIn,
+  readRetrievedRules,
+  startComparison,
+  verdictDiffers,
+  type AskForRun,
+  type Comparison,
+} from "../result/compare";
+import {
+  FINAL_CASE_RETRIES,
+  judge,
+  RESULT_POLL_MS,
+  useResult,
+  type Part,
+} from "../result/result";
 import { percentage, strings } from "../strings";
 import "./ResultView.css";
 
@@ -301,11 +319,14 @@ function effectText(reason: Reason): string {
  */
 function ReasonItem({
   reason,
+  onlyHere,
   facts,
   onCite,
   onOpenRule,
 }: {
   reason: Reason;
+  /** Compare: the other run cites no reason with this rule. */
+  onlyHere: boolean;
   facts: readonly Fact[] | null;
   onCite: (fact: Fact) => void;
   onOpenRule: (ruleId: string, opener: HTMLButtonElement) => void;
@@ -320,6 +341,14 @@ function ReasonItem({
         {strings.result.rule(reason.rule_id)}
       </button>{" "}
       {effectText(reason)}
+      {onlyHere && (
+        <>
+          {" "}
+          <strong className="result-difference">
+            {strings.compare.onlyHere}
+          </strong>
+        </>
+      )}
       <br />
       {facts === null ? (
         strings.result.citedFactsUnread
@@ -351,19 +380,82 @@ function ReasonItem({
   );
 }
 
+/** The rules a run retrieved, as far as its steps are read. */
+type Retrieved =
+  | { kind: "reading" }
+  | { kind: "read"; rules: readonly string[] }
+  | { kind: "failed" };
+
+/**
+ * What a pane of Compare adds to its run (story 3.6): the rules the run
+ * retrieved, and what differs from the other run. The marks compare ids and
+ * values the services answered; they say nothing of which run is right.
+ */
+interface Compared {
+  /** The other run suggests another verdict, or another loading. */
+  verdictDiffers: boolean;
+  /** The rules of this run's reasons that no reason of the other run cites. */
+  reasonsOnlyHere: ReadonlySet<string>;
+  retrieved: Retrieved;
+  /** The rules this run retrieved and the other did not. */
+  retrievedOnlyHere: ReadonlySet<string>;
+}
+
+/** The rules a run retrieved, each once, a rule the other run did not retrieve marked in words. */
+function RetrievedRules({ compared }: { compared: Compared }) {
+  const { retrieved, retrievedOnlyHere } = compared;
+  return (
+    <>
+      {/* Under the pane's own heading. */}
+      <h5>{strings.compare.retrievedHeading}</h5>
+      {retrieved.kind === "reading" && (
+        <p role="status">{strings.compare.retrievedReading}</p>
+      )}
+      {retrieved.kind === "failed" && (
+        <p role="alert">{strings.compare.retrievedFault}</p>
+      )}
+      {retrieved.kind === "read" &&
+        (retrieved.rules.length === 0 ? (
+          <p>{strings.compare.noRetrieved}</p>
+        ) : (
+          <ul aria-label={strings.compare.retrievedHeading}>
+            {retrieved.rules.map((ruleId) => (
+              // A rule's id comes from a model's tool call: text, never HTML.
+              <li key={ruleId}>
+                {ruleId}
+                {retrievedOnlyHere.has(ruleId) && (
+                  <>
+                    {" "}
+                    <strong className="result-difference">
+                      {strings.compare.onlyHere}
+                    </strong>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        ))}
+    </>
+  );
+}
+
 /**
  * The run on screen: its label, its verdict, its confidence, why it refers,
  * and its reasons. Everything is the run's own payload (AD-10): the screen
  * adds no verdict, no loading and no control that would decide anything.
+ * In a pane of Compare (`compared`) it also lists the rules the run
+ * retrieved, and marks what differs from the other run.
  */
 function RunOnScreen({
   run,
   facts,
   onCite,
+  compared = null,
 }: {
   run: VerdictRun;
   facts: readonly Fact[] | null;
   onCite: (fact: Fact) => void;
+  compared?: Compared | null;
 }) {
   const [openRule, setOpenRule] = useState<string | null>(null);
   // The control the open rule was chosen with: focus returns to it.
@@ -404,6 +496,14 @@ function RunOnScreen({
         <>
           <p>
             <strong>{verdictText(run)}</strong>
+            {compared?.verdictDiffers === true && (
+              <>
+                {" "}
+                <strong className="result-difference">
+                  {strings.compare.differs}
+                </strong>
+              </>
+            )}
           </p>
           <p>
             {run.confidence === null
@@ -433,6 +533,9 @@ function RunOnScreen({
                     // The position too: two reasons may cite one rule.
                     key={`${index}:${reason.rule_id}`}
                     reason={reason}
+                    onlyHere={
+                      compared?.reasonsOnlyHere.has(reason.rule_id) === true
+                    }
                     facts={facts}
                     onCite={onCite}
                     onOpenRule={(ruleId, button) => {
@@ -457,6 +560,10 @@ function RunOnScreen({
           )}
         </>
       )}
+      {compared !== null && run.status !== "running" && (
+        // The steps of a run that still runs are not all there yet.
+        <RetrievedRules compared={compared} />
+      )}
       {stepsOpen && (
         // AD-15: the searches and rule reads behind this run, read only.
         <AgentSteps
@@ -476,14 +583,18 @@ function RunOnScreen({
 /** The verdict pane: which run is on screen, a way to pick another, and that run. */
 function VerdictPane({
   runs,
+  picked,
+  onPick,
   facts,
   onCite,
 }: {
   runs: Part<VerdictRunList>;
+  /** The run that was picked. The screen holds it, so it is still picked after Compare. */
+  picked: string | null;
+  onPick: (runId: string) => void;
   facts: readonly Fact[] | null;
   onCite: (fact: Fact) => void;
 }) {
-  const [picked, setPicked] = useState<string | null>(null);
   const pickerId = useId();
 
   if (runs.kind === "failed") {
@@ -507,7 +618,7 @@ function VerdictPane({
           <select
             id={pickerId}
             value={run.verdict_run_id}
-            onChange={(change) => setPicked(change.target.value)}
+            onChange={(change) => onPick(change.target.value)}
           >
             {listed.map((one) => (
               <option key={one.verdict_run_id} value={one.verdict_run_id}>
@@ -528,6 +639,298 @@ function VerdictPane({
         facts={facts}
         onCite={onCite}
       />
+    </>
+  );
+}
+
+// --- Compare (story 3.6) --------------------------------------------------------
+
+const NOTHING_MARKED: ReadonlySet<string> = new Set();
+const READING: Retrieved = { kind: "reading" };
+
+/**
+ * The rules a run retrieved, read from its steps once the run has ended. A
+ * run that still runs has not made all its steps, and one that is not
+ * listed has none to read: both are "reading" until they are final.
+ */
+function useRetrieved(run: VerdictRun | undefined): Retrieved {
+  const runId =
+    run === undefined || run.status === "running" ? null : run.verdict_run_id;
+  const [read, setRead] = useState<{
+    runId: string;
+    retrieved: Retrieved;
+  } | null>(null);
+
+  useEffect(() => {
+    if (runId === null) {
+      return;
+    }
+    let current = true;
+    readRetrievedRules(runId).then(
+      (rules) => {
+        if (current) setRead({ runId, retrieved: { kind: "read", rules } });
+      },
+      () => {
+        if (current) setRead({ runId, retrieved: { kind: "failed" } });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [runId]);
+
+  return read !== null && read.runId === runId ? read.retrieved : READING;
+}
+
+/**
+ * What a pane shows beside its run. A difference is marked only when both
+ * runs are done: a run that still runs or that failed has nothing to differ
+ * from. Retrieved rules are marked only when both lists are read.
+ */
+function comparedWith(
+  mine: VerdictRun,
+  theirs: VerdictRun | undefined,
+  retrieved: Retrieved,
+  theirRetrieved: Retrieved,
+): Compared {
+  if (mine.status !== "done" || theirs?.status !== "done") {
+    return {
+      verdictDiffers: false,
+      reasonsOnlyHere: NOTHING_MARKED,
+      retrieved,
+      retrievedOnlyHere: NOTHING_MARKED,
+    };
+  }
+  return {
+    verdictDiffers: verdictDiffers(mine, theirs),
+    reasonsOnlyHere: onlyIn(
+      mine.reasons.map((reason) => reason.rule_id),
+      theirs.reasons.map((reason) => reason.rule_id),
+    ),
+    retrieved,
+    retrievedOnlyHere:
+      retrieved.kind === "read" && theirRetrieved.kind === "read"
+        ? onlyIn(retrieved.rules, theirRetrieved.rules)
+        : NOTHING_MARKED,
+  };
+}
+
+/** One of the two panes: the run made with that row, or how the request for it stands. */
+function ComparePane({
+  row,
+  run,
+  asked,
+  gaveUp,
+  compared,
+  facts,
+  onCite,
+}: {
+  row: RetrieverConfig;
+  /** The run as `verdict` lists it; undefined until it does. */
+  run: VerdictRun | undefined;
+  /** What `workflow` answered when the run was asked for; undefined for a run that was there already. */
+  asked: VerdictRunRequested | undefined;
+  /** The run is not listed after every read made for it: nothing more is read by itself. */
+  gaveUp: boolean;
+  compared: Compared | null;
+  facts: readonly Fact[] | null;
+  onCite: (fact: Fact) => void;
+}) {
+  const headingId = useId();
+  return (
+    <section aria-labelledby={headingId}>
+      <h4 id={headingId}>{strings.compare.pane(row)}</h4>
+      {run !== undefined ? (
+        <RunOnScreen
+          key={run.verdict_run_id}
+          run={run}
+          facts={facts}
+          onCite={onCite}
+          compared={compared}
+        />
+      ) : asked?.status === "failed" ? (
+        // The run ended before `verdict` stored one: `workflow` says why.
+        <p role="alert">
+          {asked.error_code == null
+            ? strings.result.runFailedNoReason
+            : strings.result.runFailed(
+                worded(strings.audit.failure, asked.error_code),
+              )}
+        </p>
+      ) : gaveUp ? (
+        <p role="alert">{strings.compare.notAppeared}</p>
+      ) : (
+        <p role="status">{strings.result.runRunning}</p>
+      )}
+    </section>
+  );
+}
+
+type CompareState =
+  { kind: "asking" } | Comparison | { kind: "failed"; error: unknown };
+
+/**
+ * Compare (story 3.6, AD-11): the runs of one finished case with two
+ * retrieval rows, side by side. Turning it on asks for a run with each row
+ * of the pair that the case has none for; a run that exists is shown as it
+ * is. The pair is the server's, and so is the answer to whether a row can
+ * be run here. The screen reads again until both runs are final.
+ */
+function Compare({
+  ask,
+  runs,
+  mayRead,
+  facts,
+  onCite,
+  refresh,
+  follow,
+}: {
+  /** Asks for a run with a row, once for as long as the screen is open. */
+  ask: AskForRun;
+  runs: VerdictRunList;
+  /** False once the result's own reading has given up on a part that keeps failing. */
+  mayRead: boolean;
+  facts: readonly Fact[] | null;
+  onCite: (fact: Fact) => void;
+  /** Read the result again now: a run was asked for. */
+  refresh: () => void;
+  /** Read the result again at the usual pace: a run is awaited. */
+  follow: () => void;
+}) {
+  // The rows the case had a run for when Compare was turned on: only the
+  // others are asked for.
+  const [rowsAtStart] = useState(
+    () => new Set<string>(runs.verdict_runs.map((run) => run.retriever_config)),
+  );
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState<CompareState>({ kind: "asking" });
+  // The reads made for a run that is asked for and not listed yet.
+  const [awaitedReads, setAwaitedReads] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    startComparison(ask, (row) => rowsAtStart.has(row)).then(
+      (comparison) => {
+        if (!current) return;
+        setState(comparison);
+        if (comparison.kind === "ready" && comparison.asked.length > 0) {
+          // The list of runs on screen is older than the request.
+          refresh();
+        }
+      },
+      (error: unknown) => {
+        if (current) setState({ kind: "failed", error });
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [ask, rowsAtStart, attempt, refresh]);
+
+  const rows = state.kind === "ready" ? state.rows : null;
+  const runOf = (row: RetrieverConfig | undefined) =>
+    runs.verdict_runs.find((run) => run.retriever_config === row);
+  const askedOf = (row: RetrieverConfig) =>
+    state.kind === "ready"
+      ? state.asked.find((one) => one.retriever_config === row)
+      : undefined;
+  const one = runOf(rows?.[0]);
+  const other = runOf(rows?.[1]);
+  const retrievedOne = useRetrieved(one);
+  const retrievedOther = useRetrieved(other);
+
+  // A run that was asked for and is not listed yet: the result is read
+  // again until `verdict` lists it. From then on the result's own reading
+  // follows it while it runs. The run is never asked for again: asking
+  // again could start a run that ended without a result once more. The
+  // reading has an end (a run whose orchestration died is never listed),
+  // keeps the wait after failed reads, and stops when the result's own
+  // reading has given up: "Check again" is then the way on.
+  const awaited =
+    rows !== null &&
+    rows.some(
+      (row) => runOf(row) === undefined && askedOf(row)?.status !== "failed",
+    );
+  const gaveUp = awaited && awaitedReads >= AWAITED_RUN_READS;
+  const reading = awaited && !gaveUp && mayRead;
+  useEffect(() => {
+    if (!reading) {
+      return;
+    }
+    const timer = setInterval(() => {
+      // Nobody is looking at a hidden tab: nothing is read for it.
+      if (document.visibilityState !== "hidden") {
+        setAwaitedReads((count) => count + 1);
+        follow();
+      }
+    }, RESULT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [reading, follow]);
+
+  if (state.kind === "asking") {
+    return <p role="status">{strings.compare.asking}</p>;
+  }
+  if (state.kind === "unavailable") {
+    return (
+      // An expected state, not a fault: a row of each pair is not built here.
+      <p role="status">
+        {strings.compare.notAvailable(
+          state.pairs
+            .map(([first, second]) => strings.compare.pair(first, second))
+            .join(strings.compare.orPair),
+        )}
+      </p>
+    );
+  }
+  if (state.kind === "failed") {
+    return (
+      <>
+        <ErrorMessage error={state.error} />
+        <p>
+          <button
+            type="button"
+            onClick={() => {
+              setState({ kind: "asking" });
+              setAttempt(attempt + 1);
+            }}
+          >
+            {strings.compare.tryAgain}
+          </button>
+        </p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p>{strings.compare.intro}</p>
+      <div className="result-compare">
+        <ComparePane
+          row={state.rows[0]}
+          run={one}
+          asked={askedOf(state.rows[0])}
+          gaveUp={gaveUp}
+          compared={
+            one === undefined
+              ? null
+              : comparedWith(one, other, retrievedOne, retrievedOther)
+          }
+          facts={facts}
+          onCite={onCite}
+        />
+        <ComparePane
+          row={state.rows[1]}
+          run={other}
+          asked={askedOf(state.rows[1])}
+          gaveUp={gaveUp}
+          compared={
+            other === undefined
+              ? null
+              : comparedWith(other, one, retrievedOther, retrievedOne)
+          }
+          facts={facts}
+          onCite={onCite}
+        />
+      </div>
     </>
   );
 }
@@ -624,8 +1027,29 @@ function isStale(part: Part<unknown>): boolean {
 
 /** The result of one case: the document on the left; the verdict, the reasons and the facts on the right. */
 function Result({ caseId }: { caseId: string }) {
-  const { state, refresh } = useResult(caseId);
+  const { state, refresh, follow } = useResult(caseId);
+  // Story 3.6: the request made for each row of Compare, kept for as long
+  // as the screen is open and above the toggle, so that a row is asked for
+  // once whatever asks: Compare turned off and on, "Try Compare again", a
+  // second pair naming the row, a second mount. Asking `workflow` again
+  // can schedule a run once more, which spends model tokens.
+  const [askedRuns] = useState(
+    () => new Map<RetrieverConfig, Promise<VerdictRunRequested>>(),
+  );
+  const askForRun = useCallback<AskForRun>(
+    (row) => {
+      const made = askedRuns.get(row) ?? requestVerdictRun(caseId, row);
+      askedRuns.set(row, made);
+      return made;
+    },
+    [askedRuns, caseId],
+  );
   const [cited, setCited] = useState<Citation | null>(null);
+  // Story 3.6: whether the two runs of Compare stand where the one run does.
+  const [comparing, setComparing] = useState(false);
+  // The run picked for the screen: kept here, so that it is still the one
+  // on screen when Compare is turned off again.
+  const [picked, setPicked] = useState<string | null>(null);
   // Counts the citations followed: an answer for an earlier one is dropped.
   const requests = useRef(0);
   const checkAgain = (
@@ -688,6 +1112,10 @@ function Result({ caseId }: { caseId: string }) {
   const listedFacts = facts.kind === "read" ? facts.value.facts : null;
   // Whether the screen still reads by itself, by the rule the reading uses.
   const judgement = judge(state.value);
+  // Compare is for a finished case whose runs are in hand (story 3.6): the
+  // server refuses one more run on any other case.
+  const comparable =
+    progress.case_status === "completed" && runs.kind === "read";
   return (
     <>
       <p>
@@ -716,7 +1144,36 @@ function Result({ caseId }: { caseId: string }) {
         <div className="result-findings">
           <section aria-label={strings.result.verdictHeading}>
             <h3>{strings.result.verdictHeading}</h3>
-            <VerdictPane runs={runs} facts={listedFacts} onCite={cite} />
+            {comparable && (
+              <p>
+                <button
+                  type="button"
+                  aria-pressed={comparing}
+                  onClick={() => setComparing(!comparing)}
+                >
+                  {strings.compare.toggle}
+                </button>
+              </p>
+            )}
+            {comparing && comparable ? (
+              <Compare
+                ask={askForRun}
+                runs={runs.value}
+                mayRead={state.value.failedReads < FINAL_CASE_RETRIES}
+                facts={listedFacts}
+                onCite={cite}
+                refresh={refresh}
+                follow={follow}
+              />
+            ) : (
+              <VerdictPane
+                runs={runs}
+                picked={picked}
+                onPick={setPicked}
+                facts={listedFacts}
+                onCite={cite}
+              />
+            )}
           </section>
           <section aria-label={strings.result.factsHeading}>
             <h3>{strings.result.factsHeading}</h3>

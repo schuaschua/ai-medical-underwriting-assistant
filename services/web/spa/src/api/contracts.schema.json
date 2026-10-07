@@ -743,6 +743,24 @@
       "title": "ClassifyCommand",
       "type": "object"
     },
+    "ComparePairs": {
+      "additionalProperties": false,
+      "description": "Response of `GET /api/compare-pairs`: the rows the Compare toggle shows (AD-11).\n\nA setting of `web`, answered as it is. `web` does not know which rows\nare built: the SPA asks for the default pair, and uses the fallback pair\nwhen `workflow` refuses a row of the default one as not available.",
+      "properties": {
+        "default_pair": {
+          "$ref": "#/$defs/RetrieverPair"
+        },
+        "fallback_pair": {
+          "$ref": "#/$defs/RetrieverPair"
+        }
+      },
+      "required": [
+        "default_pair",
+        "fallback_pair"
+      ],
+      "title": "ComparePairs",
+      "type": "object"
+    },
     "Decision": {
       "description": "The human-reserved actions (AD-10).",
       "enum": [
@@ -2037,6 +2055,24 @@
       ],
       "title": "RetrieverConfig",
       "type": "string"
+    },
+    "RetrieverPair": {
+      "additionalProperties": false,
+      "description": "Two ladder rows whose verdict runs on one case are shown side by side.",
+      "properties": {
+        "first": {
+          "$ref": "#/$defs/RetrieverConfig"
+        },
+        "second": {
+          "$ref": "#/$defs/RetrieverConfig"
+        }
+      },
+      "required": [
+        "first",
+        "second"
+      ],
+      "title": "RetrieverPair",
+      "type": "object"
     },
     "RouteDetail": {
       "additionalProperties": false,

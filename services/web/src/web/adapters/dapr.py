@@ -41,6 +41,8 @@ from contracts.models.workflow import (
     PageQueue,
     PageQueueQuery,
     StartCaseRequest,
+    VerdictRunRequest,
+    VerdictRunRequested,
 )
 from contracts.operations import Operation, get_operation
 from contracts.upload import IDEMPOTENCY_KEY_HEADER
@@ -97,6 +99,18 @@ _NO_FILE = _UNKNOWN_RESOURCE | {ErrorCode.NOT_REDACTED}
 # with here. The bake-off runner records such a row as not measured.
 _SEARCH_REFUSALS = frozenset(
     {ErrorCode.VALIDATION_FAILED, ErrorCode.RETRIEVER_NOT_AVAILABLE}
+)
+# AD-11: what `workflow` may say about a request for one more verdict run
+# (the Compare toggle), passed on as it is: the case is unknown, the request
+# is not valid, the case is not finished, or the row cannot be run here. The
+# SPA reads the last one as "use the other pair", so it must arrive as it is.
+_VERDICT_RUN_REFUSALS = frozenset(
+    {
+        ErrorCode.NOT_FOUND,
+        ErrorCode.VALIDATION_FAILED,
+        ErrorCode.PAGES_NOT_TERMINAL,
+        ErrorCode.RETRIEVER_NOT_AVAILABLE,
+    }
 )
 
 
@@ -351,6 +365,28 @@ class ServiceClient:
             VerdictRunList,
             passed_on=_UNKNOWN_RESOURCE,
             traceparent=traceparent,
+        )
+
+    async def request_verdict_run(
+        self,
+        case_id: str,
+        wanted: VerdictRunRequest,
+        *,
+        traceparent: str | None,
+    ) -> VerdictRunRequested:
+        """`POST /cases/{case_id}/verdict-runs` on `workflow`: one more run on a finished case (AD-11).
+
+        The same case and row again is answered with the state of the run
+        there is and starts nothing new, with one exception: a run that
+        ended without a stored result is scheduled again.
+        """
+        return await self._call(
+            get_operation("request_verdict_run"),
+            {"case_id": case_id},
+            VerdictRunRequested,
+            passed_on=_VERDICT_RUN_REFUSALS,
+            traceparent=traceparent,
+            body=wanted.model_dump(mode="json"),
         )
 
     async def list_run_steps(

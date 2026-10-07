@@ -142,6 +142,7 @@ export interface Contracts {
   ClassifierContender: ClassifierContender;
   ClassifierOutput: ClassifierOutput;
   ClassifyCommand: ClassifyCommand;
+  ComparePairs: ComparePairs;
   Decision: Decision;
   DecisionRecorded: DecisionRecorded;
   DecisionRequest: DecisionRequest;
@@ -183,6 +184,7 @@ export interface Contracts {
   RetrievalRowScore: RetrievalRowScore;
   RetrievalScoreboard: RetrievalScoreboard;
   RetrieverConfig: RetrieverConfig;
+  RetrieverPair: RetrieverPair;
   RouteDetail: RouteDetail;
   RuleReadQuery: RuleReadQuery;
   RuleText: RuleText;
@@ -416,6 +418,24 @@ export interface ClassifyCommand {
   contender: ClassifierContender;
   eval_run_id?: string | null;
   page_id: string;
+}
+/**
+ * Response of `GET /api/compare-pairs`: the rows the Compare toggle shows (AD-11).
+ *
+ * A setting of `web`, answered as it is. `web` does not know which rows
+ * are built: the SPA asks for the default pair, and uses the fallback pair
+ * when `workflow` refuses a row of the default one as not available.
+ */
+export interface ComparePairs {
+  default_pair: RetrieverPair;
+  fallback_pair: RetrieverPair;
+}
+/**
+ * Two ladder rows whose verdict runs on one case are shown side by side.
+ */
+export interface RetrieverPair {
+  first: RetrieverConfig;
+  second: RetrieverConfig;
 }
 /**
  * Response of `POST /cases/{case_id}/pages/{page_id}/decisions`: the stored decision.

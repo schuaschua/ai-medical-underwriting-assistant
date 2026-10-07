@@ -11,6 +11,7 @@ import type {
   CaseStarted,
   CaseStatus,
   ClassificationList,
+  ComparePairs,
   Decision,
   DecisionRecorded,
   ErrorBody,
@@ -22,11 +23,13 @@ import type {
   PageList,
   RedactionScoreboard,
   RetrievalScoreboard,
+  RetrieverConfig,
   RuleText,
   ToolName,
   TriageQueue,
   UploadedCase,
   VerdictRunList,
+  VerdictRunRequested,
 } from "./contracts.gen";
 
 export const ROLE_HEADER = "X-Demo-Role";
@@ -987,4 +990,70 @@ export async function getRedactionScoreboard(): Promise<RedactionScoreboard> {
     );
   }
   return report as unknown as RedactionScoreboard;
+}
+
+// --- Compare (story 3.6) --------------------------------------------------------
+//
+// AD-11: two verdict runs of one finished case side by side. The server says
+// which rows to show and whether a row can be run; nothing here decides it.
+
+/** The states a requested run can be in: any other is no answer. */
+const RUN_STATES = ["running", "done", "failed"];
+
+/** Whether a value names two different rows of the ladder. */
+function isRetrieverPair(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    LADDER.some((row) => row === value.first) &&
+    LADDER.some((row) => row === value.second) &&
+    value.first !== value.second
+  );
+}
+
+/**
+ * Read the pairs of retrieval rows Compare shows: the default pair, and the
+ * pair to use when a row of the default one cannot be run here. A setting
+ * of the server. Only the underwriter role may.
+ */
+export async function getComparePairs(): Promise<ComparePairs> {
+  const pairs = await request<unknown>("GET", "/compare-pairs");
+  if (
+    !isRecord(pairs) ||
+    !isRetrieverPair(pairs.default_pair) ||
+    !isRetrieverPair(pairs.fallback_pair)
+  ) {
+    throw new ApiError(200, null, "The answer was not Compare's pairs.", null);
+  }
+  return pairs as unknown as ComparePairs;
+}
+
+/**
+ * Ask for one more verdict run on a finished case, with that retrieval row.
+ * The same case and row again is answered with the state of the run there
+ * is, with one exception: a run that ended without a stored result is
+ * scheduled again. So a screen sends it once for a row. Only the underwriter role may. 409
+ * `retriever_not_available` for a row that cannot be run here, and 409
+ * `pages_not_terminal` for a case that is not finished.
+ */
+export async function requestVerdictRun(
+  caseId: string,
+  row: RetrieverConfig,
+): Promise<VerdictRunRequested> {
+  const requested = await request<unknown>(
+    "POST",
+    casePath(caseId, "verdict-runs"),
+    { json: { retriever_config: row } },
+  );
+  if (
+    !isRecord(requested) ||
+    requested.case_id !== caseId ||
+    requested.retriever_config !== row ||
+    !RUN_STATES.some((status) => status === requested.status) ||
+    !isNullOr(isText)(requested.verdict_run_id) ||
+    // The code is there for a failed run only: missing or null otherwise.
+    !(requested.error_code == null || isText(requested.error_code))
+  ) {
+    throw new ApiError(200, null, "The answer was not a requested run.", null);
+  }
+  return requested as unknown as VerdictRunRequested;
 }

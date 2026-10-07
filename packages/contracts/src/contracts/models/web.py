@@ -106,6 +106,31 @@ class TriageQueue(ContractModel):
     has_more: bool
 
 
+class RetrieverPair(ContractModel):
+    """Two ladder rows whose verdict runs on one case are shown side by side."""
+
+    first: RetrieverConfig
+    second: RetrieverConfig
+
+    @model_validator(mode="after")
+    def _two_rows(self) -> Self:
+        if self.first is self.second:
+            raise ValueError("a pair names two different rows")
+        return self
+
+
+class ComparePairs(ContractModel):
+    """Response of `GET /api/compare-pairs`: the rows the Compare toggle shows (AD-11).
+
+    A setting of `web`, answered as it is. `web` does not know which rows
+    are built: the SPA asks for the default pair, and uses the fallback pair
+    when `workflow` refuses a row of the default one as not available.
+    """
+
+    default_pair: RetrieverPair
+    fallback_pair: RetrieverPair
+
+
 # --- The scoreboard files (AD-17) ------------------------------------------------------
 #
 # The bake-off runner in `evals/` writes them and `web` serves them read-only;
