@@ -121,6 +121,11 @@ class Toolbox:
     `facts` is the case's facts as `extraction` held them when the run
     began: `list_facts` answers them, so every tool call of a run sees the
     same facts.
+
+    On row `r6` no model calls the tools: the run itself lists the facts
+    and makes one search per fact through `call` (`domain/compose.py`), so
+    that each is checked, counted against the step limit and logged like
+    any tool call.
     """
 
     def __init__(
@@ -135,6 +140,7 @@ class Toolbox:
         now: Callable[[], datetime],
         step_limit: int = DEFAULT_STEP_LIMIT,
         search_top_k: int = DEFAULT_TOP_K,
+        searches_count_as_reads: bool = False,
     ) -> None:
         self.verdict_run_id = verdict_run_id
         self.case_id = case_id
@@ -149,6 +155,45 @@ class Toolbox:
         self._now = now
         self._step_limit = step_limit
         self._search_top_k = search_top_k
+        # AD-15, row `r6`: the run reads no rule, so a rule counts as read
+        # when a search of the run returned its chunk.
+        self._searches_count_as_reads = searches_count_as_reads
+
+    @property
+    def facts(self) -> tuple[Fact, ...]:
+        """The case's facts as they were when the run began, in page order."""
+        return self._facts
+
+    @property
+    def steps_left(self) -> int:
+        """How many more tool calls the run may make before its step limit."""
+        return max(0, self._step_limit - self.state.steps)
+
+    async def stop_at_the_limit(self, tool: ToolName) -> None:
+        """Stop a run that knows it cannot make the calls it needs within its steps (AD-15).
+
+        Row `r6` knows how many searches it will make before the first of
+        them. The stop is one row of the log, refused with `step_limit`,
+        as a call beyond the limit is; then `StepLimitReached`.
+        """
+        self.state.steps += 1
+        self.state.step_limit_reached = True
+        await self._log(
+            self.state.steps,
+            tool,
+            {},
+            None,
+            [],
+            StepOutcome.REFUSED,
+            ErrorCode.STEP_LIMIT,
+            time.monotonic(),
+        )
+        raise StepLimitReached
+
+    def failed(self, code: ErrorCode) -> "ToolFailed":
+        """Note that the run ends in a tool, with this code; the error to raise."""
+        self.failure = ToolFailed(code)
+        return self.failure
 
     async def call(
         self, tool: str, arguments: Mapping[str, object]
@@ -327,7 +372,7 @@ class Toolbox:
             self._search_top_k,
             self._trace_context,
         )
-        rule_ids = self.state.found(found.items)
+        rule_ids = self.state.found(found.items, as_read=self._searches_count_as_reads)
         return {
             "fact_id": arguments.fact_id,
             "rules": [

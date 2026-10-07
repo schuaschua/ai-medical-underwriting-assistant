@@ -2,7 +2,10 @@
 
 The stage `workflow` commands once every page of a case is final, one run
 per retriever configuration. The agent reads the case's facts, searches the
-manual and reads rules through its three tools, and proposes reasons. What
+manual and reads rules through its three tools, and proposes reasons. On
+row `r6`, whose retrieval plans its own queries, that loop is off: the run
+makes one search per fact itself and the model composes its proposal from
+what returned (`compose.py`). What
 is stored is decided in `decide.py`, by code: the reasons the run can bear
 out, the rules that refer a case, the verdict and the loading. It is a
 suggestion: nothing here, and nothing anywhere, stores a decision.
@@ -30,6 +33,7 @@ from contracts.models.verdict import (
     VerdictRunList,
     VerdictRunResult,
 )
+from verdict.domain.compose import searched_material
 from verdict.domain.decide import (
     DEFAULT_CONFIDENCE_FLOOR,
     AnswerCutOff,
@@ -40,7 +44,7 @@ from verdict.domain.decide import (
     stopped_at_the_step_limit,
     without_facts,
 )
-from verdict.domain.entities import KeyRow, RunKey, Suggestion
+from verdict.domain.entities import AgentAnswer, KeyRow, RunKey, Suggestion
 from verdict.domain.ports import (
     AgentFailed,
     FactReader,
@@ -103,7 +107,10 @@ class RunPorts:
 # (`effects.definition_of`), and a definition cut off before its rating
 # bears out nothing. `r4` answers the `smart` chunks `r3` finds, in a
 # reranker's order; `r5` answers the same `smart` chunks as `r2` and `r3`,
-# from Azure AI Search.
+# from Azure AI Search, and so does `r6`, through that service's knowledge
+# base.
+# Named one by one: a row the contracts gain later is not run by the
+# agent's default loop until it is put here.
 RUNNABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
     {
         RetrieverConfig.R1,
@@ -111,24 +118,34 @@ RUNNABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
         RetrieverConfig.R3,
         RetrieverConfig.R4,
         RetrieverConfig.R5,
+        RetrieverConfig.R6,
     }
 )
-# The rows `retrieval` answers only where it was given the chat deployment,
-# which is its reranker.
+# The rows `retrieval` answers only where it was given the chat deployment:
+# its reranker (`r4`), and what the knowledge base plans with (`r6`).
 RERANKER_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset({RetrieverConfig.R4})
+CHAT_DEPLOYMENT_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = (
+    RERANKER_RETRIEVER_CONFIGS | {RetrieverConfig.R6}
+)
 # The rows `retrieval` answers only where it was given a search service.
 SEARCH_SERVICE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
-    {RetrieverConfig.R5}
+    {RetrieverConfig.R5, RetrieverConfig.R6}
+)
+# AD-15: the rows whose retrieval plans its own queries. On these the
+# agent's search loop is off: one search per fact, made by the run, and one
+# call of the model to compose the proposal, with no tool.
+SERVICE_PLANNED_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
+    {RetrieverConfig.R6}
 )
 # The rows a verdict may be commanded with unless the settings say otherwise
 # (VERDICT_AVAILABLE_RETRIEVER_CONFIGS): the ones that need no search
-# service and no reranker. `workflow` and `retrieval` name the same rows,
+# service and no chat deployment at `retrieval`. `workflow` and `retrieval` name the same rows,
 # each in its own settings, and a test outside `services/` holds the three
 # lists equal.
 DEFAULT_AVAILABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = (
     RUNNABLE_RETRIEVER_CONFIGS
     - SEARCH_SERVICE_RETRIEVER_CONFIGS
-    - RERANKER_RETRIEVER_CONFIGS
+    - CHAT_DEPLOYMENT_RETRIEVER_CONFIGS
 )
 
 
@@ -453,6 +470,8 @@ async def _suggest(
             now=now,
             step_limit=options.step_limit,
             search_top_k=options.search_top_k,
+            searches_count_as_reads=key.retriever_config
+            in SERVICE_PLANNED_RETRIEVER_CONFIGS,
         )
         suggestion, kept = await _work(toolbox, ports.agent, options)
         steps = toolbox.state.steps
@@ -496,12 +515,22 @@ async def _suggest(
 async def _work(
     toolbox: Toolbox, agent: VerdictAgent, options: RunOptions
 ) -> tuple[Suggestion, KeptReasons | None]:
-    """Let the agent work the run through, and decide what is stored of it."""
+    """Let the agent work the run through, and decide what is stored of it.
+
+    On a row whose retrieval plans its own queries (`r6`) the run makes the
+    searches, one per fact, and the agent composes from them in one call
+    without a tool. The step limit, the time budget and everything decided
+    afterwards are the same on every row.
+    """
+    answer: AgentAnswer | None
     try:
-        # AD-15: the agent's loop has a time budget of its own, inside the
+        # AD-15: the agent's work has a time budget of its own, inside the
         # stage deadline. When it is spent the agent is stopped where it is.
         async with asyncio.timeout(options.agent_budget_seconds) as budget:
-            answer = await agent.run(toolbox)
+            if toolbox.retriever_config in SERVICE_PLANNED_RETRIEVER_CONFIGS:
+                answer = await agent.compose(toolbox, await searched_material(toolbox))
+            else:
+                answer = await agent.run(toolbox)
     except StepLimitReached:
         answer = None
     except TimeoutError:

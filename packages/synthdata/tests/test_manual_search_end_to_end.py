@@ -248,7 +248,7 @@ def test_story_3_2_rows_r1_r2_and_r3_answer_the_same_shape_each_from_its_own_chu
             assert read.text == fixed[read.chunk_id]["text"]
         not_built = [
             client.post("/searches", json={"query": "q", "retriever_config": row})
-            # `r5` has no search service here, and `r6` is not built.
+            # Neither `r5` nor `r6` has a search service here.
             for row in ("r5", "r6")
         ]
         undefined = client.get("/rules/UW-ZZ-999", params={"retriever_config": "r1"})
@@ -326,20 +326,50 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
     assert [a["kind"] for a in definition["vectorSearch"]["algorithms"]] == [
         "exhaustiveKnn"
     ]
+    # Story 3.8, row `r6`: once the index is loaded the job has the service
+    # hold a knowledge source over that same index and a knowledge base on
+    # it, which plans with the chat deployment and writes no answer. The
+    # index names the embedding deployment as its vectorizer, so that the
+    # service can embed the queries it plans. Nothing was chunked or
+    # embedded again for it.
+    source_name = retrieval.settings.search_agentic_knowledge_source_name
+    base_name = retrieval.settings.search_agentic_knowledge_base_name
+    assert (
+        f"knowledge base done: source={source_name} base={base_name} "
+        "source_created=yes base_created=yes"
+    ) in caplog.text
+    source = stand_in.knowledge_sources[source_name]["searchIndexParameters"]
+    assert source["searchIndexName"] == index_name
+    base = stand_in.knowledge_bases[base_name]
+    assert base["knowledgeSources"] == [{"name": source_name}]
+    assert base["outputMode"] == "extractiveData"
+    (planner,) = base["models"]
+    assert planner["azureOpenAIParameters"]["deploymentId"] == (
+        retrieval.settings.chat_deployment
+    )
+    (vectorizer,) = definition["vectorSearch"]["vectorizers"]
+    assert vectorizer["azureOpenAIParameters"]["deploymentId"] == (
+        retrieval.settings.embedding_deployment
+    )
+    assert stand_in.indexes[index_name].vectorized_fields == ["embedding"]
+    assert stand_in.uploaded == 111
 
-    # A second run: nothing is uploaded and no model is asked; the stores
-    # are compared all the same.
+    # A second run: nothing is uploaded, nothing is made anew and no model
+    # is asked; the stores are compared all the same.
     calls, uploaded = retrieval.model_calls, stand_in.uploaded
     caplog.clear()
     with caplog.at_level(logging.INFO):
         assert retrieval.ingest() == 0
     assert (retrieval.model_calls, stand_in.uploaded) == (calls, uploaded)
     assert "uploaded=0 removed=0 unchanged=111 created=no" in caplog.text
+    assert "source_created=no base_created=no" in caplog.text
+    assert stand_in.knowledge_created == 2
 
     rules = rule_table()
     asked = list(rules)[::8]
     places: dict[str, int | None] = {}
     places_r4: dict[str, int | None] = {}
+    places_r6: dict[str, int | None] = {}
     embedded_before = retrieval.model.embedding_calls
     with retrieval.service() as client:
         for rule_id in asked:
@@ -378,6 +408,24 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
                     item.chunk_id
                 ].model_dump(exclude={"rank", "score"})
             places_r4[rule_id] = place_of(rule_id, on_r4)
+            # Story 3.8, row `r6`: the same search operation and the same
+            # shape, from the references the knowledge base returns.
+            on_r6 = search(client, query, retriever_config="r6")
+            assert on_r6.retriever_config.value == "r6"
+            assert [item.rank for item in on_r6.items] == [1, 2, 3, 4, 5]
+            assert all(0 <= item.score <= 1 for item in on_r6.items)
+            by_the_service = [item.score for item in on_r6.items]
+            assert by_the_service == sorted(by_the_service, reverse=True)
+            for item in on_r6.items:
+                stored = smart[item.chunk_id]
+                assert item.model_dump(exclude={"rank", "score"}) == {
+                    "chunk_id": item.chunk_id,
+                    "rule_ids": stored["rule_ids"],
+                    "text": stored["text"],
+                    "manual_page": stored["manual_page"],
+                    "impairment": stored["impairment"],
+                }
+            places_r6[rule_id] = place_of(rule_id, on_r6)
         # A rule read for `r5` answers the `smart` chunk from pgvector.
         read = RuleText.model_validate(
             client.get(f"/rules/{asked[0]}", params={"retriever_config": "r5"}).json()
@@ -388,11 +436,15 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
         # The search service down, or slower than a search may take: no
         # partial answer, and the pgvector rows answer as before.
         stand_in.mode = SearchMode.UNAVAILABLE
-        down = client.post("/searches", json={"query": "q", "retriever_config": "r5"})
+        down = [
+            client.post("/searches", json={"query": "q", "retriever_config": row})
+            for row in ("r5", "r6")
+        ]
         assert len(search(client, "q").items) == 5
-    # One embedding call per search, one hybrid query with the semantic
-    # ranker and exact vector search per `r5` search, and one chat call
-    # with 20 candidates per `r4` search.
+    # One embedding call per search of the four rows that embed their query
+    # here (`r6` embeds nothing: the search service does), one hybrid query
+    # with the semantic ranker and exact vector search per `r5` search, and
+    # one chat call with 20 candidates per `r4` search.
     assert embedded - embedded_before == 4 * len(asked)
     assert retrieval.model.rerank_calls == len(asked)
     shown = json.loads(retrieval.model.requests[-1]["messages"][1]["content"])
@@ -404,14 +456,33 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
         assert (
             vector_query["exhaustive"] is True and len(vector_query["vector"]) == 3072
         )
+    # One retrieve request per `r6` search: the query as it was asked, for
+    # references only, on the preview version; the service planned and ran
+    # queries of its own.
+    assert len(stand_in.retrievals) == len(asked)
+    for rule_id, sent, planned in zip(
+        asked, stand_in.retrievals, stand_in.planned, strict=True
+    ):
+        ((part,),) = [message["content"] for message in sent["messages"]]
+        assert part == {"type": "text", "text": named_query(rules[rule_id])}
+        assert (sent["outputMode"], sent["maxOutputDocuments"]) == (
+            "extractiveData",
+            5,
+        )
+        assert len(planned) > 1
     stand_in.mode, stand_in.delay_seconds = SearchMode.SLOW, 5.0
     with retrieval.service(
         search_deadline_seconds=0.5,
         search_embedding_timeout_seconds=0.5,
         search_service_query_timeout_seconds=0.5,
+        search_agentic_timeout_seconds=0.5,
+        search_agentic_deadline_seconds=0.5,
     ) as client:
-        slow = client.post("/searches", json={"query": "q", "retriever_config": "r5"})
-    for response in (down, slow):
+        slow = [
+            client.post("/searches", json={"query": "q", "retriever_config": row})
+            for row in ("r5", "r6")
+        ]
+    for response in (*down, *slow):
         assert response.status_code == 502, response.text
         assert ErrorBody.model_validate(response.json()).error.code is (
             ErrorCode.UPSTREAM_UNAVAILABLE
@@ -455,12 +526,13 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
         )
 
     # A service that is told of no search service and of no chat deployment:
-    # `r5` and `r4` are refused as not available and the other rows answer.
+    # `r5`, `r4` and `r6` are refused as not available and the other rows
+    # answer.
     retrieval.search = None
     with retrieval.service(chat_deployment=None) as client:
         refused = [
             client.post("/searches", json={"query": "q", "retriever_config": row})
-            for row in ("r4", "r5")
+            for row in ("r4", "r5", "r6")
         ]
         assert len(search(client, "q").items) == 5
     for response in refused:
@@ -479,8 +551,15 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
             f"queries, 20 candidates each; in the top 5 "
             f"{sum(1 for place in places_r4.values() if place is not None)}"
         )
+        print(
+            f"\nstory 3.8, r6 over the manual with the stand-ins: {len(asked)} named "
+            f"queries, {sum(len(planned) for planned in stand_in.planned)} planned "
+            f"queries; in the top 5 "
+            f"{sum(1 for place in places_r6.values() if place is not None)}"
+        )
     # The stand-in ranks by shared words: this proves the plumbing. What the
-    # real semantic ranker and the real reranker do is a check of the final
-    # Azure test session.
+    # real semantic ranker, the real reranker and the real planning model do
+    # is a check of the final Azure test session.
     assert any(place is not None for place in places.values())
     assert any(place is not None for place in places_r4.values())
+    assert any(place is not None for place in places_r6.values())

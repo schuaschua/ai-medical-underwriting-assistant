@@ -9,11 +9,13 @@
 # starts them) they are used; otherwise this script starts them and stops
 # them again when the job has ended.
 #
-# The job's last step loads the search stand-in's index from the stored
-# chunks and compares the two stores (retrieval row r5). That stand-in keeps
-# its index in memory: under ./tools/dev.sh the index lives as long as the
-# application runs; when this script had to start the stand-in itself, the
-# load is proven and the index is gone when the script ends.
+# The job's last steps load the search stand-in's index from the stored
+# chunks and compare the two stores (retrieval row r5), and then have the
+# stand-in hold a knowledge source and a knowledge base over that index
+# (row r6). That stand-in keeps all of it in memory: under ./tools/dev.sh
+# it lives as long as the application runs; when this script had to start
+# the stand-in itself, the load is proven and all of it is gone when the
+# script ends.
 #
 # Safe to run again: a second run changes nothing and calls no model. It only
 # ever touches this machine: the settings below point at loopback, whatever
@@ -136,5 +138,10 @@ export RETRIEVAL_FIXED_CHUNK_OVERLAP_WORDS=35
 export RETRIEVAL_SEARCH_SERVICE_ENDPOINT="http://127.0.0.1:${search_port}"
 export RETRIEVAL_SEARCH_SERVICE_ENTRA_AUTH=false
 export RETRIEVAL_SEARCH_SERVICE_INDEX_NAME="manual-smart"
+# Row r6: the knowledge source and the knowledge base over that index, under
+# the names dapr.yaml tells the service to ask, on the preview REST version.
+export RETRIEVAL_SEARCH_AGENTIC_API_VERSION="2026-08-01-preview"
+export RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_SOURCE_NAME="manual-smart-source"
+export RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_BASE_NAME="manual-smart-base"
 
 uv run python -m retrieval.ingest

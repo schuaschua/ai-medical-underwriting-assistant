@@ -1,6 +1,6 @@
 """The two reads of `retrieval`: the search and the rule read (spine AD-11, AD-12).
 
-One search operation for every ladder row; rows `r1` to `r5` are built.
+One search operation for every ladder row; all six are built.
 The steps of `r3`, each a function of its own: the query is embedded
 (`embed_query`), the vector search and the full-text search each answer a
 ranked list of candidates (the index port), the two lists are fused
@@ -13,11 +13,15 @@ deployment say how relevant its best candidates are to the query
 (`hybrid_reranked_search`): the order is the one thing that differs. Row
 `r5` embeds the query the same way and hands the text and the vector to
 Azure AI Search (`ai_search_hybrid`), whose index holds a copy of the
-`smart` chunks: the store is the one thing that differs. Nothing is stored,
-nothing is cached, and no model rewrites the query. Every read of a search
-is from one unchanging view of the index, and one deadline covers the whole
-search; row `r4` has a longer one of its own, since a chat call does not
-fit the others'.
+`smart` chunks: the store is the one thing that differs. Row `r6` hands the
+query, as it was asked, to the knowledge base the search service keeps over
+that same index (`ai_search_agentic`): the service plans and runs queries
+of its own with its own model, and the references it returns are the items.
+On the other rows no model rewrites the query. Nothing is stored and
+nothing is cached. Every read of a search is from one unchanging view of
+the index, and one deadline covers the whole search; rows `r4` and `r6`
+each have a longer one of their own, since a model's call does not fit the
+others'.
 """
 
 import asyncio
@@ -41,11 +45,14 @@ from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
     IndexedChunk,
     RankedDocument,
+    RetrievedReference,
 )
 from retrieval.domain.fusion import Fused, reciprocal_rank_fusion
 from retrieval.domain.ports import (
+    AgenticRetriever,
     ChunkIndex,
     IndexUnavailable,
+    KnowledgeBaseMissing,
     ModelAnswerInvalid,
     ModelCallFailed,
     ModelNotConfigured,
@@ -132,6 +139,19 @@ class SearchPorts:
     # service was told of no chat deployment: the row is then refused as
     # not available.
     reranker: Reranker | None = None
+    # AD-11, row `r6`: the search service's knowledge base. None when the
+    # service was told of no search endpoint or of no chat deployment,
+    # which the knowledge base plans with: the row is then refused as not
+    # available.
+    knowledge_base: AgenticRetriever | None = None
+
+    def available(self) -> frozenset[RetrieverConfig]:
+        """The rows a search can run with here, by what the service was given."""
+        return available_rows(
+            self.search_service is not None,
+            self.reranker is not None,
+            self.knowledge_base is not None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +173,9 @@ class SearchOptions:
     # whole search, the chat call included, in place of `deadline_seconds`.
     rerank_depth: int = 20
     rerank_deadline_seconds: float | None = 20.0
+    # Row `r6`: the deadline of that row's whole search, the service's own
+    # model calls included, in place of `deadline_seconds`.
+    agentic_deadline_seconds: float | None = 20.0
 
 
 @dataclass(slots=True)
@@ -164,9 +187,10 @@ class SearchStats:
     vector_candidates: int = 0
     full_text_candidates: int = 0
     items: int = 0
-    # Row `r5`: whether the search service was asked, how many documents it
-    # answered, and how many of them were left out because pgvector holds
-    # no chunk of their id (an index behind the chunk table).
+    # Rows `r5` and `r6`: whether the search service was asked, how many
+    # documents (for `r6`, references) it answered, and how many of them
+    # were left out because pgvector holds no chunk of their id, or holds
+    # it with other content (an index behind the chunk table).
     service_asked: bool = False
     service_documents: int = 0
     left_out: int = 0
@@ -178,6 +202,11 @@ class SearchStats:
     rerank_asked: bool = False
     reranked: int = 0
     rerank_ms: int = 0
+    # Row `r6`: how many queries of its own the service says it ran, and
+    # which rule the scores of the answer are by: `reranker` (the semantic
+    # ranker's score, divided), or `rank` (one over the rank).
+    subqueries: int = 0
+    score_rule: str = "-"
 
 
 def candidate_depth(top_k: int, options: SearchOptions) -> int:
@@ -347,9 +376,7 @@ async def hybrid_reranked_search(
         # `row_to_search` refuses the row before this is reached.
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE,
-            row_not_available_message(
-                available_rows(ports.search_service is not None, reranker=False)
-            ),
+            row_not_available_message(ports.available()),
         )
     fused, chunks = await fused_candidates(
         query, chunk_set, top_k, ports=ports, options=options, stats=stats
@@ -487,11 +514,7 @@ async def ai_search_hybrid(
         # `row_to_search` refuses the row before this is reached.
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE,
-            row_not_available_message(
-                available_rows(
-                    search_service=False, reranker=ports.reranker is not None
-                )
-            ),
+            row_not_available_message(ports.available()),
         )
     stats.depth = depth = candidate_depth(top_k, options)
     vector = await embed_query(query, ports.model)
@@ -511,17 +534,7 @@ async def ai_search_hybrid(
         for document in documents
         if stored.get(document.chunk_id) == document.content_hash
     ]
-    stats.left_out = len(documents) - len(kept)
-    if stats.left_out:
-        # Ids only (security rule 31).
-        logger.warning(
-            "search service answered chunks pgvector does not hold: count=%d "
-            "chunk_ids=%s",
-            stats.left_out,
-            ",".join(
-                document.chunk_id for document in documents if document not in kept
-            ),
-        )
+    _note_left_out(documents, kept, stats)
     return [
         SearchItem(
             chunk_id=document.chunk_id,
@@ -537,8 +550,132 @@ async def ai_search_hybrid(
     ]
 
 
+def _note_left_out(
+    answered: Sequence[RankedDocument | RetrievedReference],
+    kept: Sequence[RankedDocument | RetrievedReference],
+    stats: SearchStats,
+) -> None:
+    """Count, and log by id, what the search service answered and pgvector does not hold as it is."""
+    stats.left_out = len(answered) - len(kept)
+    if stats.left_out:
+        # Ids only (security rule 31).
+        logger.warning(
+            "search service answered chunks pgvector does not hold: count=%d "
+            "chunk_ids=%s",
+            stats.left_out,
+            ",".join(entry.chunk_id for entry in answered if entry not in kept),
+        )
+
+
+def rank_score(rank: int) -> float:
+    """Row `r6`'s score where the service gave a reference none: one over its rank.
+
+    1 for the first item, 0.5 for the second, and so on: larger is better
+    and the order of the scores is the service's order. It says nothing
+    else, and is no measure of relevance.
+    """
+    return 1.0 / rank
+
+
+async def ai_search_agentic(
+    query: str,
+    chunk_set: ChunkSet,
+    top_k: int,
+    *,
+    ports: SearchPorts,
+    options: SearchOptions,
+    stats: SearchStats,
+) -> list[SearchItem]:
+    """Row `r6`: Azure AI Search's agentic retrieval over the same index as row `r5`.
+
+    The query goes to the knowledge base as it was asked. The service's
+    model plans queries of its own, the service runs them on the index and
+    returns references: the documents it found. Those are the items, in
+    the service's order; an answer it might write is neither asked for nor
+    read. Nothing is embedded here: the service embeds its own queries.
+
+    A reference whose chunk pgvector does not hold, or holds with another
+    content hash, is left out and counted, as for row `r5`. Two of the
+    service's queries can find the same document: of the references to
+    one chunk the first is kept, before the cut to `top_k`.
+
+    A service that holds no knowledge base has not been loaded for this
+    row: the row is refused as not available, as a chunk set that was
+    never ingested is, and not answered as a fault that passes.
+
+    `score`, by one rule for a whole answer: where every reference kept
+    carries the semantic ranker's score, that score divided by 4, as for
+    row `r5`; where one of them carries none (the service says a source may
+    bypass its ranker), one over the item's rank for all of them.
+    """
+    knowledge_base = ports.knowledge_base
+    if knowledge_base is None:
+        # `row_to_search` refuses the row before this is reached.
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE,
+            row_not_available_message(ports.available()),
+        )
+    stats.depth = top_k
+    async with ports.index.snapshot() as index:
+        check_deployment(await index.embedded_with(chunk_set), options)
+        stored = await index.content_hashes(chunk_set)
+    stats.service_asked = True
+    try:
+        retrieval = await knowledge_base.retrieve(query, top_k)
+    except KnowledgeBaseMissing:
+        logger.warning("search refused: the search service holds no knowledge base")
+        raise DomainError(
+            ErrorCode.RETRIEVER_NOT_AVAILABLE, CHUNK_SET_NOT_INGESTED_MESSAGE
+        ) from None
+    stats.service_documents = len(retrieval.references)
+    stats.subqueries = retrieval.subqueries
+    # The first reference to each chunk, in the service's order.
+    first: dict[str, RetrievedReference] = {}
+    for reference in retrieval.references:
+        first.setdefault(reference.chunk_id, reference)
+    references = list(first.values())
+    stats.max_reranker_score = max(
+        (
+            reference.reranker_score
+            for reference in references
+            if reference.reranker_score is not None
+        ),
+        default=None,
+    )
+    _check_documents_deployment(references, options)
+    kept = [
+        reference
+        for reference in references
+        if stored.get(reference.chunk_id) == reference.content_hash
+    ]
+    _note_left_out(references, kept, stats)
+    kept = kept[:top_k]
+    by_the_ranker = [
+        reference.reranker_score
+        for reference in kept
+        if reference.reranker_score is not None
+    ]
+    by_rank = len(by_the_ranker) != len(kept)
+    stats.score_rule = "rank" if by_rank else "reranker"
+    return [
+        SearchItem(
+            chunk_id=reference.chunk_id,
+            rule_ids=list(reference.rule_ids),
+            # The service's order, counted without gaps.
+            rank=rank,
+            score=rank_score(rank)
+            if by_rank
+            else reranker_score(by_the_ranker[rank - 1]),
+            text=reference.text,
+            manual_page=reference.manual_page,
+            impairment=reference.impairment,
+        )
+        for rank, reference in enumerate(kept, start=1)
+    ]
+
+
 def _check_documents_deployment(
-    documents: Sequence[RankedDocument], options: SearchOptions
+    documents: Sequence[RankedDocument | RetrievedReference], options: SearchOptions
 ) -> None:
     """Refuse an answer from documents another embedding deployment made the vectors of.
 
@@ -566,13 +703,16 @@ _SEARCHES = {
     SearchMethod.HYBRID: hybrid_search,
     SearchMethod.HYBRID_RERANKED: hybrid_reranked_search,
     SearchMethod.AI_SEARCH_HYBRID: ai_search_hybrid,
+    SearchMethod.AI_SEARCH_AGENTIC: ai_search_agentic,
 }
 
 
 def deadline_of(row: RetrieverRow, options: SearchOptions) -> float | None:
-    """The deadline over one whole search with a row: `r4`'s own, or the one of the other rows."""
+    """The deadline over one whole search with a row: `r4`'s or `r6`'s own, or the one of the other rows."""
     if row.needs_reranker:
         return options.rerank_deadline_seconds
+    if row.needs_knowledge_base:
+        return options.agentic_deadline_seconds
     return options.deadline_seconds
 
 
@@ -617,16 +757,19 @@ async def search_rules(
     stats = stats if stats is not None else SearchStats()
     if _NUL in request.query:
         raise DomainError(ErrorCode.VALIDATION_FAILED, INVALID_QUERY_MESSAGE)
-    has_search_service = ports.search_service is not None
-    has_reranker = ports.reranker is not None
-    row = row_to_search(request.retriever_config, has_search_service, has_reranker)
+    row = row_to_search(
+        request.retriever_config,
+        ports.search_service is not None,
+        ports.reranker is not None,
+        ports.knowledge_base is not None,
+    )
     search = _SEARCHES.get(row.method)
     if search is None:
         # A row marked as built without a search of its own: said as what it
         # is to the caller, never answered with another row's results.
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE,
-            row_not_available_message(available_rows(has_search_service, has_reranker)),
+            row_not_available_message(ports.available()),
         )
     started = clock()
     try:
@@ -659,7 +802,10 @@ async def search_rules(
         # called is that port's failure, and is raised as it is.
         if not deadline.expired():
             raise
-        waited_for = "index" if stats.embedded else "model"
+        # Row `r6` embeds nothing here: before the service is asked, it
+        # can only have been waiting for the index.
+        read_the_index = stats.embedded or row.needs_knowledge_base
+        waited_for = "index" if read_the_index else "model"
         if stats.service_asked:
             waited_for = "search_service"
         if stats.rerank_asked:
@@ -679,7 +825,7 @@ async def search_rules(
             raise DomainError(
                 ErrorCode.MODEL_UNAVAILABLE, RERANKER_TOO_SLOW_MESSAGE
             ) from None
-        if stats.embedded:
+        if read_the_index:
             raise DomainError(
                 ErrorCode.UPSTREAM_UNAVAILABLE, INDEX_TOO_SLOW_MESSAGE
             ) from None
@@ -689,8 +835,9 @@ async def search_rules(
     # security rule 31: the row, counts and the timing, never the query.
     logger.info(
         "search: retriever_config=%s top_k=%d vector_candidates=%d "
-        "full_text_candidates=%d reranked=%d rerank_ms=%d service_documents=%d "
-        "left_out=%d max_reranker_score=%s items=%d latency_ms=%d",
+        "full_text_candidates=%d reranked=%d rerank_ms=%d subqueries=%d "
+        "service_documents=%d left_out=%d max_reranker_score=%s items=%d "
+        "score_rule=%s latency_ms=%d",
         row.config.value,
         request.top_k,
         stats.vector_candidates,
@@ -698,11 +845,15 @@ async def search_rules(
         # Row `r4`: the candidates its reranker was given, and its time.
         stats.reranked,
         stats.rerank_ms,
+        # Row `r6`: the queries the service planned and ran, as a count.
+        stats.subqueries,
         stats.service_documents,
         stats.left_out,
         # A number only: the ranker's raw score, before it is divided.
         "-" if stats.max_reranker_score is None else f"{stats.max_reranker_score:g}",
         len(items),
+        # Row `r6`: which of its two rules the scores of this answer are by.
+        stats.score_rule,
         latency_ms,
     )
     return SearchResponse(

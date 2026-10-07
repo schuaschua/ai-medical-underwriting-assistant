@@ -8,11 +8,12 @@
 #      for Document Intelligence's layout model and for Azure AI Search
 #      (packages/synthdata), which redact documents, classify pages, read
 #      their facts, run the verdict agent, parse the manual and answer
-#      retrieval row r5 while the Azure environment is down;
+#      retrieval rows r5 and r6 while the Azure environment is down;
 #   5. the ingestion of the underwriting manual into schema `retrieval`
 #      (tools/ingest-local.sh), which does nothing when it was done before,
 #      and then loads the search stand-in's index from the stored chunks
-#      (every start: that stand-in keeps its index in memory);
+#      and has it hold row r6's knowledge base over that index (every
+#      start: that stand-in keeps both in memory);
 #   6. each service in dapr.yaml with its Dapr sidecar (so far: web, intake,
 #      workflow, classification, extraction, retrieval, verdict).
 # Stop with Ctrl+C, then `docker compose down` for the containers.
@@ -106,7 +107,7 @@ model_standin=$!
 uv run python -m synthdata.layout_standin --port "$layout_port" &
 layout_standin=$!
 # SEARCH_STANDIN_MODE picks what the search stand-in does (README, 'Run
-# locally'): `unavailable` and `slow` show a search with r5 failing.
+# locally'): `unavailable` and `slow` show a search with r5 or r6 failing.
 uv run python -m synthdata.search_standin --port "$search_port" \
   --mode "${SEARCH_STANDIN_MODE:-ok}" &
 search_standin=$!

@@ -17,12 +17,14 @@ from synthdata.foundry_standin import (
 )
 from synthdata.search_standin import Mode as SearchMode
 from verdict.domain.run import (
-    DEFAULT_AVAILABLE_RETRIEVER_CONFIGS as VERDICT_DEFAULT_RETRIEVER_CONFIGS,
-)
-from verdict.domain.run import (
+    CHAT_DEPLOYMENT_RETRIEVER_CONFIGS,
     RERANKER_RETRIEVER_CONFIGS,
     RUNNABLE_RETRIEVER_CONFIGS,
     SEARCH_SERVICE_RETRIEVER_CONFIGS,
+    SERVICE_PLANNED_RETRIEVER_CONFIGS,
+)
+from verdict.domain.run import (
+    DEFAULT_AVAILABLE_RETRIEVER_CONFIGS as VERDICT_DEFAULT_RETRIEVER_CONFIGS,
 )
 from verdict.settings import Settings as VerdictSettings
 from web.settings import Settings as WebSettings
@@ -69,32 +71,47 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
         "rerank_incomplete",
         "rerank_slow",
     ]
-    # Stories 3.2, 3.3 and 3.7: no service imports another, so each names
-    # the ladder rows a case may run with by itself: `retrieval` by its row
-    # table and whether it was given a search service and a chat
-    # deployment (its reranker), `verdict` and `workflow` by a setting.
-    # Held equal here, without the two, with each and with both.
+    # Stories 3.2, 3.3, 3.7 and 3.8: no service imports another, so each
+    # names the ladder rows a case may run with by itself: `retrieval` by
+    # its row table and whether it was given a search service and a chat
+    # deployment (its reranker, and what the knowledge base of `r6` plans
+    # with), `verdict` and `workflow` by a setting. Held equal here,
+    # without the two, with each and with both.
     plain = frozenset({RetrieverConfig.R1, RetrieverConfig.R2, RetrieverConfig.R3})
     with_search = plain | {RetrieverConfig.R5}
-    with_reranker = plain | {RetrieverConfig.R4}
-    everywhere = with_search | with_reranker
-    assert available_rows(search_service=False, reranker=False) == plain
+    with_chat = plain | {RetrieverConfig.R4}
+    everywhere = frozenset(RetrieverConfig)
+
+    def answered(search_service: bool, chat: bool) -> frozenset[RetrieverConfig]:
+        """The rows `retrieval` answers, as its app builds its ports from the two."""
+        return available_rows(
+            search_service, reranker=chat, knowledge_base=search_service and chat
+        )
+
+    assert answered(search_service=False, chat=False) == plain
     assert DEFAULT_AVAILABLE_RETRIEVER_CONFIGS == plain
     assert VERDICT_DEFAULT_RETRIEVER_CONFIGS == plain
     assert frozenset(WorkflowSettings().available_retriever_configs) == plain
     assert frozenset(VerdictSettings().available_retriever_configs) == plain
     assert RetrievalSettings().search_service_endpoint is None
     assert RetrievalSettings().chat_deployment is None
-    assert available_rows(search_service=True, reranker=False) == with_search
-    assert available_rows(search_service=False, reranker=True) == with_reranker
-    assert available_rows(search_service=True, reranker=True) == everywhere
+    assert answered(search_service=True, chat=False) == with_search
+    assert answered(search_service=False, chat=True) == with_chat
+    assert answered(search_service=True, chat=True) == everywhere
     assert RUNNABLE_RETRIEVER_CONFIGS == everywhere == BUILT_ROWS
-    assert RUNNABLE_RETRIEVER_CONFIGS - SEARCH_SERVICE_RETRIEVER_CONFIGS == (
-        with_reranker
+    assert RUNNABLE_RETRIEVER_CONFIGS - SEARCH_SERVICE_RETRIEVER_CONFIGS == with_chat
+    assert RUNNABLE_RETRIEVER_CONFIGS - CHAT_DEPLOYMENT_RETRIEVER_CONFIGS == (
+        with_search
     )
-    assert RUNNABLE_RETRIEVER_CONFIGS - RERANKER_RETRIEVER_CONFIGS == with_search
-    # Every caller of a search waits longer than a search with `r4` may take.
-    slowest = RetrievalSettings().search_rerank_deadline_seconds
+    assert RERANKER_RETRIEVER_CONFIGS == {RetrieverConfig.R4}
+    # On the row whose retrieval plans its own queries the agent's loop is off.
+    assert SERVICE_PLANNED_RETRIEVER_CONFIGS == {RetrieverConfig.R6}
+    # Every caller of a search waits longer than a search with `r4` or
+    # with `r6` may take.
+    slowest = max(
+        RetrievalSettings().search_rerank_deadline_seconds,
+        RetrievalSettings().search_agentic_deadline_seconds,
+    )
     assert VerdictSettings().upstream_timeout_seconds > slowest
     assert WebSettings().service_timeout_seconds > slowest
     assert RunnerSettings().request_timeout_seconds > slowest
@@ -104,7 +121,7 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
 
     # The deploy gives `retrieval` the search service's endpoint and the
     # chat deployment, and both `workflow` and `verdict` the one list, with
-    # `r4` and `r5` in it.
+    # `r4`, `r5` and `r6` in it.
     app_stack = REPOSITORY_ROOT / "infra/demo/app"
     (deployed,) = re.findall(
         r"^available_retriever_configs\s*=\s*(\[[^\]]*\])",
@@ -134,24 +151,32 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
     ):
         (listed,) = re.findall(rf"{variable}: '(.*)'", local)
         assert rows_in(listed) == {row.value for row in everywhere}
-    # Both set `r4`'s deadline as a value of their own, and neither sets
-    # `verdict`'s wait for one search: each stays under that wait, and the
-    # deploy's own validation says the same limit.
-    (local_deadline,) = re.findall(
-        r'RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS: "([\d.]+)"', local
-    )
-    (deployed_deadline,) = re.findall(
-        r"^search_rerank_deadline_seconds\s*=\s*([\d.]+)",
-        (app_stack / "terraform.tfvars").read_text(),
-        re.MULTILINE,
-    )
+    # Both set the deadlines of `r4` and of `r6` as values of their own,
+    # and neither sets `verdict`'s wait for one search: each stays under
+    # that wait, and the deploy's own validation says the same limit.
     verdict_waits = VerdictSettings().upstream_timeout_seconds
     assert "VERDICT_UPSTREAM_TIMEOUT_SECONDS" not in local + given
-    assert float(local_deadline) < verdict_waits
-    assert float(deployed_deadline) < verdict_waits
-    assert (
-        f"var.search_rerank_deadline_seconds < {verdict_waits:g}"
-        in (app_stack / "variables.tf").read_text()
-    )
+    for row_deadline in ("rerank", "agentic"):
+        (local_deadline,) = re.findall(
+            rf'RETRIEVAL_SEARCH_{row_deadline.upper()}_DEADLINE_SECONDS: "([\d.]+)"',
+            local,
+        )
+        (deployed_deadline,) = re.findall(
+            rf"^search_{row_deadline}_deadline_seconds\s*=\s*([\d.]+)",
+            (app_stack / "terraform.tfvars").read_text(),
+            re.MULTILINE,
+        )
+        assert float(local_deadline) < verdict_waits
+        assert float(deployed_deadline) < verdict_waits
+        assert (
+            f"var.search_{row_deadline}_deadline_seconds < {verdict_waits:g}"
+            in (app_stack / "variables.tf").read_text()
+        )
+    # Story 3.8: the search service's own identity may call the Foundry
+    # deployments it plans and embeds with, and no key is given for them.
+    assert "search_foundry_user" in given
+    assert "local.foundation.search_principal_id" in given
+    assert '"RETRIEVAL_SEARCH_AGENTIC_API_VERSION"' in given
+    assert "RETRIEVAL_SEARCH_AGENTIC_API_VERSION:" in local
     # The stand-in for the search service is a dev tool like the others.
     assert [mode.value for mode in SearchMode] == ["ok", "unavailable", "slow"]

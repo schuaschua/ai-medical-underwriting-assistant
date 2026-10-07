@@ -221,6 +221,47 @@ class RankedDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class RetrievedReference:
+    """AD-11, row `r6`: one reference of a knowledge base's answer, in the service's order.
+
+    The index's document behind it, as the service gave it back: the same
+    fields a hybrid query answers.
+    """
+
+    chunk_id: str
+    rule_ids: tuple[str, ...]
+    text: str
+    manual_page: int
+    impairment: str
+    # The semantic ranker's score, 0 to 4, where the service gave one: a
+    # reference whose source was not reranked carries none.
+    reranker_score: float | None
+    embedding_deployment: str
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class Retrieval:
+    """What a knowledge base answered one retrieve request with. No synthesised answer is among it."""
+
+    references: tuple[RetrievedReference, ...]
+    # What the service says it did, for the log: how many queries of its
+    # own it ran on the index, and the tokens its planning model took.
+    subqueries: int = 0
+    planning_input_tokens: int = 0
+    planning_output_tokens: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeBaseReport:
+    """What the job found of row `r6`'s knowledge source and knowledge base, for its log line."""
+
+    # Whether the job had to create each.
+    source_created: bool
+    base_created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class IndexLoadReport:
     """Counts of one load of the search service's index, for its log line."""
 

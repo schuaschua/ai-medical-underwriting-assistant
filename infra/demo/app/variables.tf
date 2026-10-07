@@ -299,6 +299,86 @@ variable "search_rerank_deadline_seconds" {
   }
 }
 
+variable "search_agentic_api_version" {
+  description = "Row r6 (spine AD-11): the preview REST API version of Azure AI Search that retrieval calls for the knowledge source, the knowledge base and its retrieve requests, and for nothing else. The stable version has no model query planning."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}-preview$", var.search_agentic_api_version))
+    error_message = "search_agentic_api_version must be a preview version, such as 2026-08-01-preview."
+  }
+}
+
+variable "search_knowledge_source_name" {
+  description = "Row r6: the name of the knowledge source over the index of the manual's smart chunks. The ingestion job creates it if it is missing."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,126}[a-z0-9])$", var.search_knowledge_source_name))
+    error_message = "search_knowledge_source_name must be lower-case letters, digits and dashes."
+  }
+}
+
+variable "search_knowledge_base_name" {
+  description = "Row r6: the name of the knowledge base on that knowledge source, which a search with r6 asks. The ingestion job creates it if it is missing."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,126}[a-z0-9])$", var.search_knowledge_base_name))
+    error_message = "search_knowledge_base_name must be lower-case letters, digits and dashes."
+  }
+}
+
+variable "search_agentic_reasoning_effort" {
+  description = "Row r6: how much the search service's model plans for one retrieve request. Not minimal: that plans nothing, and the row would be r5 under another name."
+  type        = string
+
+  validation {
+    condition     = contains(["low", "medium"], var.search_agentic_reasoning_effort)
+    error_message = "search_agentic_reasoning_effort must be low or medium."
+  }
+}
+
+variable "search_agentic_chat_model_name" {
+  description = "Row r6: the model behind the chat deployment, as the knowledge base is told it. Keep it the model of the foundation stack's chat deployment."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.search_agentic_chat_model_name)) > 0
+    error_message = "search_agentic_chat_model_name must name a model."
+  }
+}
+
+variable "search_agentic_embedding_model_name" {
+  description = "Row r6: the model behind the embedding deployment, as the index's vectorizer is told it. Keep it the model of the foundation stack's embedding deployment."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.search_agentic_embedding_model_name)) > 0
+    error_message = "search_agentic_embedding_model_name must name a model."
+  }
+}
+
+variable "search_agentic_timeout_seconds" {
+  description = "Row r6: how long the one retrieve request of a search may take, in seconds. It is not sent again when it took too long. Not longer than search_agentic_deadline_seconds."
+  type        = number
+
+  validation {
+    condition     = var.search_agentic_timeout_seconds > 0
+    error_message = "search_agentic_timeout_seconds must be above 0."
+  }
+}
+
+variable "search_agentic_deadline_seconds" {
+  description = "Row r6: the deadline over one whole search with that row, the search service's own model calls included, in seconds, in place of search_deadline_seconds. When it passes the search is answered upstream_unavailable. Keep it under the callers' timeouts for a search: verdict's 25 s (VERDICT_UPSTREAM_TIMEOUT_SECONDS), web's 30 s and the bake-off runner's 30 s."
+  type        = number
+
+  validation {
+    condition     = var.search_agentic_deadline_seconds >= var.search_agentic_timeout_seconds && var.search_agentic_deadline_seconds < 25
+    error_message = "search_agentic_deadline_seconds must not be shorter than search_agentic_timeout_seconds, and must stay under 25, verdict's timeout for one search."
+  }
+}
+
 variable "ingest_deadline_seconds" {
   description = "The ingestion job's own deadline: after this long it ends itself with `stage_timeout` and leaves the index as it was. The one transaction that stores a finished run is not cut off by it."
   type        = number
@@ -315,7 +395,7 @@ variable "ingest_timeout_seconds" {
 
   validation {
     condition     = var.ingest_timeout_seconds == floor(var.ingest_timeout_seconds) && var.ingest_timeout_seconds >= var.ingest_deadline_seconds + 480
-    error_message = "ingest_timeout_seconds must be a whole number at least 480 above ingest_deadline_seconds: the job's own deadline, then 300 for the search index load and room for storing the result."
+    error_message = "ingest_timeout_seconds must be a whole number at least 480 above ingest_deadline_seconds: the job's own deadline, then 300 for the search index load, 60 for the knowledge base and room for storing the result."
   }
 }
 
@@ -330,12 +410,12 @@ variable "gate_threshold" {
 }
 
 variable "available_retriever_configs" {
-  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r4 belongs here because retrieval is given the chat deployment, its reranker, and row r5 because it is given the search service's endpoint."
+  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r4 belongs here because retrieval is given the chat deployment, its reranker, row r5 because it is given the search service's endpoint, and row r6 because it is given both."
   type        = list(string)
 
   validation {
-    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3", "r4", "r5"], row)])
-    error_message = "available_retriever_configs must name at least one of the rows that are built (r1, r2, r3, r4, r5), each once. Add a row here when retrieval and verdict can answer it."
+    condition     = length(var.available_retriever_configs) >= 1 && length(distinct(var.available_retriever_configs)) == length(var.available_retriever_configs) && alltrue([for row in var.available_retriever_configs : contains(["r1", "r2", "r3", "r4", "r5", "r6"], row)])
+    error_message = "available_retriever_configs must name at least one of the six rows of the ladder (r1 to r6), each once."
   }
 }
 

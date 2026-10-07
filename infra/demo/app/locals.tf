@@ -126,6 +126,23 @@ locals {
     { name = "RETRIEVAL_SEARCH_SERVICE_ENTRA_AUTH", value = "true" },
     { name = "RETRIEVAL_SEARCH_SERVICE_INDEX_NAME", value = var.search_index_name },
     { name = "RETRIEVAL_SEARCH_SERVICE_API_VERSION", value = var.search_api_version },
+    # Spine AD-11, row r6: agentic retrieval. The job has the search service
+    # hold a knowledge source over that index and a knowledge base on it,
+    # which plans with the chat deployment named above; the service sends
+    # it one retrieve request per search, on the preview REST version these
+    # calls alone use. The search service reaches both deployments with its
+    # own identity (azurerm_role_assignment.search_foundry_user) and is told
+    # the models behind them. With the endpoint and the chat deployment set,
+    # r6 belongs in var.available_retriever_configs. The row has a deadline
+    # of its own.
+    { name = "RETRIEVAL_SEARCH_AGENTIC_API_VERSION", value = var.search_agentic_api_version },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_SOURCE_NAME", value = var.search_knowledge_source_name },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_BASE_NAME", value = var.search_knowledge_base_name },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_REASONING_EFFORT", value = var.search_agentic_reasoning_effort },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_CHAT_MODEL_NAME", value = var.search_agentic_chat_model_name },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_EMBEDDING_MODEL_NAME", value = var.search_agentic_embedding_model_name },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_TIMEOUT_SECONDS", value = tostring(var.search_agentic_timeout_seconds) },
+    { name = "RETRIEVAL_SEARCH_AGENTIC_DEADLINE_SECONDS", value = tostring(var.search_agentic_deadline_seconds) },
     # The job's own deadline: under the platform's limit on one execution
     # (var.ingest_timeout_seconds), so that the job ends itself and says why.
     { name = "RETRIEVAL_INGEST_DEADLINE_SECONDS", value = tostring(var.ingest_deadline_seconds) },

@@ -1,4 +1,4 @@
-"""Stories 2.5, 2.6 and 3.2: a synthetic case run to a suggested verdict with cited reasons, compared with the rule table.
+"""Stories 2.5, 2.6, 3.2, 3.3 and 3.8: a synthetic case run to a suggested verdict with cited reasons, compared with the rule table.
 
 `workflow`, `intake`, `classification`, `extraction`, `retrieval` and
 `verdict` as they really run, against a real PostgreSQL, the Durable Task
@@ -45,9 +45,11 @@ from contracts.enums import (
 )
 from contracts.models.verdict import SUGGESTION_LABEL, VerdictRun
 from contracts.models.workflow import AuditTrail, CaseProgress
+from contracts.query import build_fact_query
 from retrieval.domain.chunker import definition_in
 from synthdata.foundry_standin import LOCAL_DEPLOYMENT, FoundryStandIn, Mode
 from synthdata.search_standin import SearchStandIn
+from synthdata.verdict_standin import composing_of
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -446,8 +448,9 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
 ) -> None:
     # Story 3.3: `r5` is available here, because `retrieval` is given a
     # search service (the stand-in, its index loaded from the stored
-    # chunks) and `workflow` and `verdict` are told of the row.
-    rows = ["r1", "r2", "r3", "r5"]
+    # chunks) and `workflow` and `verdict` are told of the row. Story 3.8:
+    # so is `r6`, whose knowledge base the job made over that index.
+    rows = ["r1", "r2", "r3", "r5", "r6"]
     search_service = SearchStandIn()
     verdict.retrieval.search = search_service
     verdict.retrieval.load_index()
@@ -471,11 +474,11 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
     assert progress.case_status.value == "completed"
     listed = verdict.runs(case_id)
     runs = {run.retriever_config.value: run for run in listed.verdict_runs}
-    assert sorted(runs) == rows and len(listed.verdict_runs) == 4
+    assert sorted(runs) == rows and len(listed.verdict_runs) == 5
     assert all(run.status is StageStatus.DONE for run in runs.values())
     actions = [event.action.value for event in trail.events]
-    assert actions[-5:] == [*["verdict.suggested"] * 4, "case.completed"]
-    assert {event.ref for event in trail.events[-5:-1]} == {
+    assert actions[-6:] == [*["verdict.suggested"] * 5, "case.completed"]
+    assert {event.ref for event in trail.events[-6:-1]} == {
         run.verdict_run_id for run in runs.values()
     }
     # Story 3.3: the run keyed on the case and `r5` searched the search
@@ -490,7 +493,8 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
     assert runs["r5"].verdict is not None
 
     # Every row judged the same extracted facts.
-    case_facts = {fact.fact_id for fact in extraction.facts(case_id).facts}
+    extracted = extraction.facts(case_id).facts
+    case_facts = {fact.fact_id for fact in extracted}
     steps = {row: verdict.steps(run.verdict_run_id).steps for row, run in runs.items()}
     for row in rows:
         assert steps[row][0].tool is ToolName.LIST_FACTS
@@ -498,9 +502,68 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
             step.fact_id for step in steps[row] if step.tool is ToolName.SEARCH_RULES
         }
         assert searched and searched <= case_facts
-        assert searched == {
-            step.fact_id for step in steps["r3"] if step.tool is ToolName.SEARCH_RULES
-        }
+        # The agent picks the facts it searches for, the same on every row
+        # it runs on. On `r6` it picks nothing: every fact is searched for.
+        assert (
+            searched == case_facts
+            if row == "r6"
+            else searched
+            == {
+                step.fact_id
+                for step in steps["r3"]
+                if step.tool is ToolName.SEARCH_RULES
+            }
+        )
+
+    # Story 3.8, row `r6`: the agent's own search loop is off. The steps
+    # are the facts listed and one search per fact, in the facts' order,
+    # each with the query the one query builder makes of the statement,
+    # and each is one retrieve request to the knowledge base. No rule is
+    # read and nothing else is searched.
+    assert [
+        (step.tool, step.fact_id, step.arguments.get("query"), step.outcome)
+        for step in steps["r6"][1:]
+    ] == [
+        (
+            ToolName.SEARCH_RULES,
+            fact.fact_id,
+            build_fact_query(fact.statement),
+            StepOutcome.DONE,
+        )
+        for fact in extracted
+    ]
+    assert [
+        sent["messages"][0]["content"][0]["text"] for sent in search_service.retrievals
+    ] == [build_fact_query(fact.statement) for fact in extracted]
+    # Then the model was asked once, with no tool to search or read with,
+    # and composed its proposal from the facts and what those searches
+    # returned.
+    (composing,) = [body for body in verdict.model.requests if composing_of(body)]
+    assert not composing.get("tools")
+    material = json.loads(composing["messages"][-1]["content"])
+    assert [fact["fact_id"] for fact in material["facts"]] == [
+        fact.fact_id for fact in extracted
+    ]
+    returned = {
+        rule_id: rule["text"]
+        for search in material["searches"]
+        for rule in search["rules"]
+        for rule_id in rule["rule_ids"]
+    }
+    assert {rule_id for step in steps["r6"] for rule_id in step.rule_ids} == set(
+        returned
+    )
+    # What is stored of it passed the same checks as on every row: each
+    # reason cites a rule a search of the run returned, with the effect
+    # the rule table gives that rule. Which rules those are depends on the
+    # stand-in's ranking; a verdict, or a referral.
+    r6 = runs["r6"]
+    assert r6.verdict is not None
+    for reason in r6.reasons:
+        assert reason.rule_id in returned
+        rule = rule_table()[reason.rule_id]
+        assert (reason.effect is ReasonEffect.DECLINE) == bool(rule["decline"])
+        assert (reason.debit_pct or 0) == (rule["debit_pct"] or 0)
 
     # `r2` is `r3` with the vector search alone, over the same `smart`
     # chunks: the verdict the rule table gives the case.

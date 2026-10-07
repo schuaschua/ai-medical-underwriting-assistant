@@ -349,7 +349,7 @@ class LocalRetrieval:
     `search` is the stand-in for Azure AI Search (story 3.3). While it is
     None the job and the service are told of no search service, as before
     row `r5` was built; a test that sets it gets the index loaded by the
-    job and row `r5` answered by the service.
+    job and rows `r5` and `r6` answered by the service.
     """
 
     settings: RetrievalSettings
@@ -389,20 +389,23 @@ class LocalRetrieval:
         )
 
     def load_index(self) -> None:
-        """Run the job's last step alone: load the search stand-in's index from the stored chunks."""
+        """Run the job's last steps alone: load the search stand-in's index from the stored chunks, then have it hold row `r6`'s knowledge base over that index."""
         settings = self._settings({})
 
-        async def load() -> object:
+        async def load() -> tuple[object, object]:
             database = build_retrieval_database(settings)
             try:
-                return await ingest_job.load_index(
+                loaded = await ingest_job.load_index(
                     settings, SqlChunkRepository(database), self._search_transport()
                 )
             finally:
                 await database.dispose()
+            return loaded, await ingest_job.make_knowledge_base(
+                settings, self._search_transport()
+            )
 
-        loaded = asyncio.run(load())
-        assert not isinstance(loaded, Exception), loaded
+        for outcome in asyncio.run(load()):
+            assert not isinstance(outcome, Exception), outcome
 
     def chunks(self) -> dict[str, dict[str, Any]]:
         """Every stored chunk, by `chunk_id`."""

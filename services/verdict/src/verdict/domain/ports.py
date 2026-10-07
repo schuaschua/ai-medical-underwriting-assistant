@@ -62,6 +62,16 @@ class VerdictAgent(Protocol):
         """
         ...
 
+    async def compose(self, toolbox: "Toolbox", material: str) -> AgentAnswer:
+        """AD-15, row `r6`: ask the model once, with no tool, for its proposal from `material`.
+
+        `material` is the case's facts and the rules the run's own searches
+        returned (`domain/compose.py`). The answer is not looked at here.
+        `toolbox` names the run for the log; none of its tools is offered.
+        Raises `ModelUnavailable` and `ModelCallFailed` as `run` does.
+        """
+        ...
+
 
 class FactReader(Protocol):
     """The read of `extraction` (AD-3): the case's facts, each with its checked quote."""

@@ -8,6 +8,16 @@ keeps only the reasons whose rule and facts the run saw and whose effect the
 rule's text bears out (AD-15; `domain/decide.py`). Whatever the prompt says,
 or a fact or a rule's text says to the model, cannot change that.
 
+`compose_verdict.md` is the instructions for row `r6`, where the model has
+no tool: it is given the facts and the rules the run's own searches
+returned, and composes the same answer from them. It decides as little:
+the same domain code checks its answer. Its evaluation set is the same
+cases too, run with row `r6`: the cross-service tests in `packages/` and
+the bake-off runner's whole-path test run it against the model stand-in
+today, and the deployed bake-off run scores it against the real model and
+the real search service. Until that run a change to it, or to the model, is
+checked by hand in the final Azure test session, like the other prompt.
+
 `azure.md` rule 27 asks for a scenario evaluation set beside each prompt,
 that checks tool-call accuracy, to be run before the prompt or the model
 changes. For this prompt that set is the synthetic cases with the rules each
@@ -23,6 +33,7 @@ from functools import lru_cache
 from importlib import resources
 
 SUGGEST_VERDICT = "suggest_verdict.md"
+COMPOSE_VERDICT = "compose_verdict.md"
 
 
 @lru_cache(maxsize=8)

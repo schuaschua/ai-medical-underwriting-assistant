@@ -16,7 +16,14 @@ with the fields of the chunk record. The vector field has the dimensions of
 the one embedding deployment and is searched exhaustively: the service
 compares the query with every document, as pgvector does (AD-12), and
 approximates nothing. One semantic configuration names the fields the
-ranker reads.
+ranker reads. Where the job names the embedding deployment to it, the vector
+field also has a vectorizer: the search service then embeds a query text
+itself, with that deployment and its own identity. Row `r5` never uses it
+(a search sends its own vector); the knowledge base of row `r6` needs it
+for the vector side of the queries it plans (`adapters/knowledge_base.py`).
+
+`SearchServiceClient` is what every call to the service goes through, for
+the index here and for the knowledge base there.
 
 Nothing the service answers with is logged except statuses and codes, and
 neither a query nor a document's text ever is (security rule 31).
@@ -26,7 +33,8 @@ import asyncio
 import logging
 import math
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx2
@@ -59,12 +67,14 @@ VECTOR_FIELD = "embedding"
 HASH_FIELD = "document_hash"
 VECTOR_ALGORITHM = "exact"
 VECTOR_PROFILE = "exact-cosine"
+VECTORIZER = "embedding-deployment"
 SEMANTIC_CONFIGURATION = "rules"
 # English, with stemming: what the chunk table's full-text column uses too.
 TEXT_ANALYZER = "en.lucene"
-# What a query asks back of each document: every field of the common
-# result shape, and the deployment its vector was made with.
-_ANSWERED_FIELDS = (
+# What a query asks back of each document, and a reference of row `r6`'s
+# knowledge base carries: every field of the common result shape, the
+# deployment its vector was made with and the stored record's hash.
+ANSWERED_FIELDS = (
     KEY_FIELD,
     "rule_ids",
     "text",
@@ -94,8 +104,38 @@ def plain_query_text(query: str) -> str:
     return _LEADING_DASH.sub(r"\1\\-", _OPERATORS.sub(r"\\\1", query))
 
 
-def index_definition(name: str) -> dict[str, Any]:
-    """The index of the `smart` chunk records, as the service is asked to create it."""
+@dataclass(frozen=True, slots=True)
+class ModelConnection:
+    """A deployment on the Foundry account, as the search service is told to reach it.
+
+    No key and no identity is named: the service then signs in with its
+    own identity, which holds Cognitive Services User on the account
+    (azure.md, "Runtime roles").
+    """
+
+    resource_uri: str
+    deployment: str
+    # The model behind the deployment, which the service asks for.
+    model_name: str
+
+    def parameters(self) -> dict[str, str]:
+        """The connection as the service's REST API names it."""
+        return {
+            "resourceUri": self.resource_uri,
+            "deploymentId": self.deployment,
+            "modelName": self.model_name,
+        }
+
+
+def index_definition(
+    name: str, vectorizer: ModelConnection | None = None
+) -> dict[str, Any]:
+    """The index of the `smart` chunk records, as the service is asked to create it.
+
+    With `vectorizer`, the embedding deployment the chunks' vectors were
+    made with, the service can embed a query text for the vector field
+    itself (row `r6`).
+    """
 
     def text(field: str, **more: Any) -> dict[str, Any]:
         return {"name": field, "type": "Edm.String", "searchable": False, **more}
@@ -145,7 +185,26 @@ def index_definition(name: str) -> dict[str, Any]:
                     "exhaustiveKnnParameters": {"metric": "cosine"},
                 }
             ],
-            "profiles": [{"name": VECTOR_PROFILE, "algorithm": VECTOR_ALGORITHM}],
+            "profiles": [
+                {
+                    "name": VECTOR_PROFILE,
+                    "algorithm": VECTOR_ALGORITHM,
+                    **({"vectorizer": VECTORIZER} if vectorizer is not None else {}),
+                }
+            ],
+            **(
+                {
+                    "vectorizers": [
+                        {
+                            "name": VECTORIZER,
+                            "kind": "azureOpenAI",
+                            "azureOpenAIParameters": vectorizer.parameters(),
+                        }
+                    ]
+                }
+                if vectorizer is not None
+                else {}
+            ),
         },
         "semantic": {
             "configurations": [
@@ -231,14 +290,17 @@ def _retry_after_seconds(response: httpx2.Response) -> float | None:
     return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
-class SearchIndex:
-    """The one index of the `smart` chunks on the search service."""
+class SearchServiceClient:
+    """Calls to the search service over REST: the token, the retries, a span per call.
+
+    One REST version per client: the index is called on the stable one,
+    the knowledge base of row `r6` on the preview one.
+    """
 
     def __init__(
         self,
         http: httpx2.AsyncClient,
         *,
-        index_name: str,
         api_version: str,
         max_retries: int = 3,
         retry_seconds: float = 1.0,
@@ -246,8 +308,6 @@ class SearchIndex:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._http = http
-        self._index = f"/indexes/{index_name}"
-        self._name = index_name
         self._parameters = {"api-version": api_version}
         self._max_retries = max_retries
         self._retry_seconds = retry_seconds
@@ -279,12 +339,18 @@ class SearchIndex:
         body: dict[str, Any] | None = None,
         *,
         accepted: frozenset[int] = frozenset({200}),
+        once: bool = False,
+        headers: Mapping[str, str] | None = None,
     ) -> httpx2.Response:
         """Make one call, again when the service could not answer just now; its answer.
 
-        Every call here may be repeated: a create, an upload and a delete
-        each end in the same index when they are sent twice. A status
-        outside `accepted` ends the call with its code.
+        A read, a create, an upload and a delete may each be repeated: sent
+        twice they end in the same state. A call that may not be (`once`: a
+        retrieve of row `r6`, whose planning is paid for every time and
+        whose search has no time for a second) is sent a single time,
+        whatever the service answered or did not. A status outside
+        `accepted` ends the call with its code. `headers` are sent beside
+        the token.
         """
         with adapter_span(tracer, f"retrieval.search_service.{call}") as span:
             for attempt in range(1, self._max_retries + 2):
@@ -296,7 +362,7 @@ class SearchIndex:
                         path,
                         params=self._parameters,
                         json=body,
-                        headers=await self._headers(),
+                        headers={**(headers or {}), **await self._headers()},
                     )
                 except httpx2.HTTPError as error:
                     # security rule 31: the type only.
@@ -312,7 +378,7 @@ class SearchIndex:
                     attempt,
                     code,
                 )
-                if attempt > self._max_retries:
+                if attempt > self._max_retries or once:
                     raise SearchServiceUnavailable(code)
                 asked = _retry_after_seconds(answered) if answered is not None else None
                 await self._sleep(
@@ -331,7 +397,11 @@ class SearchIndex:
         self, call: str, path: str, body: dict[str, Any]
     ) -> dict[str, Any]:
         """A POST's JSON answer, which must be an object."""
-        response = await self._send(call, "POST", path, body)
+        return self._object(call, await self._send(call, "POST", path, body))
+
+    @staticmethod
+    def _object(call: str, response: httpx2.Response) -> dict[str, Any]:
+        """An answer's JSON, which must be an object."""
         try:
             answer = response.json()
         except ValueError:
@@ -340,13 +410,44 @@ class SearchIndex:
             raise SearchServiceUnavailable(f"search_{call}_not_an_object")
         return answer
 
+
+class SearchIndex(SearchServiceClient):
+    """The one index of the `smart` chunks on the search service."""
+
+    def __init__(
+        self,
+        http: httpx2.AsyncClient,
+        *,
+        index_name: str,
+        api_version: str,
+        max_retries: int = 3,
+        retry_seconds: float = 1.0,
+        token: EntraToken | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        vectorizer: ModelConnection | None = None,
+    ) -> None:
+        super().__init__(
+            http,
+            api_version=api_version,
+            max_retries=max_retries,
+            retry_seconds=retry_seconds,
+            token=token,
+            sleep=sleep,
+        )
+        self._index = f"/indexes/{index_name}"
+        self._name = index_name
+        # Only the job, which creates the index, names it one.
+        self._vectorizer = vectorizer
+
     # --- The job's side -------------------------------------------------------------
 
     async def ensure(self) -> bool:
         """Create the index if the service has none of its name; whether it was created.
 
         An index that is there is left as it is: its definition is not
-        compared, and a changed one is a new index name.
+        compared, and a changed one is a new index name. That holds for the
+        vectorizer too: an index made without one has to be made again
+        under a new name before row `r6` searches it by vector.
         """
         found = await self._send(
             "read_index", "GET", self._index, accepted=frozenset({200, 404})
@@ -357,7 +458,7 @@ class SearchIndex:
             "create_index",
             "PUT",
             self._index,
-            index_definition(self._name),
+            index_definition(self._name, self._vectorizer),
             accepted=frozenset({200, 201, 204}),
         )
         logger.info("search index created: index=%s", self._name)
@@ -488,7 +589,7 @@ class SearchIndex:
                         "exhaustive": True,
                     }
                 ],
-                "select": ",".join(_ANSWERED_FIELDS),
+                "select": ",".join(ANSWERED_FIELDS),
                 "top": top,
             },
         )

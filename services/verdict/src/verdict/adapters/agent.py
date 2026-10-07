@@ -18,6 +18,10 @@ model's final answer. Everything that matters is held outside it:
 
 The framework decides nothing that is stored: its final text goes to the
 domain, which parses it (`domain/decide.py`).
+
+On row `r6` there is no conversation to run (`compose`): the run has made
+its searches itself, and the model is asked once, through the same gateway,
+with another prompt, the same answer schema and no tool at all.
 """
 
 import json
@@ -41,11 +45,11 @@ from pydantic import BaseModel
 from contracts.enums import ReasonEffect, SystemReason, ToolName, Verdict
 from contracts.models.retrieval import MAX_QUERY_CHARS
 from contracts.rules import RULE_ID_PATTERN
-from verdict.adapters.model import ModelGateway
+from verdict.adapters.model import ModelGateway, finish_reason_of, usage_of
 from verdict.domain.entities import AgentAnswer
 from verdict.domain.ports import AgentFailed, ModelCallFailed, ModelUnavailable
 from verdict.domain.toolbox import StepLimitReached, Toolbox
-from verdict.prompts import SUGGEST_VERDICT, load_prompt
+from verdict.prompts import COMPOSE_VERDICT, SUGGEST_VERDICT, load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +346,7 @@ class FrameworkVerdictAgent:
     """The verdict agent: Microsoft Agent Framework on the gateway's client."""
 
     def __init__(self, gateway: ModelGateway, *, step_limit: int) -> None:
+        self._gateway = gateway
         self._deployment = gateway.deployment
         self._chat: OpenAIChatCompletionClient[Any] = OpenAIChatCompletionClient(
             model=gateway.deployment,
@@ -358,6 +363,46 @@ class FrameworkVerdictAgent:
             },
         )
         self._instructions = load_prompt(SUGGEST_VERDICT)
+        self._compose_instructions = load_prompt(COMPOSE_VERDICT)
+
+    async def compose(self, toolbox: Toolbox, material: str) -> AgentAnswer:
+        """Row `r6`: one chat completion with no tool; the model's proposal from what the run searched.
+
+        AD-16: through the gateway, like every call of the model. The
+        request names no tool, so the model can neither search nor read:
+        the search service has planned and run this row's queries already.
+        """
+        started = time.monotonic()
+        completion = await self._gateway.complete(
+            {
+                "messages": [
+                    {"role": "system", "content": self._compose_instructions},
+                    # Data, never instructions: the facts and the rules found.
+                    {"role": "user", "content": material},
+                ],
+                "response_format": RESPONSE_FORMAT,
+            }
+        )
+        try:
+            text = completion.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            text = None
+        input_tokens, output_tokens = usage_of(completion)
+        finish_reason = finish_reason_of(completion)
+        # Ids, counts and timings: what the call cost, never what was said.
+        logger.info(
+            "agent composed: case_id=%s verdict_run_id=%s deployment=%s steps=%d "
+            "input_tokens=%d output_tokens=%d finish_reason=%s duration_ms=%d",
+            toolbox.case_id,
+            toolbox.verdict_run_id,
+            self._deployment,
+            toolbox.state.steps,
+            input_tokens,
+            output_tokens,
+            finish_reason,
+            int((time.monotonic() - started) * 1000),
+        )
+        return AgentAnswer(text if isinstance(text, str) else "", finish_reason)
 
     async def run(self, toolbox: Toolbox) -> AgentAnswer | None:
         """One run of the agent with the tools of `toolbox`; its final answer, or None at the step limit."""

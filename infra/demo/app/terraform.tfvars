@@ -53,12 +53,12 @@ redaction_categories = [
 # extraction, non-medical at it or more back to the customer, anything under
 # it to triage. Only workflow is given it.
 gate_threshold = 0.90
-# The retrieval ladder rows built so far (spine AD-11): the two baselines,
-# the hybrid row, r4 with a reranker, which retrieval answers because it is
-# given the chat deployment, and r5 on Azure AI Search, which it answers
-# because it is given the search service's endpoint. A new row is added
-# here when retrieval and verdict can answer it.
-available_retriever_configs = ["r1", "r2", "r3", "r4", "r5"]
+# The retrieval ladder (spine AD-11), all six rows: the two baselines, the
+# hybrid row, r4 with a reranker, which retrieval answers because it is
+# given the chat deployment, r5 on Azure AI Search, which it answers because
+# it is given the search service's endpoint, and r6, agentic retrieval on
+# that service, which it answers because it is given both.
+available_retriever_configs = ["r1", "r2", "r3", "r4", "r5", "r6"]
 
 # Classification (spine AD-13): the LLM classifier's confidence is the share
 # of this many runs that agree. Whether the runs differ at all on the real
@@ -99,6 +99,25 @@ layout_api_version = "2024-11-30"
 # (deferred-work.md).
 search_index_name  = "manual-smart"
 search_api_version = "2024-07-01"
+# Row r6 (spine AD-11): agentic retrieval. The knowledge source over that
+# index and the knowledge base on it, which the ingestion job creates, on
+# the preview REST version these calls alone use. The search service plans
+# with the chat deployment and embeds its queries with the embedding
+# deployment: the two names below are the models of the foundation stack's
+# deployments (its terraform.tfvars), which the service must be told. One
+# retrieve request of up to 15 s, and a search with r6 has 20 s in all,
+# which every caller of a search outlasts (verdict 25 s, web 30 s, the
+# bake-off runner 30 s). Unverified: the version, the request shapes and
+# the time a retrieve takes wait for the final Azure test session
+# (deferred-work.md).
+search_agentic_api_version          = "2026-08-01-preview"
+search_knowledge_source_name        = "manual-smart-source"
+search_knowledge_base_name          = "manual-smart-base"
+search_agentic_reasoning_effort     = "low"
+search_agentic_chat_model_name      = "gpt-5.4"
+search_agentic_embedding_model_name = "text-embedding-3-large"
+search_agentic_timeout_seconds      = 15
+search_agentic_deadline_seconds     = 20
 # The job makes one chat call per rule (about a hundred) on the deployment the
 # other services share: lower this if its token rate limit is hit.
 retrieval_model_max_concurrent_calls = 5
@@ -129,7 +148,8 @@ search_rerank_deadline_seconds      = 20
 search_rerank_max_completion_tokens = 4000
 # The job's own deadline, and the platform's limit on one run of it, which
 # must be the longer by eight minutes or more: five for the search index
-# load that follows (its own deadline) and room for storing the result.
+# load that follows (its own deadline), one for the knowledge base of row
+# r6 after it, and room for storing the result.
 ingest_deadline_seconds = 1800
 ingest_timeout_seconds  = 2400
 

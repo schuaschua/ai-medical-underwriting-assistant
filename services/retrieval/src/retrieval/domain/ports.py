@@ -11,8 +11,10 @@ from retrieval.domain.entities import (
     IndexedChunk,
     IndexHoldings,
     IngestRun,
+    KnowledgeBaseReport,
     ParsedLayout,
     RankedDocument,
+    Retrieval,
     StoredChunk,
 )
 
@@ -231,6 +233,22 @@ class SearchServiceUnavailable(Exception):
         self.reason = reason
 
 
+class KnowledgeBaseMissing(Exception):
+    """The search service holds no knowledge base of the configured name: the job has not made it."""
+
+
+class KnowledgeBaseUnusable(Exception):
+    """What the search service holds is not what row `r6` needs. `reason` is a short code.
+
+    A knowledge source or knowledge base that is there and reads something
+    else than the settings name, or an index without a vectorizer.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class RuleSearchService(Protocol):
     """AD-11, row `r5`: the search service's index of the `smart` chunks, as a search asks it."""
 
@@ -244,6 +262,34 @@ class RuleSearchService(Protocol):
         service's semantic ranker; each document carries that ranker's
         score. Raises `SearchServiceUnavailable`, also when the service
         answers without the ranker's scores: there is no partial answer.
+        """
+        ...
+
+
+class AgenticRetriever(Protocol):
+    """AD-11, row `r6`: the search service's knowledge base over the index of the `smart` chunks."""
+
+    async def retrieve(self, query: str, top: int) -> Retrieval:
+        """The references the knowledge base returns for a query, at most `top`, in its order.
+
+        The service plans and runs its own queries on the index with its
+        own model. No answer is asked of it, only the documents it found.
+        Raises `SearchServiceUnavailable`, also for an answer that is only
+        partly there, and `KnowledgeBaseMissing` when the service holds no
+        such knowledge base.
+        """
+        ...
+
+
+class KnowledgeBaseStore(Protocol):
+    """The knowledge source and knowledge base of row `r6`, as the ingestion job makes them."""
+
+    async def ensure(self) -> KnowledgeBaseReport:
+        """Create the knowledge source and the knowledge base where the service has none of that name.
+
+        One that is there must be what would be created, and the index
+        must name a vectorizer: `KnowledgeBaseUnusable` otherwise. Raises
+        `SearchServiceUnavailable`.
         """
         ...
 

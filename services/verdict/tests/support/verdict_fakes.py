@@ -375,7 +375,8 @@ class StubAgent:
 
     `script` is the agent's whole run. It gets the toolbox, as the real
     agent's adapter does, and returns the final answer's text, or None for
-    no answer.
+    no answer. On row `r6` the agent is not run: it is asked once to
+    compose, is given `composes` for an answer, and keeps what it was shown.
     """
 
     script: Script | None = None
@@ -386,6 +387,15 @@ class StubAgent:
     # What each tool call answered the agent, in order.
     answers: list[dict[str, object]] = field(default_factory=list)
     started: asyncio.Event = field(default_factory=asyncio.Event)
+    composes: str = ""
+    # What each composing call was given: the run's material, as text.
+    materials: list[str] = field(default_factory=list)
+
+    async def compose(self, toolbox: Toolbox, material: str) -> AgentAnswer:
+        self.materials.append(material)
+        if self.error is not None:
+            raise self.error
+        return AgentAnswer(self.composes, self.finish_reason)
 
     async def run(self, toolbox: Toolbox) -> AgentAnswer | None:
         self.runs += 1

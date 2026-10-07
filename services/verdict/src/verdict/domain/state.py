@@ -19,7 +19,8 @@ class RunState:
     # The facts `list_facts` answered in this run, by id.
     facts_listed: dict[str, Fact] = field(default_factory=dict)
     # Each rule's text as the run saw it: the chunk a search returned, or
-    # the text a read answered, which replaces it.
+    # the text a read answered, which replaces it. On row `r6` the first
+    # chunk a search returned for the rule, which stands as read.
     rule_texts: dict[str, str] = field(default_factory=dict)
     impairments: dict[str, str] = field(default_factory=dict)
     returned_by_search: set[str] = field(default_factory=set)
@@ -39,8 +40,13 @@ class RunState:
         for fact in facts:
             self.facts_listed[fact.fact_id] = fact
 
-    def found(self, items: Iterable[SearchItem]) -> list[str]:
-        """Note the rules a search returned; answer their ids, in rank order, once each."""
+    def found(self, items: Iterable[SearchItem], *, as_read: bool = False) -> list[str]:
+        """Note the rules a search returned; answer their ids, in rank order, once each.
+
+        With `as_read` (row `r6`, where the run makes no rule read) a rule
+        counts as read by the search that returned its chunk, and that
+        chunk's text is what an effect is checked against.
+        """
         rule_ids: list[str] = []
         for item in items:
             for rule_id in item.rule_ids:
@@ -48,6 +54,8 @@ class RunState:
                 # A text the run read stands; a search does not replace it.
                 if rule_id not in self.read:
                     self.rule_texts[rule_id] = item.text
+                if as_read:
+                    self.read.add(rule_id)
                 self.impairments[rule_id] = item.impairment
                 if rule_id not in rule_ids:
                     rule_ids.append(rule_id)

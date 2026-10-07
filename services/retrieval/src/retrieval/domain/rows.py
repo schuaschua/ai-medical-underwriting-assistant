@@ -9,7 +9,9 @@ A row on Azure AI Search (`r5`) is built and still not available everywhere:
 it needs a search service, and a service that was told of none refuses it
 the same way, while the pgvector rows answer as before. So is the row with
 a reranker (`r4`): its reranker is the chat deployment, and a service that
-was told of none refuses the row.
+was told of none refuses the row. The agentic row (`r6`) asks a knowledge
+base on the search service, which plans its queries with the chat
+deployment: it needs both the search service and that deployment.
 """
 
 from collections.abc import Mapping
@@ -57,6 +59,11 @@ class RetrieverRow:
         """Whether the row's order is a reranker's: it then needs the chat deployment."""
         return self.method is SearchMethod.HYBRID_RERANKED
 
+    @property
+    def needs_knowledge_base(self) -> bool:
+        """Whether the row asks the search service's knowledge base, which plans with the chat deployment."""
+        return self.method is SearchMethod.AI_SEARCH_AGENTIC
+
 
 _ROWS = (
     RetrieverRow(RetrieverConfig.R1, ChunkSet.FIXED, SearchMethod.VECTOR, built=True),
@@ -68,25 +75,31 @@ _ROWS = (
     RetrieverRow(
         RetrieverConfig.R5, ChunkSet.SMART, SearchMethod.AI_SEARCH_HYBRID, built=True
     ),
-    RetrieverRow(RetrieverConfig.R6, ChunkSet.SMART, SearchMethod.AI_SEARCH_AGENTIC),
+    RetrieverRow(
+        RetrieverConfig.R6, ChunkSet.SMART, SearchMethod.AI_SEARCH_AGENTIC, built=True
+    ),
 )
 ROWS: Mapping[RetrieverConfig, RetrieverRow] = MappingProxyType(
     {row.config: row for row in _ROWS}
 )
-# AD-11: the rows this build can search with, a search service and a
-# reranker given.
+# AD-11: the rows this build can search with, a search service, a reranker
+# and a knowledge base given.
 BUILT_ROWS: frozenset[RetrieverConfig] = frozenset(
     row.config for row in _ROWS if row.built
 )
 
 
-def available_rows(search_service: bool, reranker: bool) -> frozenset[RetrieverConfig]:
+def available_rows(
+    search_service: bool, reranker: bool, knowledge_base: bool = False
+) -> frozenset[RetrieverConfig]:
     """The rows a service answers: the built ones, less those that need what it was not given.
 
-    That is a search service (`r5`) and a reranker (`r4`). `workflow` and
-    `verdict` each name the rows a case may run with, as a setting; a test
-    outside `services/` holds the three lists equal, with and without each
-    of the two.
+    That is a search service (`r5`, `r6`), a reranker (`r4`) and a
+    knowledge base (`r6`), which a service has only where it was given the
+    search service and the chat deployment. `workflow` and `verdict` each
+    name the rows a case may run with, as a setting; a test outside
+    `services/` holds the three lists equal, with and without the search
+    service and the chat deployment.
     """
     return frozenset(
         row.config
@@ -94,6 +107,7 @@ def available_rows(search_service: bool, reranker: bool) -> frozenset[RetrieverC
         if row.built
         and (search_service or not row.needs_search_service)
         and (reranker or not row.needs_reranker)
+        and (knowledge_base or not row.needs_knowledge_base)
     )
 
 
@@ -117,16 +131,21 @@ CHUNK_SET_NOT_INGESTED_MESSAGE = (
 
 
 def row_to_search(
-    config: RetrieverConfig, search_service: bool = False, reranker: bool = False
+    config: RetrieverConfig,
+    search_service: bool = False,
+    reranker: bool = False,
+    knowledge_base: bool = False,
 ) -> RetrieverRow:
     """The row a search runs with; `retriever_not_available` when this service does not answer it.
 
-    That is a row that is not built yet, a row on Azure AI Search when the
-    service has no search endpoint (`search_service` false), and the row
-    with a reranker when it has no chat deployment (`reranker` false).
+    That is a row that is not built, a row on Azure AI Search when the
+    service has no search endpoint (`search_service` false), the row with
+    a reranker when it has no chat deployment (`reranker` false), and the
+    agentic row when it has no knowledge base to ask (`knowledge_base`
+    false).
     """
     row = ROWS[config]
-    available = available_rows(search_service, reranker)
+    available = available_rows(search_service, reranker, knowledge_base)
     if row.config not in available:
         raise DomainError(
             ErrorCode.RETRIEVER_NOT_AVAILABLE, row_not_available_message(available)
@@ -138,8 +157,8 @@ def chunk_set_to_read(config: RetrieverConfig | None) -> ChunkSet:
     """The chunk set a rule is read from: the row's, or `smart` when no row is named.
 
     A rule read needs the row's chunks, not its search: every row answers,
-    built or not, and the ingestion writes both chunk sets. For `r5` that
-    is the `smart` chunk the chunk table holds, which the search service's
-    index holds a copy of.
+    built or not, and the ingestion writes both chunk sets. For `r5` and
+    `r6` that is the `smart` chunk the chunk table holds, which the search
+    service's index holds a copy of.
     """
     return ChunkSet.SMART if config is None else ROWS[config].chunk_set

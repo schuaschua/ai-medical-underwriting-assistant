@@ -15,6 +15,7 @@ from retrieval.adapters.http.middleware import (
 )
 from retrieval.adapters.http.routes import Dependencies, build_router
 from retrieval.adapters.index import SqlChunkIndex
+from retrieval.adapters.knowledge_base import KnowledgeBase
 from retrieval.adapters.migrations import bundled_head
 from retrieval.adapters.model import (
     ModelGateway,
@@ -110,6 +111,29 @@ def build_search_service(
     )
 
 
+def build_knowledge_base(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> KnowledgeBase | None:
+    """The knowledge base a search with row `r6` asks; None when the row cannot run here.
+
+    It needs the search endpoint and the chat deployment the knowledge
+    base plans with, which the ingestion job made it with. The one retrieve
+    call has that row's own budget and is never sent again.
+    """
+    if settings.search_service_endpoint is None or settings.chat_deployment is None:
+        return None
+    return KnowledgeBase(
+        build_search_http(settings, transport, settings.search_agentic_timeout_seconds),
+        index_name=settings.search_service_index_name,
+        source_name=settings.search_agentic_knowledge_source_name,
+        base_name=settings.search_agentic_knowledge_base_name,
+        # AD-11: the preview version, for row `r6` alone.
+        api_version=settings.search_agentic_api_version,
+        reasoning_effort=settings.search_agentic_reasoning_effort,
+        token=search_token_for(settings),
+    )
+
+
 def search_options(settings: Settings) -> SearchOptions:
     """What a search works with, as the settings say."""
     return SearchOptions(
@@ -118,6 +142,7 @@ def search_options(settings: Settings) -> SearchOptions:
         embedding_deployment=settings.embedding_deployment,
         rerank_depth=settings.search_rerank_depth,
         rerank_deadline_seconds=settings.search_rerank_deadline_seconds,
+        agentic_deadline_seconds=settings.search_agentic_deadline_seconds,
     )
 
 
@@ -134,7 +159,8 @@ def create_app(
     describe them. Building them opens no connection and calls no model. The
     service never reads the manual itself: only the ingestion job does.
     `model_transport` stands in for the model deployments in a test of
-    that wiring, and `search_transport` for the search service.
+    that wiring, and `search_transport` for the search service, its
+    knowledge base included.
     """
     if settings is None:
         settings = get_settings()
@@ -143,16 +169,34 @@ def create_app(
     database = None
     gateway: ModelGateway | None = None
     search_service: SearchIndex | None = None
+    knowledge_base: KnowledgeBase | None = None
     if dependencies is None:
         database = build_database(settings)
         gateway = build_query_gateway(settings, model_transport)
         search_service = build_search_service(settings, search_transport)
+        knowledge_base = build_knowledge_base(settings, search_transport)
         if search_service is None:
             # Said once, here: row `r5` is then refused as not available,
             # and the pgvector rows answer as before.
             logger.info(
                 "row r5 is off: not configured: "
                 "missing=RETRIEVAL_SEARCH_SERVICE_ENDPOINT"
+            )
+        if knowledge_base is None:
+            # Said once, here: row `r6` is then refused as not available.
+            logger.info(
+                "row r6 is off: not configured: missing=%s",
+                ",".join(
+                    name
+                    for name, value in (
+                        (
+                            "RETRIEVAL_SEARCH_SERVICE_ENDPOINT",
+                            settings.search_service_endpoint,
+                        ),
+                        ("RETRIEVAL_CHAT_DEPLOYMENT", settings.chat_deployment),
+                    )
+                    if value is None
+                ),
             )
         model: QueryEmbedder = gateway if gateway is not None else NoEmbeddingModel()
         # AD-11, row `r4`: the gateway is the reranker where it was given
@@ -188,6 +232,7 @@ def create_app(
                 index=SqlChunkIndex(database),
                 search_service=search_service,
                 reranker=reranker,
+                knowledge_base=knowledge_base,
             ),
             schema_revision=SqlSchemaRevision(database),
             head_revision=bundled_head(),
@@ -209,8 +254,12 @@ def create_app(
                     if search_service is not None:
                         await search_service.aclose()
                 finally:
-                    if database is not None:
-                        await database.dispose()
+                    try:
+                        if knowledge_base is not None:
+                            await knowledge_base.aclose()
+                    finally:
+                        if database is not None:
+                            await database.dispose()
 
     app = FastAPI(
         title=APP_ID, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan

@@ -90,8 +90,8 @@ One command starts everything:
 It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
 containers (`compose.yaml`), applies the database migrations, builds the SPA, starts a stand-in for
 Azure AI Language, one for the Foundry model deployments, one for Document Intelligence's layout
-model and one for Azure AI Search (see below), ingests the underwriting manual and loads the search
-stand-in's index from it, and runs the `web`, `intake`, `workflow`,
+model and one for Azure AI Search (see below), ingests the underwriting manual, loads the search
+stand-in's index from it and has it hold a knowledge base over that index, and runs the `web`, `intake`, `workflow`,
 `classification`, `extraction`, `retrieval` and `verdict` services, each with its Dapr sidecar (`dapr.yaml`; each later service
 is added to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
@@ -625,8 +625,8 @@ curl -s http://localhost:8004/rules/UW-DM-003
 `POST /searches` is the one search operation for every row of the retrieval ladder: a query, a
 `retriever_config` and `top_k` (default 5, at most 50) in; `retriever_config`, `latency_ms` (the time
 `retrieval` spent, the embedding call included) and ranked items out, each with `chunk_id`, `rule_ids`,
-`rank`, `score`, `text`, `manual_page` and `impairment`. Rows `r1`, `r2`, `r3` and `r5` are built (the
-two baselines and `r5` are below). The steps of `r3`, each a function of its own in
+`rank`, `score`, `text`, `manual_page` and `impairment`. All six rows are built (the two baselines,
+`r5`, `r4` and `r6` are below). The steps of `r3`, each a function of its own in
 `services/retrieval/src/retrieval/`:
 
 1. The query is embedded once, exactly as it was asked, through the model gateway on the one embedding
@@ -667,14 +667,14 @@ curl -s 'http://localhost:8004/rules/UW-DM-003?retriever_config=r1'
 ```
 
 A case may be started with any of the available rows, or with all of them
-(`"retriever_configs": ["r1", "r2", "r3", "r4", "r5"]` in the start request): it gets one verdict run per row on
+(`"retriever_configs": ["r1", "r2", "r3", "r4", "r5", "r6"]` in the start request): it gets one verdict run per row on
 the same extracted facts and completes when each has its `verdict.suggested` event. The rows a case
 may run with are named in three places, which a test outside `services/` holds equal without any
 container (`packages/synthdata/tests/test_foundry_standin.py`): `retrieval`'s row table
-(`domain/rows.py`, `available_rows`: the built rows, less `r5` when the service has no search
-endpoint and less `r4` when it has no chat deployment), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
+(`domain/rows.py`, `available_rows`: the built rows, less `r5` and `r6` when the service has no search
+endpoint and less `r4` and `r6` when it has no chat deployment), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
 `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS`. Both settings default to `r1`, `r2` and `r3`; `dapr.yaml`
-and the deploy (the one list of `infra/demo/app/terraform.tfvars`) add `r4` and `r5`, because there
+and the deploy (the one list of `infra/demo/app/terraform.tfvars`) add `r4`, `r5` and `r6`, because there
 `retrieval` is given the chat deployment and a search service. A verdict run on `r1` reads its rules from the `fixed`
 set. A reason's effect is then read from that rule's own definition inside the chunk, from its
 marker to the end of its paragraph; a definition the chunk cuts off before its rating bears out no
@@ -720,11 +720,11 @@ can say what a managed search service does with them. The store is the one thing
   five plain calls of the stable API.
 
 Locally Azure AI Search is a stand-in, `uv run python -m synthdata.search_standin` (port 5103,
-started by `./tools/dev.sh`): the REST routes the client calls, with its indexes in memory, so the
-job loads it again at every start. It answers a hybrid query from the vectors and from shared words,
+started by `./tools/dev.sh`): the REST routes the client calls, with its indexes and its knowledge
+base in memory, so the job loads it again at every start. It answers a hybrid query from the vectors and from shared words,
 fused by rank and then ordered by a made-up "reranker score" from 0 to 4; it is not a search engine
 and not a language model. `SEARCH_STANDIN_MODE=unavailable ./tools/dev.sh` and `=slow` show a search
-with `r5` failing. It is part of the dev-only package: no service image holds it, and `retrieval`
+with `r5` or `r6` failing. It is part of the dev-only package: no service image holds it, and `retrieval`
 refuses a plain-HTTP search endpoint that is not on loopback.
 
 ```sh
@@ -778,9 +778,80 @@ curl -s -X POST http://localhost:8004/searches -H 'content-type: application/jso
 Locally the reranker is the model stand-in, which counts shared words: `r4`'s figures on a local
 scoreboard prove the plumbing and say nothing of reranking.
 
-There is no query rewriting by a model and no cache. Row `r6` is named
-in the one table (`domain/rows.py`) and refused with `retriever_not_available` (409) until its story
-builds it; a
+**Row `r6` with agentic retrieval (story 3.8).** The managed pipeline of Azure AI Search itself, over
+the index `r5` already uses, so that the comparison can say what the service's own query planning
+does against the same need.
+
+- *The knowledge base.* A knowledge source names the index `manual-smart`, and a knowledge base names
+  that source and the chat deployment as its planning model, with no answer synthesis
+  (`adapters/knowledge_base.py`). The ingestion job creates both after the index is loaded and
+  checked, each only where the service has none of that name: `knowledge base done: source=...
+  base=... source_created=yes base_created=yes`, and `no` twice on every later run. One that is
+  there is compared with what would be created (the source's index; the base's source and its
+  planning model): a difference fails the step (`reason=search_knowledge_source_differs`,
+  `search_knowledge_base_differs`), so that a leftover from another index name is never asked
+  unnoticed. A failure has its own line (`knowledge base failed: code=... reason=search_...`), ends
+  the job with 1 and leaves pgvector and the index as they are. Nothing is chunked or embedded again: the same documents and
+  the same vectors as `r5`.
+- *The vectorizer.* The index definition now names the embedding deployment as the vectorizer of
+  its vector field, so that the search service can embed the queries it plans; `r5` never uses it.
+  An index is created once and not changed afterwards: over one that names no vectorizer the
+  knowledge base is not made (`reason=search_index_without_vectorizer`), and the index must be
+  made again under a new name, with new names for the knowledge source and base (none exists in
+  Azure).
+- *The search* sends the query exactly as it was asked in one retrieve request and takes the
+  references that return: the documents the service found, in its order. The service's model plans
+  queries of its own, the service runs them and reranks. No answer is asked for (`outputMode:
+  extractiveData`) and a `response` in the answer is never read. `retrieval` embeds nothing for
+  this row.
+- *The items.* Of two references to one chunk (two of the service's queries found it) the first
+  is kept. A reference whose chunk pgvector does not hold, or holds with another content hash,
+  is left out and counted, as for `r5`. The search's log line says which score rule the answer
+  used (`score_rule=reranker` or `rank`). `rank` is the service's order. `score`, by one rule for a
+  whole answer: where every reference kept carries the semantic ranker's score, that score divided
+  by 4, as for `r5`; where one of them carries none, one over the item's rank for all of them (the
+  service says a reference may come without a score).
+- *Its own budget.* The retrieve request has 15 seconds (`RETRIEVAL_SEARCH_AGENTIC_TIMEOUT_SECONDS`)
+  and is never sent again, whatever became of it: the planning is paid for every time. A search
+  with `r6` has 20 in all (`RETRIEVAL_SEARCH_AGENTIC_DEADLINE_SECONDS`), under every caller's wait,
+  as for `r4`. The service down, slow, or answering something that is not a whole list of
+  references of the index: `upstream_unavailable` (502) and no partial answer. A service that
+  holds no such knowledge base (the job has not run) answers `retriever_not_available` (409), as
+  a chunk set that was never ingested does.
+- *Only these calls use the preview REST version* (`RETRIEVAL_SEARCH_AGENTIC_API_VERSION`, default
+  `2026-08-01-preview`); the index and `r5` stay on the stable one. The calls are REST over `httpx2`
+  like the index's. The pre-release SDK the spine pins for this row, `azure-search-documents`
+  12.1.0b2, installs, and its models are where the request shapes were read from; but its async
+  client sends through azure-core's own `aiohttp` transport, takes neither the `httpx2` transport
+  the tests stand a service in with nor a plain-HTTP loopback endpoint with its bearer policy, and
+  brings its own retries and HTTP logging. So it is not a dependency.
+- *Who calls the model.* The search service does, with its own identity: the `app` stack gives that
+  identity Cognitive Services User on the Foundry account, and no key is named anywhere.
+- *Availability.* `r6` needs the search endpoint and the chat deployment
+  (`RETRIEVAL_CHAT_DEPLOYMENT`); without either it is refused with `retriever_not_available` (409)
+  and the other rows work as before.
+- *A verdict run on `r6`* does not run the agent's loop: a model that could search again on top of
+  the service's own planning would be a second agent, and the row would measure both. `verdict`
+  lists the facts and makes one search per fact itself, with the query the contracts' query builder
+  makes from the fact's statement, each logged as a step like a tool call; then the model is asked
+  once, with another prompt (`prompts/compose_verdict.md`) and no tool, to compose its proposal
+  from the facts and the rules those searches returned. Every check on a proposal is the same as on
+  the other rows; a rule counts as read when a search of the run returned its chunk, and an effect
+  is checked against that text. A case with more facts than the run has steps left is referred as
+  at the step limit as soon as the facts are listed, before any search is paid for. A search that
+  fails ends the run as on every row, and a search the toolbox refuses fails it (`stage_failed`):
+  nothing is composed over a search that was not made.
+
+Locally the knowledge base is the search stand-in's: its "plan" is the query and each of its parts
+between commas, colons and semicolons, each run as a hybrid query over the index. It is no model:
+`r6`'s figures on a local scoreboard prove the plumbing only.
+
+```sh
+curl -s -X POST http://localhost:8004/searches -H 'content-type: application/json' \
+  -d '{"query": "Type 2 diabetes mellitus: HbA1c from 8.0 to below 9.0 %", "retriever_config": "r6"}'
+```
+
+On rows `r1` to `r5` there is no query rewriting by a model, and no row has a cache. A
 `retriever_config` that is no row at all is `validation_failed` (422), as are a blank query and a
 `top_k` outside 1 to 50 or a query over 2,000 characters. A search has a short budget of its own,
 apart from the ingestion job's model settings: 3 seconds for the query's embedding call

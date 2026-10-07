@@ -1,10 +1,10 @@
-"""Stories 3.4 and 3.7: one bake-off run over synthetic cases, against the system as it really runs.
+"""Stories 3.4, 3.7 and 3.8: one bake-off run over synthetic cases, against the system as it really runs.
 
 `web`, `workflow`, `intake`, `classification`, `extraction`, `retrieval` and
 `verdict`, against a real PostgreSQL, the Durable Task Scheduler emulator and
 the blob emulator (`docker compose up --detach --wait`), with the stand-ins
-where Azure AI Language and the Foundry deployments would be, and a transport
-where the Dapr sidecars would be. The runner is given `web` and nothing else.
+where Azure AI Language, the Foundry deployments and Azure AI Search would be,
+and a transport where the Dapr sidecars would be. The runner is given `web` and nothing else.
 
 The figures are stand-in figures: the stand-in's vectors count shared words
 and its agent is scripted. The test proves the path, not the retrievers.
@@ -39,6 +39,7 @@ from contracts.models.web import (
 )
 from contracts.models.workflow import AuditTrail, CaseList, CaseProgress
 from synthdata.foundry_standin import Mode
+from synthdata.search_standin import SearchStandIn
 from workflow.settings import Settings as WorkflowSettings
 
 pytestmark = pytest.mark.integration
@@ -48,7 +49,9 @@ UNDERWRITER = {"X-Demo-Role": "underwriter"}
 CASES = ["case-001", "case-003"]
 # Story 3.7: `retrieval` is given the chat deployment here (the stand-in),
 # so it answers row `r4`, and `workflow` and `verdict` are told of the row.
-ROWS = ["r1", "r2", "r3", "r4"]
+# Story 3.8: it is given a search service as well (the stand-in, loaded by
+# the job's last steps), so it answers `r5` and `r6`: all six rows.
+ROWS = ["r1", "r2", "r3", "r4", "r5", "r6"]
 
 
 def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through_web_and_writes_both_files(
@@ -63,6 +66,8 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
     # The stand-in is unsure of laboratory reports: each case then has a
     # medical page in triage, and `case-003` a blank page for the customer.
     classification.model.mode = Mode.MIXED
+    verdict.retrieval.search = SearchStandIn()
+    verdict.retrieval.load_index()
     keys = {name: answer_key(name) for name in CASES}
     eval_run_id = new_id()
     settings = Settings(
@@ -126,17 +131,15 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
 
     board, redaction = result.retrieval, result.redaction
     rows = {row.retriever_config.value: row for row in board.rows}
-    # The rows that are available are measured, `r4` with its reranker
-    # among them; `r5` without a search service and `r6`, which is not
-    # built, are recorded as not measured.
-    assert [row.measured for row in board.rows] == [
-        True,
-        True,
-        True,
-        True,
-        False,
-        False,
-    ]
+    # The scoreboard shows all six rows, each measured: `r4` with its
+    # reranker, `r5` on the search service and `r6` through its knowledge
+    # base.
+    assert [row.retriever_config.value for row in board.rows] == ROWS
+    assert all(row.measured for row in board.rows)
+    assert rows["r6"].method == (
+        "Agentic retrieval (knowledge base with LLM query planning)"
+    )
+    assert (rows["r6"].store, rows["r6"].failed_runs) == ("Azure AI Search", 0)
     # The scoreboard names the reranker used.
     assert rows["r4"].method == "Hybrid, then an LLM reranker on the chat deployment"
     assert (rows["r4"].store, rows["r4"].chunk_set.value) == ("pgvector", "smart")
@@ -160,7 +163,7 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
     assert rows["r3"].right_runs == 2
     assert board.winner in set(ROWS)
 
-    # Each case was uploaded once, started with the four rows and the run's
+    # Each case was uploaded once, started with the six rows and the run's
     # id, and ran to its end with the waits answered from the page labels:
     # the laboratory report accepted, the blank page discarded.
     assert sorted(case_ids) == CASES

@@ -290,10 +290,10 @@ class ModelGateway:
                     if attempt <= self._max_retries:
                         await self._sleep(not_answered.wait_seconds)
                     continue
-                input_tokens, output_tokens = _usage_of(completion)
+                input_tokens, output_tokens = usage_of(completion)
                 span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
-                finish_reason = _finish_reason_of(completion)
+                finish_reason = finish_reason_of(completion)
                 span.set_attribute("gen_ai.response.finish_reason", finish_reason)
                 # Counts only: what the call cost, never what it said.
                 logger.info(
@@ -379,7 +379,7 @@ class _NotAnswered(Exception):
         self.wait_seconds = wait_seconds
 
 
-def _usage_of(completion: Any) -> tuple[int, int]:
+def usage_of(completion: Any) -> tuple[int, int]:
     """The prompt and completion token counts of an answer; 0 where it names none."""
     usage = getattr(completion, "usage", None)
     counts = (
@@ -393,7 +393,7 @@ def _usage_of(completion: Any) -> tuple[int, int]:
 _FINISH_REASON = re.compile(r"[a-z_]{1,32}")
 
 
-def _finish_reason_of(completion: Any) -> str:
+def finish_reason_of(completion: Any) -> str:
     """Why the model stopped, as a code: never the model's own text beyond a plain word."""
     try:
         reason = completion.choices[0].finish_reason

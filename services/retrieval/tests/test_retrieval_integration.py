@@ -761,6 +761,17 @@ def test_story_3_3_the_job_loads_the_search_index_from_the_stored_chunks_and_che
         "exhaustiveKnn"
     ]
     assert len(definition_sent["semantic"]["configurations"]) == 1
+    # Story 3.8: the vector field's profile names a vectorizer, the
+    # embedding deployment the vectors were made with, reached by the
+    # search service with its own identity: no key is named.
+    (vectorizer,) = definition_sent["vectorSearch"]["vectorizers"]
+    (profile,) = definition_sent["vectorSearch"]["profiles"]
+    assert profile["vectorizer"] == vectorizer["name"]
+    assert vectorizer["azureOpenAIParameters"] == {
+        "resourceUri": told.model_endpoint,
+        "deploymentId": EMBEDDING,
+        "modelName": EMBEDDING,
+    }
     # One document per `smart` chunk and none of the `fixed` set: the same
     # ids, text, context lines, rule ids, places and vectors as pgvector.
     stored = chunks(told)
@@ -768,21 +779,81 @@ def test_story_3_3_the_job_loads_the_search_index_from_the_stored_chunks_and_che
     assert len(service.documents) == 3 < len(stored)
     # Uploaded two at a time, after pgvector was written, with no model call
     # of its own: the three context lines are the `smart` run's.
+    # Story 3.8: then, the index loaded and checked, the knowledge source
+    # over it and the knowledge base on that are created, neither being
+    # there yet.
     assert [call for call in service.calls if call[0] != "list"] == [
         ("read_index", 0),
         ("create_index", 0),
         ("upload", 2),
         ("upload", 1),
+        # The index is looked at once more: it must name a vectorizer.
+        ("read_index", 0),
+        ("read_knowledge_source", 0),
+        ("create_knowledge_source", 0),
+        ("read_knowledge_base", 0),
+        ("create_knowledge_base", 0),
     ]
+    assert service.calls[-6][0] == "list"
     assert azure.chat_calls == 3
     assert (
         "index load done: documents=3 uploaded=3 removed=0 unchanged=0 created=yes "
         "index=manual-smart"
     ) in caplog.text
-    assert all(
-        request.url.params["api-version"] == "2024-07-01"
-        for request in service.requests
+    assert (
+        "knowledge base done: source=manual-smart-source base=manual-smart-base "
+        "source_created=yes base_created=yes"
+    ) in caplog.text
+    # The knowledge source reads the index row `r5` uses and hands back
+    # the fields of the common result shape; the knowledge base has that
+    # one source, plans with the chat deployment and writes no answer.
+    source_path = "/knowledgesources('manual-smart-source')"
+    base_path = "/knowledgebases('manual-smart-base')"
+    source = service.knowledge[source_path]
+    assert (source["kind"], source["searchIndexParameters"]["searchIndexName"]) == (
+        "searchIndex",
+        "manual-smart",
     )
+    assert {"name": "content_hash"} in source["searchIndexParameters"][
+        "sourceDataFields"
+    ]
+    assert service.knowledge[base_path] == {
+        "name": "manual-smart-base",
+        "description": "Agentic retrieval over the underwriting manual's rules.",
+        "knowledgeSources": [{"name": "manual-smart-source"}],
+        "models": [
+            {
+                "kind": "azureOpenAI",
+                "azureOpenAIParameters": {
+                    "resourceUri": told.model_endpoint,
+                    "deploymentId": CHAT,
+                    "modelName": CHAT,
+                },
+            }
+        ],
+        "retrievalReasoningEffort": {"kind": "low"},
+        "outputMode": "extractiveData",
+    }
+    created = [r for r in service.requests if r.method == "PUT"]
+    assert [r.headers.get("prefer") for r in created] == [
+        None,
+        "return=representation",
+        "return=representation",
+    ]
+    # The preview version for the knowledge base's calls alone, its one
+    # look at the index among them; the load stays on the stable one.
+    on_preview = [
+        (request.method, request.url.path)
+        for request in service.requests
+        if request.url.params["api-version"] == "2026-08-01-preview"
+    ]
+    assert len(on_preview) == 5 and on_preview[0] == ("GET", "/indexes/manual-smart")
+    assert all(path.startswith("/knowledge") for _, path in on_preview[1:])
+    assert {
+        request.url.params["api-version"]
+        for request in service.requests
+        if (request.method, request.url.path) not in on_preview[1:]
+    } == {"2024-07-01", "2026-08-01-preview"}
 
     # A second run: nothing changed, so nothing is uploaded; the two stores
     # are compared all the same.
@@ -793,6 +864,10 @@ def test_story_3_3_the_job_loads_the_search_index_from_the_stored_chunks_and_che
     assert service.count("upload") == 2 and service.count("delete") == 0
     assert service.count("list") > lists
     assert "uploaded=0 removed=0 unchanged=3 created=no" in caplog.text
+    # Both are there: neither is made anew.
+    assert service.count("create_knowledge_source") == 1
+    assert service.count("create_knowledge_base") == 1
+    assert "source_created=no base_created=no" in caplog.text
 
     # The manual changed: one rule's text is new and one rule is gone. The
     # changed document is replaced, the other one deleted, and the stores
@@ -805,8 +880,60 @@ def test_story_3_3_the_job_loads_the_search_index_from_the_stored_chunks_and_che
     assert held_by(service) == in_the_index(chunks(told))
     assert sorted(service.documents) == [f"smart-{RULE_A}", f"smart-{RULE_B}"]
     assert service.documents[f"smart-{RULE_A}"]["text"].endswith("A new band.")
-    assert service.calls[-4:-1] == [("list", 0), ("upload", 1), ("delete", 1)]
+    assert service.calls[-7:-4] == [("list", 0), ("upload", 1), ("delete", 1)]
     assert "uploaded=1 removed=1 unchanged=1 created=no" in caplog.text
+
+    # The knowledge base cannot be made: a line of its own, the job ends
+    # non-zero, and pgvector and the index stay as the load left them.
+    del service.knowledge[base_path]
+    service.refuses[base_path] = 403
+    before = chunks(told), dict(service.documents)
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        assert run_job(told, azure) == 1
+    assert "index load done: documents=2 uploaded=0" in caplog.text
+    assert (
+        "knowledge base failed: code=upstream_unavailable "
+        "reason=search_create_knowledge_base_status_403 source=manual-smart-source "
+        "base=manual-smart-base"
+    ) in caplog.text
+    assert (chunks(told), dict(service.documents)) == before
+    service.refuses.clear()
+    # One that is there and reads something else is not taken for the one
+    # wanted: a knowledge source left over from another index name, a
+    # knowledge base that plans with another deployment. Nor is the
+    # knowledge base made over an index that names no vectorizer. Each
+    # fails the step with a reason of its own.
+    assert run_job(told, azure) == 0
+    vectorizers = definition_sent["vectorSearch"].pop("vectorizers")
+    made = (
+        service.count("create_knowledge_source"),
+        service.count("create_knowledge_base"),
+    )
+    reasons = {}
+    for reason, changed in (
+        ("search_index_without_vectorizer", told),
+        (
+            "search_knowledge_source_differs",
+            told.model_copy(update={"search_service_index_name": "manual-renamed"}),
+        ),
+        (
+            "search_knowledge_base_differs",
+            told.model_copy(update={"chat_deployment": "another-chat"}),
+        ),
+    ):
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            reasons[reason] = run_job(changed, azure), caplog.text
+        definition_sent["vectorSearch"]["vectorizers"] = vectorizers
+    for reason, (status, logged) in reasons.items():
+        assert status == 1
+        assert f"knowledge base failed: code=stage_failed reason={reason} " in logged
+    # Nothing was made, or made again, meanwhile.
+    assert made == (
+        service.count("create_knowledge_source"),
+        service.count("create_knowledge_base"),
+    )
 
     # An index that does not hold what it was sent fails the run, with a
     # line of its own, and pgvector stays as it was written.
@@ -819,6 +946,9 @@ def test_story_3_3_the_job_loads_the_search_index_from_the_stored_chunks_and_che
     written = chunks(told)
     assert f"smart-{RULE_C}" in written and f"smart-{RULE_C}" not in service.documents
     assert caplog.text.count("ingestion done:") == 2
+    # Over an index that is not what pgvector holds, no knowledge base is made.
+    assert "knowledge base" not in caplog.text
+    assert service.calls[-1][0] == "list"
     assert (
         "index load failed: code=stage_failed reason=search_index_differs "
         "where=index=2,pgvector=3 index=manual-smart"

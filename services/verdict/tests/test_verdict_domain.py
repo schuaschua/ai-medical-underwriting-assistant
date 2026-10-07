@@ -1,4 +1,4 @@
-"""Stories 2.5, 2.6 and 3.2: a verdict run, the three tools and the rules that decide what is stored, on fakes.
+"""Stories 2.5, 2.6, 3.2 and 3.8: a verdict run, the three tools and the rules that decide what is stored, on fakes.
 
 Unit tests of the domain: no database, no other service and no model. The
 agent is a stub whose script names the tool calls it makes and the answer it
@@ -8,6 +8,7 @@ gives (coding-style rule 23).
 import asyncio
 import json
 import logging
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -46,7 +47,7 @@ from contracts.enums import (
     ToolName,
     Verdict,
 )
-from contracts.errors import ErrorCode
+from contracts.errors import DomainError, ErrorCode
 from contracts.ids import is_uuid7, new_id
 from contracts.models.extraction import Fact
 from contracts.models.retrieval import RuleText
@@ -302,7 +303,7 @@ def test_story_2_5_debits_of_cited_rules_give_loaded_with_their_sum(
     assert {config for _, config in rules.reads} == {RetrieverConfig.R3}
 
 
-def test_story_2_6_a_kept_decline_gives_decline_and_no_loading(
+def test_story_2_6_a_kept_decline_gives_decline_and_neither_a_debit_nor_a_decline_gives_standard(
     case_id: str,
     ports: RunPorts,
     facts: FakeFacts,
@@ -335,42 +336,35 @@ def test_story_2_6_a_kept_decline_gives_decline_and_no_loading(
         ReasonEffect.DECLINE,
     ]
 
-
-@pytest.mark.parametrize("proposes_no_debit_rule", [True])
-def test_story_2_6_no_debit_and_no_decline_give_standard(
-    case_id: str,
-    ports: RunPorts,
-    facts: FakeFacts,
-    rules: FakeRules,
-    repository: MemoryRepository,
-    options: RunOptions,
-    fixed_now: datetime,
-    proposes_no_debit_rule: bool,
-) -> None:
-    (only,) = case_facts(facts, case_id)
+    # Another case, whose one fact meets a rule without a debit.
+    other_case, stored = new_id(), MemoryRepository()
+    (only,) = case_facts(facts, other_case)
     rules.default = [PD_NONE]
-    proposed = (
-        # Called a debit of 0 by the agent: stored as effect `none`.
-        [reason(PD_NONE, only.fact_id, debit_pct=0)] if proposes_no_debit_rule else []
-    )
     agent = agent_that(
         LIST,
         search(only.fact_id),
-        answers=final_answer(*proposed, verdict="refer"),
+        # Called a debit of 0 by the agent: stored as effect `none`.
+        answers=final_answer(
+            reason(PD_NONE, only.fact_id, debit_pct=0), verdict="refer"
+        ),
+    )
+    standard = suggest(
+        other_case,
+        RunPorts(repository=stored, facts=facts, rules=rules, agent=agent),
+        options,
+        fixed_now,
     )
 
-    result = suggest(case_id, with_agent(ports, agent), options, fixed_now)
-
-    run = repository.stored_run()
-    assert result.verdict is Verdict.STANDARD
+    run = stored.stored_run()
+    assert standard.verdict is Verdict.STANDARD
     assert (run.verdict, run.loading_pct, run.system_reasons) == (
         Verdict.STANDARD,
         None,
         [],
     )
-    assert [(item.effect, item.debit_pct) for item in run.reasons] == (
-        [(ReasonEffect.NONE, None)] if proposes_no_debit_rule else []
-    )
+    assert [(item.effect, item.debit_pct) for item in run.reasons] == [
+        (ReasonEffect.NONE, None)
+    ]
 
 
 @pytest.mark.parametrize("unseen", ["rule", "fact"])
@@ -934,3 +928,167 @@ def test_story_2_5_a_debit_is_kept_only_on_a_rule_the_run_read_and_checked_again
     ]
     assert run.system_reasons == [SystemReason.NO_MATCHING_RULE]
     assert "rule_not_read:1" in caplog.text
+
+
+# --- row r6: the run searches, the model composes (story 3.8) --------------------
+
+
+def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_with_no_tool(
+    case_id: str,
+    facts: FakeFacts,
+    rules: FakeRules,
+    options: RunOptions,
+    fixed_now: datetime,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    on_r6 = replace(options, retriever_configs=frozenset(RetrieverConfig))
+    glucose, pressure, smoker = (
+        fact(case_id, f"SECRET-FACT  {name}\treading") for name in ("a", "b", "c")
+    )
+    facts.facts.extend([glucose, pressure, smoker])
+    # The queries are the contracts' query builder's: whitespace collapsed.
+    queries = [f"SECRET-FACT {name} reading" for name in ("a", "b", "c")]
+    rules.by_query = dict(zip(queries, [[DM_50, DM_25], [HT_50], []], strict=True))
+
+    def run_with(agent: StubAgent, **changes: Any) -> tuple[Any, MemoryRepository]:
+        stored = MemoryRepository()
+        ports = RunPorts(repository=stored, facts=facts, rules=rules, agent=agent)
+        of = replace(on_r6, **changes)
+        try:
+            return suggest(
+                case_id, ports, of, fixed_now, retriever_config=RetrieverConfig.R6
+            ), stored
+        except DomainError as error:
+            return error, stored
+
+    # The model cites two rules the searches returned, with their debits,
+    # and one no search returned.
+    agent = StubAgent(
+        composes=final_answer(
+            reason(DM_50, glucose.fact_id),
+            reason(HT_50, pressure.fact_id),
+            reason(TOB_25, smoker.fact_id, effect="none"),
+        )
+    )
+    with caplog.at_level(logging.INFO):
+        result, repository = run_with(agent)
+
+    # The steps: the facts listed, one search per fact with the query made
+    # from its statement, and no other search and no rule read.
+    assert [
+        (step.step_no, step.tool, step.fact_id, step.rule_ids, step.outcome)
+        for step in repository.steps
+    ] == [
+        (1, ToolName.LIST_FACTS, None, [], StepOutcome.DONE),
+        (2, ToolName.SEARCH_RULES, glucose.fact_id, [DM_50, DM_25], StepOutcome.DONE),
+        (3, ToolName.SEARCH_RULES, pressure.fact_id, [HT_50], StepOutcome.DONE),
+        (4, ToolName.SEARCH_RULES, smoker.fact_id, [], StepOutcome.DONE),
+    ]
+    assert [step.arguments.get("query") for step in repository.steps[1:]] == queries
+    assert rules.searches == [(query, RetrieverConfig.R6, 5) for query in queries]
+    assert rules.reads == []
+    # The agent's own loop was never run: the model was asked once, and
+    # given the facts and what each search returned.
+    assert (agent.runs, len(agent.materials)) == (0, 1)
+    material = json.loads(agent.materials[0])
+    assert [item["fact_id"] for item in material["facts"]] == [
+        glucose.fact_id,
+        pressure.fact_id,
+        smoker.fact_id,
+    ]
+    assert [
+        (item["fact_id"], [rule["rule_ids"] for rule in item["rules"]])
+        for item in material["searches"]
+    ] == [
+        (glucose.fact_id, [[DM_50], [DM_25]]),
+        (pressure.fact_id, [[HT_50]]),
+        (smoker.fact_id, []),
+    ]
+    assert material["searches"][0]["rules"][0]["text"] == rule_text(
+        DM_50, DIABETES, "a debit of +50 %", HT_50
+    )
+    # A rule a search returned counts as read, and its debit is checked
+    # against that chunk's text: both are kept. The reason on a rule no
+    # search returned is dropped, as on every row; it weighed nothing, so
+    # the two debits stand.
+    run = repository.stored_run()
+    assert result.retriever_config is RetrieverConfig.R6
+    assert (run.verdict, run.loading_pct, run.system_reasons) == (
+        Verdict.LOADED,
+        100,
+        [],
+    )
+    assert [(item.rule_id, item.debit_pct) for item in run.reasons] == [
+        (DM_50, 50),
+        (HT_50, 50),
+    ]
+    assert "reasons_dropped=1 dropped_by=rule_not_seen:1" in caplog.text
+    for secret in SECRETS:
+        assert secret not in caplog.text
+
+    # An effect the returned text does not say, and a debit on a rule no
+    # search returned: neither is kept, and the case is referred as the
+    # rules of story 2.6 say.
+    wrong = StubAgent(
+        composes=final_answer(
+            reason(DM_50, glucose.fact_id, debit_pct=75),
+            reason(TOB_25, smoker.fact_id, debit_pct=25),
+        )
+    )
+    referred, repository = run_with(wrong)
+    run = repository.stored_run()
+    assert (referred.verdict, run.reasons) == (Verdict.REFER, [])
+    assert run.system_reasons == [SystemReason.NO_MATCHING_RULE]
+
+    # More facts than the run has steps: referred as at the step limit,
+    # as soon as the facts are listed. No search is made and paid for,
+    # and the model is not asked.
+    stopped = StubAgent(composes=final_answer())
+    searched = len(rules.searches)
+    limited, repository = run_with(stopped, step_limit=3)
+    assert limited.verdict is Verdict.REFER
+    assert repository.stored_run().system_reasons == [SystemReason.STEP_LIMIT]
+    assert [
+        (step.tool, step.outcome, step.error_code) for step in repository.steps
+    ] == [
+        (ToolName.LIST_FACTS, StepOutcome.DONE, None),
+        (ToolName.SEARCH_RULES, StepOutcome.REFUSED, ErrorCode.STEP_LIMIT),
+    ]
+    assert stopped.materials == [] and len(rules.searches) == searched
+    # With a step for each search the run goes through.
+    assert run_with(StubAgent(composes=final_answer()), step_limit=4)[0].status is (
+        StageStatus.DONE
+    )
+
+    # A search the toolbox refuses (a statement longer than a query may
+    # be) was not made: the run fails there, and nothing is composed as if
+    # the manual held no rule for that fact.
+    facts.facts.append(fact(case_id, "SECRET-FACT " + "long " * 500))
+    unmade = StubAgent(composes=final_answer())
+    refused, repository = run_with(unmade)
+    del facts.facts[-1]
+    assert (refused.status, refused.error_code) == (
+        StageStatus.FAILED,
+        ErrorCode.STAGE_FAILED,
+    )
+    assert (repository.steps[-1].outcome, repository.steps[-1].error_code) == (
+        StepOutcome.REFUSED,
+        ErrorCode.VALIDATION_FAILED,
+    )
+    assert unmade.materials == []
+
+    # A search that fails ends the run as it does on the other rows: the
+    # step is logged as failed, nothing is composed, and the key row is
+    # given up for the command to be sent again.
+    rules.fail_search = True
+    unasked = StubAgent(composes=final_answer())
+    failed, repository = run_with(unasked)
+    assert isinstance(failed, DomainError)
+    assert failed.code is ErrorCode.UPSTREAM_UNAVAILABLE
+    assert [
+        (step.tool, step.outcome, step.error_code) for step in repository.steps
+    ] == [
+        (ToolName.LIST_FACTS, StepOutcome.DONE, None),
+        (ToolName.SEARCH_RULES, StepOutcome.FAILED, ErrorCode.UPSTREAM_UNAVAILABLE),
+    ]
+    assert (repository.rows, unasked.materials) == ({}, [])

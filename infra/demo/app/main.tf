@@ -328,10 +328,27 @@ resource "azurerm_role_assignment" "retrieval_search_index_data_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
+# Agentic retrieval (spine AD-11 and AD-16, row r6; azure.md, "Runtime
+# roles"). The search service itself calls the Foundry deployments: the chat
+# deployment plans the queries of a retrieve request, and the embedding
+# deployment is the index's vectorizer for the vector side of those queries.
+# It signs in with its own identity, which the foundation stack gives it;
+# there is no key. The role is the one Azure AI Search asks for, on the
+# account that holds both deployments. retrieval's own two roles above let
+# its job create the knowledge source and the knowledge base and its service
+# send the retrieve requests.
+resource "azurerm_role_assignment" "search_foundry_user" {
+  scope                = local.foundation.foundry_account_id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = local.foundation.search_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # As for intake: retrieval and its job wait for all of these, so the first
 # revision can pull its image and send telemetry, and the first run of the
-# job can read the manual, have it parsed, call the models and load the
-# search index.
+# job can read the manual, have it parsed, call the models, load the search
+# index and make the knowledge base, which the search service can then plan
+# with.
 resource "time_sleep" "retrieval_role_propagation" {
   create_duration = var.role_propagation_wait
 
@@ -343,6 +360,7 @@ resource "time_sleep" "retrieval_role_propagation" {
     manual_reader_id              = azurerm_role_assignment.retrieval_manual_reader.id
     search_service_contributor_id = azurerm_role_assignment.retrieval_search_service_contributor.id
     search_index_data_id          = azurerm_role_assignment.retrieval_search_index_data_contributor.id
+    search_foundry_user_id        = azurerm_role_assignment.search_foundry_user.id
   }
 }
 
@@ -671,7 +689,8 @@ module "workflow" {
         { name = "WORKFLOW_GATE_THRESHOLD", value = tostring(var.gate_threshold) },
         # Spine AD-11: the ladder rows a case may run with. `verdict` is
         # given the same list, and `retrieval` answers r5 because it is
-        # given the search service's endpoint (local.retrieval_env).
+        # given the search service's endpoint, and r6 because it is given
+        # that endpoint and the chat deployment (local.retrieval_env).
         { name = "WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS", value = jsonencode(var.available_retriever_configs) },
       ]
 

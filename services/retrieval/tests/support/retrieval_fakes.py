@@ -668,6 +668,12 @@ class FakeSearchService:
     It keeps one index in memory and speaks the REST routes the client
     calls. It ranks nothing: a query is answered with the documents a test
     names, in that order, each with the reranker score the test gives it.
+
+    Story 3.8: it also keeps knowledge sources and knowledge bases, by
+    their path, and answers a retrieve request with references to the
+    documents a test names (`ranked` again, all of them: it does not cut
+    them to the number asked for), an activity log, and a synthesised
+    "answer" that no caller may ever use.
     """
 
     definition: dict[str, Any] | None = None
@@ -681,6 +687,14 @@ class FakeSearchService:
     ranked: list[tuple[str, float | None]] = field(default_factory=list)
     # A query is not answered while the test runs.
     never_answers: bool = False
+    # A retrieve request gets no answer in its time; is answered with this
+    # status (404: no such knowledge base); is answered only after this
+    # long; or with an answer that is wrong in this way: `no_references`,
+    # `rule_ids_text` or `other_key`.
+    retrieve_times_out: bool = False
+    retrieve_status: int | None = None
+    retrieve_delay_seconds: float = 0.0
+    malformed: str | None = None
     # After a change, this many listings still answer what the index held
     # before it: the real service counts what it was sent a moment later.
     lag: int = 0
@@ -690,6 +704,14 @@ class FakeSearchService:
     # What it was asked, in order: the call, and how many documents it carried.
     calls: list[tuple[str, int]] = field(default_factory=list)
     queries: list[dict[str, Any]] = field(default_factory=list)
+    # Knowledge sources and knowledge bases as they were created, by path,
+    # and the paths whose creation is refused with this status.
+    knowledge: dict[str, dict[str, Any]] = field(default_factory=dict)
+    refuses: dict[str, int] = field(default_factory=dict)
+    # Every retrieve request's body; and a reference of another source
+    # than the index to add to each answer, if set.
+    retrievals: list[dict[str, Any]] = field(default_factory=list)
+    foreign_reference: dict[str, Any] | None = None
 
     def transport(self) -> httpx2.MockTransport:
         return httpx2.MockTransport(self.handle)
@@ -706,6 +728,8 @@ class FakeSearchService:
                 json={"error": {"code": "x", "message": "SECRET-SERVICE-MESSAGE"}},
             )
         path = request.url.path
+        if path.startswith("/knowledge"):
+            return await self._knowledge(request, path)
         if request.method == "GET":
             self.calls.append(("read_index", 0))
             if self.definition is None:
@@ -734,6 +758,85 @@ class FakeSearchService:
                 entry[RERANKER_SCORE] = score
             value.append({"@search.score": 0.03, **entry})
         return httpx2.Response(200, json={"value": value})
+
+    async def _knowledge(self, request: httpx2.Request, path: str) -> httpx2.Response:
+        """A knowledge source or a knowledge base: read, create, or a retrieve request."""
+        source = path.startswith("/knowledgesources")
+        what = "knowledge_source" if source else "knowledge_base"
+        if request.method == "GET":
+            self.calls.append((f"read_{what}", 0))
+            if path not in self.knowledge:
+                return httpx2.Response(404, json={"error": {"code": "NotFound"}})
+            return httpx2.Response(200, json=self.knowledge[path])
+        body = json.loads(request.content)
+        if request.method == "PUT":
+            self.calls.append((f"create_{what}", 0))
+            if path in self.refuses:
+                return httpx2.Response(
+                    self.refuses[path],
+                    json={"error": {"code": "x", "message": "SECRET-SERVICE-MESSAGE"}},
+                )
+            self.knowledge[path] = body
+            return httpx2.Response(201, json=body)
+        self.calls.append(("retrieve", 0))
+        self.retrievals.append(body)
+        if self.retrieve_times_out:
+            raise httpx2.ReadTimeout("SECRET", request=request)
+        if self.never_answers:
+            await asyncio.Event().wait()
+        if self.retrieve_status is not None:
+            return httpx2.Response(self.retrieve_status, json={"error": {"code": "x"}})
+        await asyncio.sleep(self.retrieve_delay_seconds)
+        references: list[dict[str, Any]] = []
+        for place, (chunk_id, score) in enumerate(self.ranked):
+            data = self.documents[chunk_id]
+            if self.malformed == "rule_ids_text":
+                data = {**data, "rule_ids": data["rule_ids"][0]}
+            reference = {
+                "type": "searchIndex",
+                "id": str(place),
+                "activitySource": 1,
+                "docKey": "smart-UW-OT-001"
+                if self.malformed == "other_key"
+                else chunk_id,
+                "sourceData": data,
+            }
+            if score is not None:
+                reference["rerankerScore"] = score
+            references.append(reference)
+        if self.foreign_reference is not None:
+            references.append(self.foreign_reference)
+        return httpx2.Response(
+            200,
+            json={
+                "response": [
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "SECRET-ANSWER"}],
+                    }
+                ],
+                "activity": [
+                    {
+                        "type": "modelQueryPlanning",
+                        "inputTokens": 120,
+                        "outputTokens": 30,
+                    },
+                    {
+                        "type": "searchIndex",
+                        "searchIndexArguments": {"search": "SECRET-SUBQUERY one"},
+                    },
+                    {
+                        "type": "searchIndex",
+                        "searchIndexArguments": {"search": "SECRET-SUBQUERY two"},
+                    },
+                ],
+                **(
+                    {}
+                    if self.malformed == "no_references"
+                    else {"references": references}
+                ),
+            },
+        )
 
     def _change(self, actions: list[dict[str, Any]]) -> httpx2.Response:
         deletes = [a for a in actions if a["@search.action"] == "delete"]

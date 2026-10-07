@@ -73,4 +73,4 @@ rows:
     effort:
       amount: "4"
       unit: stories built
-      source: "epics.md: stories 2.2, 2.3, 3.3 and 3.8 (agentic retrieval, not built yet)"
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (search operation), 3.3 (Azure AI Search index) and 3.8 (knowledge base and agentic retrieval)"

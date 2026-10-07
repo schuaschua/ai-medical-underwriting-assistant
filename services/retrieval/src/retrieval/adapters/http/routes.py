@@ -123,11 +123,15 @@ def build_router(dependencies: Dependencies) -> APIRouter:
                     span.set_attribute("retrieval.reranked", stats.reranked)
                     span.set_attribute("retrieval.rerank_ms", stats.rerank_ms)
                 if stats.service_asked:
-                    # Row `r5` only: what the search service answered, and
-                    # how many of its documents pgvector does not hold.
+                    # Rows `r5` and `r6`: what the search service answered,
+                    # how many of its documents pgvector does not hold, and
+                    # for `r6` how many queries of its own it ran.
                     span.set_attribute(
                         "retrieval.search_service.documents",
                         stats.service_documents,
+                    )
+                    span.set_attribute(
+                        "retrieval.search_service.subqueries", stats.subqueries
                     )
                     span.set_attribute("retrieval.left_out", stats.left_out)
                     if stats.max_reranker_score is not None:

@@ -1,4 +1,4 @@
-"""The verdict agent's conversation, as the local model stand-in plays it (stories 2.5 and 2.6).
+"""The verdict agent's conversation, as the local model stand-in plays it (stories 2.5, 2.6 and 3.8).
 
 `verdict` runs an agent that is given three tools (`list_facts`,
 `search_rules`, `read_rule`) and asks the chat deployment, turn by turn, what
@@ -38,6 +38,13 @@ last 12 months are counted back from the latest day any fact names. It
 converts no units: a reading in another unit than the band's is not read.
 Whether a real model reads the manual this way is checked in Azure.
 
+On retrieval row `r6` (story 3.8) there is no conversation: `verdict` makes
+the searches itself, one per fact, and asks once, with no tool, for a
+proposal from the facts and the rules those searches returned. That request
+is told by its one user message, the JSON object `verdict` sends, and
+answered at once with move 4: every rule a search returned stands as read,
+and no rule is followed further, since nothing can be read.
+
 What the stand-in proposes is only a proposal: `verdict`'s domain code
 decides what is stored. The flaws below let tests see it refuse.
 """
@@ -70,6 +77,10 @@ LIST_FACTS = "list_facts"
 SEARCH_RULES = "search_rules"
 READ_RULE = "read_rule"
 TOOL_NAMES = frozenset({LIST_FACTS, SEARCH_RULES, READ_RULE})
+# The two fields of the object a composing request (row `r6`) gives the
+# model: the case's facts, and what the search for each of them returned.
+COMPOSE_FACTS_FIELD = "facts"
+COMPOSE_SEARCHES_FIELD = "searches"
 
 # How sure the stand-in says it is, and what it says in the `low_confidence`
 # flaw: under the service's default floor of 0.70.
@@ -827,8 +838,41 @@ def final_answer(seen: Conversation, flaw: Flaw | None = None) -> str:
     )
 
 
+def composing_of(body: Mapping[str, Any]) -> Conversation | None:
+    """What a composing request of row `r6` shows the model; None when the request is not one.
+
+    Told by its one user message: a JSON object with the facts and the
+    searches. Every rule a search returned is taken as read, as `verdict`
+    takes it on that row.
+    """
+    messages = body.get("messages")
+    users = [
+        message
+        for message in (messages if isinstance(messages, list) else [])
+        if isinstance(message, dict) and message.get("role") == "user"
+    ]
+    if len(users) != 1:
+        return None
+    given = _json_object(_text_of(users[0].get("content")))
+    facts, searches = given.get(COMPOSE_FACTS_FIELD), given.get(COMPOSE_SEARCHES_FIELD)
+    if not isinstance(facts, list) or not isinstance(searches, list):
+        return None
+    seen = Conversation(facts=[fact for fact in facts if _is_fact(fact)])
+    for search in searches:
+        if not isinstance(search, dict) or not isinstance(search.get("fact_id"), str):
+            continue
+        _note(seen, SEARCH_RULES, {"fact_id": search["fact_id"]}, search)
+    for definition in [d for found in seen.found.values() for d in found]:
+        seen.read.setdefault(definition.rule_id, definition)
+    return seen
+
+
 def next_message(body: Mapping[str, Any], flaw: Flaw | None = None) -> dict[str, Any]:
     """The assistant's next message in a verdict conversation: tool calls, or the final answer."""
+    composing = composing_of(body)
+    if composing is not None:
+        # Row `r6`: nothing to call, so the proposal at once.
+        return {"role": "assistant", "content": final_answer(composing, flaw)}
     messages = body.get("messages")
     seen = conversation_of(messages if isinstance(messages, list) else [])
     if seen.facts is None or flaw is Flaw.ENDLESS_LOOP:

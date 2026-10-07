@@ -1,14 +1,18 @@
-"""A local stand-in for Azure AI Search (story 3.3, retrieval row `r5`).
+"""A local stand-in for Azure AI Search (stories 3.3 and 3.8, retrieval rows `r5` and `r6`).
 
 The Azure environment is down while the stories are built, so `retrieval`'s
-index load and its search with row `r5` are proven against this: an HTTP app
-with the REST routes `retrieval` calls, in the service's shapes. It keeps
-its indexes and their documents in memory, and loses them when it stops.
+index load and its searches with rows `r5` and `r6` are proven against
+this: an HTTP app with the REST routes `retrieval` calls, in the service's
+shapes. It keeps its indexes, their documents, and its knowledge sources and
+knowledge bases in memory, and loses them when it stops.
 
 - `GET` and `PUT /indexes/{name}`: read an index definition, create one.
 - `POST /indexes/{name}/docs/index`: upload, merge and delete documents.
 - `POST /indexes/{name}/docs/search`: list documents (`search: "*"`), or
   answer a hybrid query.
+- `GET` and `PUT /knowledgesources('{name}')` and `/knowledgebases('{name}')`:
+  read one, create one. Preview REST versions only, as on the service.
+- `POST /knowledgebases('{name}')/retrieve`: agentic retrieval (row `r6`).
 
 A dev tool only. It is part of `synthdata`, which no service depends on, so it
 is in no service image; and `retrieval` refuses a plain-HTTP search endpoint
@@ -23,6 +27,17 @@ query's words it holds and of its cosine, and the answer is ordered by it.
 The real ranker is a language model: what it does to the same queries, and
 its scores, are a check of the final Azure test session.
 
+Nor does it plan. The service has a model turn the query of a retrieve
+request into queries of its own. The stand-in's "plan" is the query whole,
+and each of its parts between commas, colons and semicolons, at most four
+queries in all. Each is run as a hybrid query with the semantic ranker over
+the knowledge source's index, with a vector from the stand-in's own
+embedding where the index names a vectorizer (text alone where it names
+none, as on the service); a document is ranked by the best score any of the
+queries gave it. It answers references and an activity log with made-up
+token counts, and never writes an answer. What a real planning model makes
+of the same queries is a check of the final Azure test session too.
+
 Run it: `uv run python -m synthdata.search_standin` (see README, 'Run locally').
 """
 
@@ -31,6 +46,7 @@ import asyncio
 import math
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -38,6 +54,8 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+
+from synthdata.foundry_standin import embed_text
 
 DEFAULT_PORT = 5103
 # What the stand-in answers a read of an index it does not hold with; the
@@ -56,6 +74,16 @@ _RERANKED = 50
 _DEFAULT_TOP = 50
 _WORD = re.compile(r"[a-z0-9]+")
 _UPLOADS = frozenset({"upload", "mergeOrUpload", "merge"})
+# Agentic retrieval (story 3.8): what a knowledge source over an index is,
+# the output a knowledge base may be asked for that this stand-in gives,
+# the efforts that plan with a model, and how many queries a plan holds.
+SEARCH_INDEX_KIND = "searchIndex"
+EXTRACTIVE_DATA = "extractiveData"
+_PLANNING_EFFORTS = frozenset({"low", "medium"})
+_MAX_SUBQUERIES = 4
+_PARTS = re.compile(r"[,:;]")
+# How many vector candidates each planned query hands its fusion.
+_SUBQUERY_VECTOR_CANDIDATES = 50
 
 
 class Mode(StrEnum):
@@ -64,7 +92,7 @@ class Mode(StrEnum):
     OK = "ok"
     # Every call is answered 503.
     UNAVAILABLE = "unavailable"
-    # A query is answered only after `delay_seconds`.
+    # A query, and a retrieve request, is answered only after `delay_seconds`.
     SLOW = "slow"
 
 
@@ -122,6 +150,24 @@ class Index:
         configurations = self.definition.get("semantic", {}).get("configurations", [])
         return {entry["name"] for entry in configurations}
 
+    @property
+    def vectorized_fields(self) -> list[str]:
+        """The vector fields whose profile names a vectorizer of the index: the service can embed a query for them."""
+        vector_search = self.definition.get("vectorSearch", {})
+        vectorizers = {
+            entry.get("name") for entry in vector_search.get("vectorizers", [])
+        }
+        with_one = {
+            entry.get("name")
+            for entry in vector_search.get("profiles", [])
+            if entry.get("vectorizer") in vectorizers
+        }
+        return [
+            name
+            for name in self.vector_fields
+            if self.fields[name].get("vectorSearchProfile") in with_one
+        ]
+
 
 def _invalid_definition(name: str, body: dict[str, Any]) -> str | None:
     """Why the service would refuse an index definition; None if it would take it."""
@@ -132,11 +178,29 @@ def _invalid_definition(name: str, body: dict[str, Any]) -> str | None:
         return "Every field needs a name."
     if sum(1 for entry in fields if entry.get("key")) != 1:
         return "The index needs exactly one key field."
+    vector_search = body.get("vectorSearch", {})
     profiles = {
         entry.get("name")
-        for entry in body.get("vectorSearch", {}).get("profiles", [])
+        for entry in vector_search.get("profiles", [])
         if isinstance(entry, dict)
     }
+    vectorizers = {
+        entry.get("name")
+        for entry in vector_search.get("vectorizers", [])
+        if isinstance(entry, dict)
+    }
+    for entry in vector_search.get("profiles", []):
+        if isinstance(entry, dict) and entry.get("vectorizer") not in {
+            None,
+            *vectorizers,
+        }:
+            return "A profile's vectorizer must be a vectorizer of the index."
+    for entry in vector_search.get("vectorizers", []):
+        parameters = entry.get("azureOpenAIParameters") or {}
+        if entry.get("kind") != "azureOpenAI" or not all(
+            parameters.get(name) for name in ("resourceUri", "deploymentId")
+        ):
+            return "A vectorizer needs its resource and its deployment."
     for entry in fields:
         if entry.get("type") != VECTOR_TYPE:
             continue
@@ -160,6 +224,14 @@ class SearchStandIn:
     uploaded: int = 0
     deleted: int = 0
     queries: list[dict[str, Any]] = field(default_factory=list)
+    # Agentic retrieval: the knowledge sources and knowledge bases by name,
+    # as they were created, how often one was created, and every retrieve
+    # request's body with the queries the stand-in planned for it.
+    knowledge_sources: dict[str, dict[str, Any]] = field(default_factory=dict)
+    knowledge_bases: dict[str, dict[str, Any]] = field(default_factory=dict)
+    knowledge_created: int = 0
+    retrievals: list[dict[str, Any]] = field(default_factory=list)
+    planned: list[list[str]] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def documents(self, name: str) -> dict[str, dict[str, Any]]:
@@ -263,6 +335,11 @@ class SearchStandIn:
 
     def query(self, index: Index, body: dict[str, Any]) -> Response:
         """A text query, a vector query, or both fused; reranked where the query asks."""
+        answer = self.ranked(index, body)
+        return answer if isinstance(answer, Response) else JSONResponse(answer)
+
+    def ranked(self, index: Index, body: dict[str, Any]) -> dict[str, Any] | Response:
+        """The answer to a query as the service's JSON, or the refusal of a query it would not take."""
         semantic = body.get("queryType") == "semantic"
         if semantic and (
             body.get("semanticConfiguration") not in index.semantic_configurations
@@ -327,6 +404,181 @@ class SearchStandIn:
         answer: dict[str, Any] = {"value": value}
         if body.get("count"):
             answer["@odata.count"] = len(order)
+        return answer
+
+    # --- Agentic retrieval (story 3.8) --------------------------------------------------
+
+    def invalid_knowledge_source(self, name: str, body: dict[str, Any]) -> str | None:
+        """Why the service would refuse a knowledge source; None if it would take it."""
+        parameters = body.get("searchIndexParameters")
+        if body.get("name") != name or body.get("kind") != SEARCH_INDEX_KIND:
+            return "The knowledge source needs its name and the kind searchIndex."
+        if not isinstance(parameters, dict):
+            return "A searchIndex knowledge source needs its searchIndexParameters."
+        index = self.indexes.get(str(parameters.get("searchIndexName")))
+        if index is None:
+            return "The knowledge source names no index of this service."
+        if not index.semantic_configurations:
+            return "The index of a knowledge source needs a semantic configuration."
+        configuration = parameters.get("semanticConfigurationName")
+        if configuration is not None and (
+            configuration not in index.semantic_configurations
+        ):
+            return "No such semantic configuration in the index."
+        fields = parameters.get("sourceDataFields") or []
+        if not all(
+            isinstance(entry, dict) and entry.get("name") in index.fields
+            for entry in fields
+        ):
+            return "A source data field is not in the index."
+        return None
+
+    def invalid_knowledge_base(self, name: str, body: dict[str, Any]) -> str | None:
+        """Why the service would refuse a knowledge base; None if it would take it."""
+        sources = body.get("knowledgeSources")
+        if body.get("name") != name or not isinstance(sources, list) or not sources:
+            return "The knowledge base needs its name and its knowledge sources."
+        if not all(
+            isinstance(entry, dict) and entry.get("name") in self.knowledge_sources
+            for entry in sources
+        ):
+            return "The knowledge base names no knowledge source of this service."
+        effort = (body.get("retrievalReasoningEffort") or {}).get("kind", "minimal")
+        models = body.get("models") or []
+        if effort in _PLANNING_EFFORTS and not any(
+            isinstance(model, dict)
+            and model.get("kind") == "azureOpenAI"
+            and all(
+                (model.get("azureOpenAIParameters") or {}).get(name)
+                for name in ("resourceUri", "deploymentId", "modelName")
+            )
+            for model in models
+        ):
+            return "Query planning needs a model: its resource, deployment and name."
+        if body.get("outputMode", EXTRACTIVE_DATA) != EXTRACTIVE_DATA:
+            return "This stand-in synthesises no answer."
+        return None
+
+    def retrieve(self, name: str, body: dict[str, Any]) -> Response:
+        """Agentic retrieval: plan queries, run each on the index, answer the documents found as references."""
+        base = self.knowledge_bases.get(name)
+        if base is None:
+            return _error(404, "ResourceNotFound", "No knowledge base of that name.")
+        try:
+            texts = [
+                part["text"]
+                for message in body["messages"]
+                if message.get("role") == "user"
+                for part in message["content"]
+                if part.get("type") == "text"
+            ]
+        except (KeyError, TypeError, AttributeError):
+            texts = []
+        if not texts or not all(isinstance(text, str) for text in texts):
+            return _error(400, "InvalidRequest", "Send the query as a user message.")
+        if body.get("outputMode", EXTRACTIVE_DATA) != EXTRACTIVE_DATA:
+            return _error(400, "InvalidRequest", "This stand-in synthesises no answer.")
+        effort = (
+            body.get("retrievalReasoningEffort")
+            or base.get("retrievalReasoningEffort")
+            or {}
+        ).get("kind", "minimal")
+        source_name = base["knowledgeSources"][0]["name"]
+        parameters = self.knowledge_sources[source_name]["searchIndexParameters"]
+        index = self.indexes.get(parameters["searchIndexName"])
+        if index is None:
+            return _error(
+                400, "InvalidRequest", "The knowledge source's index is gone."
+            )
+        asked = " ".join(texts)
+        # The "plan": with an effort that plans, the query and its parts.
+        parts = [part.strip() for part in _PARTS.split(asked) if part.strip()]
+        planned = list(dict.fromkeys([asked, *(parts if len(parts) > 1 else [])]))
+        subqueries = (
+            planned[:_MAX_SUBQUERIES] if effort in _PLANNING_EFFORTS else [asked]
+        )
+        configuration = parameters.get("semanticConfigurationName") or min(
+            index.semantic_configurations
+        )
+        best: dict[str, float] = {}
+        counts: list[int] = []
+        for subquery in subqueries:
+            found = self.ranked(
+                index,
+                {
+                    "search": subquery,
+                    "queryType": "semantic",
+                    "semanticConfiguration": configuration,
+                    # The service embeds the query itself where the index
+                    # names a vectorizer, and searches text alone where not.
+                    "vectorQueries": [
+                        {
+                            "fields": name,
+                            "vector": embed_text(subquery, index.vector_fields[name]),
+                            "k": _SUBQUERY_VECTOR_CANDIDATES,
+                        }
+                        for name in index.vectorized_fields
+                    ],
+                    "select": index.key,
+                    "top": _RERANKED,
+                },
+            )
+            if isinstance(found, Response):
+                return found
+            counts.append(len(found["value"]))
+            for entry in found["value"]:
+                key, score = entry[index.key], entry["@search.rerankerScore"]
+                best[key] = max(best.get(key, 0.0), score)
+        order = sorted(best, key=lambda key: (-best[key], key))
+        wanted = [entry["name"] for entry in parameters.get("sourceDataFields") or []]
+        with_data = any(
+            params.get("includeReferenceSourceData")
+            for params in body.get("knowledgeSourceParams") or []
+            if params.get("knowledgeSourceName") == source_name
+        )
+        top = int(body.get("maxOutputDocuments", _DEFAULT_TOP))
+        references: list[dict[str, Any]] = []
+        for place, key in enumerate(order[:top]):
+            reference: dict[str, Any] = {
+                "type": SEARCH_INDEX_KIND,
+                "id": str(place),
+                "activitySource": 1,
+                "docKey": key,
+                "rerankerScore": best[key],
+            }
+            if with_data:
+                reference["sourceData"] = {
+                    field_name: index.documents[key].get(field_name)
+                    for field_name in wanted
+                }
+            references.append(reference)
+        answer: dict[str, Any] = {"response": [], "references": references}
+        if body.get("includeActivity"):
+            answer["activity"] = [
+                {
+                    "type": "modelQueryPlanning",
+                    "id": 0,
+                    "inputTokens": 100 + len(asked.split()),
+                    "outputTokens": sum(len(query.split()) for query in subqueries),
+                    "elapsedMs": 1,
+                },
+                *(
+                    {
+                        "type": SEARCH_INDEX_KIND,
+                        "id": place,
+                        "knowledgeSourceName": source_name,
+                        "count": count,
+                        "elapsedMs": 1,
+                        "searchIndexArguments": {"search": subquery},
+                    }
+                    for place, (subquery, count) in enumerate(
+                        zip(subqueries, counts, strict=True), start=1
+                    )
+                ),
+            ]
+        with self._lock:
+            self.retrievals.append(body)
+            self.planned.append(subqueries)
         return JSONResponse(answer)
 
     # --- The app ----------------------------------------------------------------------
@@ -339,8 +591,71 @@ class SearchStandIn:
             return _error(400, "MissingApiVersion", "Name the api-version.")
         return None
 
+    def _knowledge_refused(self, request: Request) -> Response | None:
+        """As `_refused`, for the routes of agentic retrieval: those are on preview versions only."""
+        refused = self._refused(request)
+        if refused is not None:
+            return refused
+        if not request.query_params["api-version"].endswith("-preview"):
+            return _error(
+                400,
+                "InvalidApiVersion",
+                "Knowledge bases with query planning need a preview api-version.",
+            )
+        return None
+
+    def _knowledge_routes(self, app: FastAPI) -> None:
+        """The routes of a knowledge source and of a knowledge base: read, create, retrieve."""
+
+        def routes_of(
+            collection: str,
+            held: dict[str, dict[str, Any]],
+            invalid_of: Callable[[str, dict[str, Any]], str | None],
+        ) -> None:
+            path = f"/{collection}('{{name}}')"
+
+            @app.get(path)
+            def read(name: str, request: Request) -> Response:
+                refused = self._knowledge_refused(request)
+                if refused is not None:
+                    return refused
+                if name not in held:
+                    return _error(404, "ResourceNotFound", "Nothing of that name.")
+                return JSONResponse(held[name])
+
+            @app.put(path)
+            def create(name: str, request: Request, body: dict[str, Any]) -> Response:
+                refused = self._knowledge_refused(request)
+                if refused is not None:
+                    return refused
+                invalid = invalid_of(name, body)
+                if invalid is not None:
+                    return _error(400, "InvalidRequest", invalid)
+                with self._lock:
+                    existed = name in held
+                    held[name] = body
+                    self.knowledge_created += not existed
+                return JSONResponse(body, status_code=200 if existed else 201)
+
+        routes_of(
+            "knowledgesources", self.knowledge_sources, self.invalid_knowledge_source
+        )
+        routes_of("knowledgebases", self.knowledge_bases, self.invalid_knowledge_base)
+
+        @app.post("/knowledgebases('{name}')/retrieve")
+        async def retrieve(
+            name: str, request: Request, body: dict[str, Any]
+        ) -> Response:
+            refused = self._knowledge_refused(request)
+            if refused is not None:
+                return refused
+            if self.mode is Mode.SLOW:
+                await asyncio.sleep(self.delay_seconds)
+            # Comparing every vector takes a moment: off the event loop.
+            return await asyncio.to_thread(self.retrieve, name, body)
+
     def app(self) -> FastAPI:
-        """The HTTP app: the service's routes for an index and its documents."""
+        """The HTTP app: the service's routes for an index, its documents and a knowledge base over it."""
         app = FastAPI(
             title="search-stand-in", docs_url=None, redoc_url=None, openapi_url=None
         )
@@ -405,6 +720,7 @@ class SearchStandIn:
             # Comparing every vector takes a moment: off the event loop.
             return await asyncio.to_thread(self.query, index, body)
 
+        self._knowledge_routes(app)
         return app
 
 
@@ -424,7 +740,7 @@ def main(argv: list[str] | None = None) -> None:
         "--delay",
         type=float,
         default=30.0,
-        help="seconds a query waits in the slow mode (default: 30)",
+        help="seconds a query or a retrieve waits in the slow mode (default: 30)",
     )
     args = parser.parse_args(argv)
     stand_in = SearchStandIn(args.mode, delay_seconds=args.delay)

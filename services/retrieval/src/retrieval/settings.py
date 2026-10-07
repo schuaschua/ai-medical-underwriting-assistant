@@ -1,7 +1,7 @@
 """The one settings object of the `retrieval` service and its ingestion job (coding-style rule 12)."""
 
 from functools import lru_cache
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -24,6 +24,10 @@ SCHEMA = APP_ID
 HEALTH_PATH = "/health"
 # Readiness: the database is at the migration head bundled with the service.
 READY_PATH = "/ready"
+
+# The name of an index, a knowledge source or a knowledge base on the search
+# service: lower-case letters, digits and dashes.
+_SEARCH_OBJECT_NAME = r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])$"
 
 # The hosts a plain-HTTP endpoint may have: a local stand-in only.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -119,10 +123,11 @@ class Settings(BaseSettings):
     # In Azure: sign in to the model deployments with the service identity. There is no key.
     model_entra_auth: bool = False
     # AD-16: the names of the shared chat deployment, which writes each
-    # chunk's context line at ingestion and is the reranker of row `r4` at
-    # search, and of the one embedding deployment
-    # (`text-embedding-3-large`). They reach code only here. A service
-    # without the chat deployment refuses row `r4` as not available.
+    # chunk's context line at ingestion, is the reranker of row `r4` at
+    # search and is what the search service plans row `r6`'s queries with,
+    # and of the one embedding deployment (`text-embedding-3-large`). They
+    # reach code only here. A service without the chat deployment refuses
+    # rows `r4` and `r6` as not available.
     chat_deployment: str | None = None
     embedding_deployment: str | None = None
     # How long one call to a model may take.
@@ -205,7 +210,7 @@ class Settings(BaseSettings):
     search_service_entra_auth: bool = False
     # The index of the `smart` chunks: lower-case letters, digits and dashes.
     search_service_index_name: Annotated[
-        str, StringConstraints(pattern=r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])$")
+        str, StringConstraints(pattern=_SEARCH_OBJECT_NAME)
     ] = "manual-smart"
     # The stable REST version with hybrid queries, the semantic ranker and
     # exhaustive vector search.
@@ -230,6 +235,42 @@ class Settings(BaseSettings):
     search_service_query_timeout_seconds: Annotated[float, Field(gt=0)] = 5.0
     search_service_query_max_retries: Annotated[int, Field(ge=0, le=10)] = 1
 
+    # AD-11, row `r6`: agentic retrieval. A knowledge source over the index
+    # above and a knowledge base on it, which the job creates after the
+    # index is loaded and a search with `r6` asks. The search service plans
+    # and runs its own queries with the chat deployment, and embeds them
+    # with the embedding deployment, both reached with the search service's
+    # own identity. The row needs the search endpoint and the chat
+    # deployment: without either it is refused as not available. These
+    # calls alone use the preview REST version; the index keeps its stable
+    # one.
+    search_agentic_api_version: Annotated[
+        str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}-preview$")
+    ] = "2026-08-01-preview"
+    search_agentic_knowledge_source_name: Annotated[
+        str, StringConstraints(pattern=_SEARCH_OBJECT_NAME)
+    ] = "manual-smart-source"
+    search_agentic_knowledge_base_name: Annotated[
+        str, StringConstraints(pattern=_SEARCH_OBJECT_NAME)
+    ] = "manual-smart-base"
+    # How much the service's model plans: `low` or `medium`. `minimal`
+    # would plan nothing and be row `r5` under another name.
+    search_agentic_reasoning_effort: Literal["low", "medium"] = "low"
+    # The models behind the two deployments, as the search service must be
+    # told them. Unset: the deployments are named after their models.
+    search_agentic_chat_model_name: str | None = None
+    search_agentic_embedding_model_name: str | None = None
+    # How long the one retrieve call may take, which is not sent again when
+    # it was too slow, and the deadline over a whole search with the row,
+    # in place of `search_deadline_seconds`: the service makes model calls
+    # of its own. Every caller of a search waits longer than this, as for
+    # row `r4`.
+    search_agentic_timeout_seconds: Annotated[float, Field(gt=0)] = 15.0
+    search_agentic_deadline_seconds: Annotated[float, Field(gt=0)] = 20.0
+    # The job's side: how long creating the knowledge source and the
+    # knowledge base may take in all, after the index load.
+    search_agentic_ensure_deadline_seconds: Annotated[float, Field(gt=0)] = 60.0
+
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.
     applicationinsights_connection_string: SecretStr | None = None
@@ -247,6 +288,8 @@ class Settings(BaseSettings):
         "embedding_deployment",
         "layout_endpoint",
         "model_endpoint",
+        "search_agentic_chat_model_name",
+        "search_agentic_embedding_model_name",
         "search_service_endpoint",
         mode="before",
     )
@@ -335,6 +378,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS must not be shorter than "
                 "RETRIEVAL_SEARCH_DEADLINE_SECONDS"
+            )
+        if self.search_agentic_timeout_seconds > self.search_agentic_deadline_seconds:
+            raise ValueError(
+                "RETRIEVAL_SEARCH_AGENTIC_TIMEOUT_SECONDS must not be longer than "
+                "RETRIEVAL_SEARCH_AGENTIC_DEADLINE_SECONDS"
             )
         if self.model_retry_seconds > self.model_max_retry_seconds:
             raise ValueError(

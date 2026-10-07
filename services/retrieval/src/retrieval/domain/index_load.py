@@ -10,6 +10,11 @@ uploads the documents that are new or changed, removes the ones whose chunk
 is gone, and then compares what the index holds with what pgvector holds. A
 difference fails the run. Whatever happens here, pgvector stays as it was
 written.
+
+Row `r6` (story 3.8) reads that same index through a knowledge base. Once
+the index is loaded the job has the service create the knowledge source and
+the knowledge base where they are missing (`ensure_knowledge_base`). That
+changes neither pgvector nor the index.
 """
 
 import asyncio
@@ -26,10 +31,13 @@ from retrieval.domain.entities import (
     IndexDocument,
     IndexHoldings,
     IndexLoadReport,
+    KnowledgeBaseReport,
 )
 from retrieval.domain.ingest import IngestError
 from retrieval.domain.ports import (
     ChunkRepository,
+    KnowledgeBaseStore,
+    KnowledgeBaseUnusable,
     SearchIndexStore,
     SearchServiceUnavailable,
 )
@@ -44,6 +52,12 @@ _IDS_IN_A_LOG_LINE = 20
 LOAD_FAILED_MESSAGE = "The search index could not be loaded."
 INDEX_DIFFERS_MESSAGE = "The search index does not hold what the chunk table holds."
 LOAD_DEADLINE_MESSAGE = "Loading the search index took too long."
+KNOWLEDGE_BASE_FAILED_MESSAGE = "The knowledge base could not be made."
+KNOWLEDGE_BASE_DEADLINE_MESSAGE = "Making the knowledge base took too long."
+KNOWLEDGE_BASE_UNUSABLE_MESSAGE = (
+    "The search service holds an index, a knowledge source or a knowledge base "
+    "that is not what the settings name."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,4 +224,37 @@ async def load_search_index(
             raise
         raise IngestError(
             ErrorCode.STAGE_TIMEOUT, LOAD_DEADLINE_MESSAGE, "search_index_load_deadline"
+        ) from None
+
+
+async def ensure_knowledge_base(
+    store: KnowledgeBaseStore, deadline_seconds: float | None
+) -> KnowledgeBaseReport:
+    """Have the search service hold row `r6`'s knowledge source and knowledge base; what was created.
+
+    `IngestError` when it could not be done, with a reason of its own: the
+    service gave no usable answer (`upstream_unavailable`), it took too
+    long (`stage_timeout`), or what the service holds is not what the row
+    needs (`stage_failed`: `search_index_without_vectorizer`,
+    `search_knowledge_source_differs`, `search_knowledge_base_differs`).
+    Nothing here writes to pgvector or to the index.
+    """
+    try:
+        async with asyncio.timeout(deadline_seconds) as deadline:
+            return await store.ensure()
+    except KnowledgeBaseUnusable as error:
+        raise IngestError(
+            ErrorCode.STAGE_FAILED, KNOWLEDGE_BASE_UNUSABLE_MESSAGE, error.reason
+        ) from None
+    except SearchServiceUnavailable as error:
+        raise IngestError(
+            ErrorCode.UPSTREAM_UNAVAILABLE, KNOWLEDGE_BASE_FAILED_MESSAGE, error.reason
+        ) from None
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        raise IngestError(
+            ErrorCode.STAGE_TIMEOUT,
+            KNOWLEDGE_BASE_DEADLINE_MESSAGE,
+            "search_knowledge_base_deadline",
         ) from None

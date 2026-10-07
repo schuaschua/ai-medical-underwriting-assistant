@@ -25,6 +25,11 @@ now holds, and checks that both stores hold the same chunks. It asks no
 model. A failure of that step has a log line of its own and ends the job
 with 1; pgvector stays as the runs before it left it.
 
+When the index is loaded the job has the search service hold the knowledge
+source and the knowledge base of row `r6` over that index, creating each
+where it is missing. A failure there has a log line of its own as well and
+ends the job with 1; pgvector and the index stay as they are.
+
 Before the process ends its telemetry is sent.
 """
 
@@ -44,6 +49,11 @@ from retrieval.adapters.db import (
     SqlChunkRepository,
     SqlSchemaRevision,
     build_database,
+)
+from retrieval.adapters.knowledge_base import (
+    KnowledgeBase,
+    planning_model,
+    query_vectorizer,
 )
 from retrieval.adapters.layout import (
     DocumentLayout,
@@ -70,8 +80,16 @@ from retrieval.adapters.telemetry import (
     configure_telemetry,
     shutdown_telemetry,
 )
-from retrieval.domain.entities import IndexLoadReport, IngestReport
-from retrieval.domain.index_load import IndexLoadOptions, load_search_index
+from retrieval.domain.entities import (
+    IndexLoadReport,
+    IngestReport,
+    KnowledgeBaseReport,
+)
+from retrieval.domain.index_load import (
+    IndexLoadOptions,
+    ensure_knowledge_base,
+    load_search_index,
+)
 from retrieval.domain.ingest import (
     IngestError,
     IngestOptions,
@@ -141,6 +159,10 @@ class JobResult:
     index_load: IndexLoadReport | Exception | None = None
     # How long that load took, by itself.
     index_load_seconds: float = 0.0
+    # Row `r6`'s knowledge source and knowledge base: what was found or
+    # created, or the error; None when the index was not loaded.
+    knowledge_base: KnowledgeBaseReport | Exception | None = None
+    knowledge_base_seconds: float = 0.0
 
 
 def index_load_options(settings: Settings) -> IndexLoadOptions:
@@ -164,7 +186,60 @@ def build_search_index(
         max_retries=settings.search_service_max_retries,
         retry_seconds=settings.search_service_retry_seconds,
         token=search_token_for(settings),
+        # Row `r6`: the search service embeds the queries it plans with
+        # the deployment the chunks were embedded with.
+        vectorizer=query_vectorizer(settings),
     )
+
+
+def build_knowledge_base(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> KnowledgeBase:
+    """Row `r6`'s knowledge base as the job makes it, with the job's own patience."""
+    return KnowledgeBase(
+        build_search_http(settings, transport),
+        index_name=settings.search_service_index_name,
+        source_name=settings.search_agentic_knowledge_source_name,
+        base_name=settings.search_agentic_knowledge_base_name,
+        # The preview version, for these calls alone.
+        api_version=settings.search_agentic_api_version,
+        reasoning_effort=settings.search_agentic_reasoning_effort,
+        model=planning_model(settings),
+        max_retries=settings.search_service_max_retries,
+        retry_seconds=settings.search_service_retry_seconds,
+        token=search_token_for(settings),
+    )
+
+
+async def make_knowledge_base(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> KnowledgeBaseReport | Exception:
+    """Have the search service hold row `r6`'s knowledge base; the report, or the error.
+
+    Answered, not raised, as the index load's outcome is: the job still
+    reports everything before it.
+    """
+    with adapter_span(tracer, "retrieval.knowledge_base") as span:
+        span.set_attribute(
+            "retrieval.search_service.knowledge_base",
+            settings.search_agentic_knowledge_base_name,
+        )
+        knowledge_base: KnowledgeBase | None = None
+        try:
+            knowledge_base = build_knowledge_base(settings, transport)
+            report = await ensure_knowledge_base(
+                knowledge_base, settings.search_agentic_ensure_deadline_seconds
+            )
+        except Exception as error:  # noqa: BLE001 - whatever it raised, the job reports it beside the runs and the load
+            span.set_attribute("retrieval.knowledge_base.outcome", "failed")
+            span.set_attribute("error.type", _code_of(error).value)
+            span.set_attribute("retrieval.knowledge_base.reason", _reason_of(error))
+            return error
+        finally:
+            if knowledge_base is not None:
+                await knowledge_base.aclose()
+        span.set_attribute("retrieval.knowledge_base.outcome", "done")
+        return report
 
 
 async def load_index(
@@ -314,7 +389,16 @@ async def run(settings: Settings, transports: Transports | None = None) -> JobRe
                 load_started = time.monotonic()
                 loaded = await load_index(settings, repository, transports.search)
                 load_seconds = time.monotonic() - load_started
-            return JobResult(outcomes, different, loaded, load_seconds)
+            made, make_seconds = None, 0.0
+            if isinstance(loaded, IndexLoadReport):
+                # AD-11, row `r6`: only over an index that is loaded and
+                # was found to hold what pgvector holds.
+                make_started = time.monotonic()
+                made = await make_knowledge_base(settings, transports.search)
+                make_seconds = time.monotonic() - make_started
+            return JobResult(
+                outcomes, different, loaded, load_seconds, made, make_seconds
+            )
     finally:
         # Each resource is closed even if the one before it failed to close.
         try:
@@ -458,6 +542,36 @@ def _run_and_report(
             index,
             result.index_load_seconds,
         )
+    return _report_knowledge_base(settings, result, status)
+
+
+def _report_knowledge_base(settings: Settings, result: JobResult, status: int) -> int:
+    """Say how row `r6`'s knowledge base ended, in a line of its own; the job's status after it."""
+    made = result.knowledge_base
+    if made is None:
+        return status
+    names = (
+        settings.search_agentic_knowledge_source_name,
+        settings.search_agentic_knowledge_base_name,
+    )
+    if isinstance(made, Exception):
+        # A line of its own: pgvector and the index are as the lines above say.
+        logger.error(
+            "knowledge base failed: code=%s reason=%s source=%s base=%s seconds=%.1f",
+            _code_of(made).value,
+            _reason_of(made),
+            *names,
+            result.knowledge_base_seconds,
+        )
+        return FAILED
+    logger.info(
+        "knowledge base done: source=%s base=%s source_created=%s base_created=%s "
+        "seconds=%.1f",
+        *names,
+        "yes" if made.source_created else "no",
+        "yes" if made.base_created else "no",
+        result.knowledge_base_seconds,
+    )
     return status
 
 

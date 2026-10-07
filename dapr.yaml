@@ -74,11 +74,12 @@ apps:
       # to triage. A case keeps the value in force when its lifecycle
       # confirmed it: a change applies to cases started after it.
       WORKFLOW_GATE_THRESHOLD: "0.90"
-      # AD-11: the ladder rows a case may run with here. Row r4 is among
-      # them because retrieval below is given the chat deployment, its
-      # reranker, and row r5 because it is given a search service (both
-      # local stand-ins); verdict names the same rows.
-      WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5"]'
+      # AD-11: the ladder rows a case may run with here: all six. Row r4 is
+      # among them because retrieval below is given the chat deployment,
+      # its reranker, row r5 because it is given a search service, and row
+      # r6 because it is given both (local stand-ins); verdict names the
+      # same rows.
+      WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5", "r6"]'
   - appID: classification
     appDirPath: ./services/classification
     appProtocol: http
@@ -165,8 +166,8 @@ apps:
       # context lines with. The 20 best fused candidates are rated in one
       # chat call of up to 15 s whose answer may take 4,000 tokens, and a
       # search with r4 has 20 s in all.
-      # Without the deployment r4 is refused as not available; then take
-      # r4 out of the two lists of rows in this file as well.
+      # Without the deployment r4 and r6 are refused as not available; then
+      # take both out of the two lists of rows in this file as well.
       RETRIEVAL_CHAT_DEPLOYMENT: "local-stand-in"
       RETRIEVAL_SEARCH_RERANK_DEPTH: "20"
       RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS: "15"
@@ -176,10 +177,21 @@ apps:
       # starts (packages/synthdata) and tools/ingest-local.sh loads from
       # the stored chunks. It takes no credential, keeps its index in
       # memory, and exists only on a developer machine. Without this
-      # variable r5 is refused as not available; then take r5 out of the
-      # two lists of rows in this file as well.
+      # variable r5 and r6 are refused as not available; then take both
+      # out of the two lists of rows in this file as well.
       RETRIEVAL_SEARCH_SERVICE_ENDPOINT: "http://127.0.0.1:5103"
       RETRIEVAL_SEARCH_SERVICE_INDEX_NAME: "manual-smart"
+      # Row r6: agentic retrieval. The knowledge source and the knowledge
+      # base that tools/ingest-local.sh has the search stand-in hold over
+      # that index, asked on the preview REST version. The stand-in plans
+      # its own queries from the query it is sent; the real service does
+      # that with the chat deployment named above. One retrieve call of up
+      # to 15 s, and a search with r6 has 20 s in all.
+      RETRIEVAL_SEARCH_AGENTIC_API_VERSION: "2026-08-01-preview"
+      RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_SOURCE_NAME: "manual-smart-source"
+      RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_BASE_NAME: "manual-smart-base"
+      RETRIEVAL_SEARCH_AGENTIC_TIMEOUT_SECONDS: "15"
+      RETRIEVAL_SEARCH_AGENTIC_DEADLINE_SECONDS: "20"
   - appID: verdict
     appDirPath: ./services/verdict
     appProtocol: http
@@ -210,6 +222,8 @@ apps:
       VERDICT_CHAT_DEPLOYMENT: "local-stand-in"
       # AD-11: the ladder rows a verdict may be commanded with here: the
       # rows retrieval answers, r4 among them because it is given the chat
-      # deployment above and r5 because it is given a search service.
-      # workflow names the same rows.
-      VERDICT_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5"]'
+      # deployment above, r5 because it is given a search service and r6
+      # because it is given both. workflow names the same rows. On r6 the
+      # agent's own search loop is off: one search per fact, then one call
+      # of the model to compose the proposal (AD-15).
+      VERDICT_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5", "r6"]'
