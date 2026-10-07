@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pymupdf
 import pytest
@@ -16,7 +17,12 @@ from contracts.enums import PageType
 from contracts.rules import MEDICAL_PAGE_TYPES
 from synthdata.__main__ import main
 from synthdata.cases import CASES
-from synthdata.generate import ANSWER_KEY_FOLDER, CASES_FOLDER, write_all
+from synthdata.generate import (
+    ANSWER_KEY_FOLDER,
+    CASES_FOLDER,
+    RULE_TABLE_FILE,
+    write_all,
+)
 from synthdata.model import (
     AnswerKeyEntry,
     CaseDefinition,
@@ -73,8 +79,8 @@ def _case(case_id: str) -> CaseDefinition:
 @pytest.fixture(scope="module")
 def generated() -> Iterator[Path]:
     """A fresh run of the generator, kept inside the project's gitignored scratch folder."""
-    folder = REPO_ROOT / ".work" / "pytest-synthdata"
-    shutil.rmtree(folder, ignore_errors=True)
+    # A folder per run, so that two runs at once do not write over each other.
+    folder = REPO_ROOT / ".work" / f"pytest-synthdata-{uuid4().hex}"
     write_all(folder)
     yield folder
     shutil.rmtree(folder, ignore_errors=True)
@@ -442,22 +448,65 @@ def _files(folder: str) -> list[Path]:
     ]
 
 
+# AD-17: what names the answers. The folder holds the per-case entries and, since
+# story 2.1, the rule table; the rule table's file name is caught on its own too.
+# Speaking of a rule table in general is not naming the file.
+ANSWER_KEY_NAMES = re.compile(
+    rb"answer[-_ ]?key|" + re.escape(Path(RULE_TABLE_FILE).name).encode(),
+    re.IGNORECASE,
+)
+
+
+def _naming_the_answer_key(paths: list[Path]) -> list[str]:
+    return [
+        str(path.relative_to(REPO_ROOT))
+        for path in paths
+        if ANSWER_KEY_NAMES.search(path.read_bytes())
+    ]
+
+
 def test_story_1_4_no_service_or_contracts_code_refers_to_the_answer_key() -> None:
     # AD-17: only the eval runner and the generator may know where the answers are,
     # and the generator knows, so a service may not import it either.
-    answer_key = re.compile(rb"answer[-_ ]?key", re.IGNORECASE)
     generator = re.compile(rb"\bsynthdata\b")
     contracts, services = _files("packages/contracts"), _files("services")
 
     # Guards against the scan passing because it looked at nothing.
     assert any(path.name == "enums.py" for path in contracts)
-    assert [
-        str(path.relative_to(REPO_ROOT))
-        for path in contracts + services
-        if answer_key.search(path.read_bytes())
-    ] == []
+    assert _naming_the_answer_key(contracts + services) == []
     assert [
         str(path.relative_to(REPO_ROOT))
         for path in services
         if generator.search(path.read_bytes())
     ] == []
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f'RULES = "data/{RULE_TABLE_FILE}"',
+        'RULES = DATA / "rule-table.json"',
+        'RULES = json.loads((DATA / "answer-key" / name).read_text())',
+        "from evaluation import answer_key",
+    ],
+)
+def test_story_2_1_guard_catches_service_code_that_names_the_rule_table(
+    line: str,
+) -> None:
+    # The same scan as the test above, over a stand-in for a file under `services/`.
+    scratch = REPO_ROOT / ".work" / f"pytest-guard-{uuid4().hex}"
+    folder = scratch / "services" / "retrieval"
+    folder.mkdir(parents=True)
+    offender, innocent = folder / "offender.py", folder / "innocent.py"
+    offender.write_text(f"{line}\n", encoding="utf-8")
+    # Naming the manual, or speaking of a rule table, is not naming the answers.
+    innocent.write_text(
+        'MANUAL = "underwriting-manual.pdf"\n# one chunk per row of the rule table\n',
+        encoding="utf-8",
+    )
+    try:
+        assert _naming_the_answer_key([offender, innocent]) == [
+            str(offender.relative_to(REPO_ROOT))
+        ]
+    finally:
+        shutil.rmtree(scratch)

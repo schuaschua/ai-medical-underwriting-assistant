@@ -1,7 +1,7 @@
 [project]
 name = "synthdata"
 version = "0.1.0"
-description = "Generator for the synthetic case PDFs and their answer key (CAP-11)"
+description = "Generator for the synthetic case PDFs, the underwriting manual and the answer key (CAP-11)"
 requires-python = "==3.13.*"
 # A dev tool, not service code: no service depends on it or imports it.
 dependencies = [

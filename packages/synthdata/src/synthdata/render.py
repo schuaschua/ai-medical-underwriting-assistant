@@ -17,11 +17,11 @@ _FOOTER_Y = _HEIGHT - 40
 # Body text stops this far above the footer line.
 _FOOTER_CLEARANCE = 14.0
 _REGULAR, _BOLD = "helv", "hebo"
-_FOOTER = (
+FOOTER = (
     "SYNTHETIC TEST DOCUMENT. Every name, number and reading on this page is invented."
 )
 # A fixed timestamp, so a regenerated file does not change in git.
-_PDF_DATE = "D:20261006000000Z"
+PDF_DATE = "D:20261006000000Z"
 
 
 @dataclass(frozen=True)
@@ -126,7 +126,7 @@ class _Sheet:
 
     def footer(self) -> None:
         self._y = self._floor = _FOOTER_Y
-        self.put(_LEFT, _FOOTER, size=7)
+        self.put(_LEFT, FOOTER, size=7)
 
 
 def _money(amount: Decimal) -> str:
@@ -401,8 +401,8 @@ def render_case(case: CaseDefinition) -> RenderedCase:
             "subject": "Synthetic test document. All details are invented.",
             "creator": "synthdata",
             "producer": "synthdata",
-            "creationDate": _PDF_DATE,
-            "modDate": _PDF_DATE,
+            "creationDate": PDF_DATE,
+            "modDate": PDF_DATE,
         }
     )
     # `no_new_id` leaves out the random file id, the last thing that would differ per run.

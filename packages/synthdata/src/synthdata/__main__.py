@@ -1,4 +1,4 @@
-"""`uv run python -m synthdata`: regenerate the synthetic cases and their answer key."""
+"""`uv run python -m synthdata`: regenerate the cases, the manual and the answer key."""
 
 import argparse
 from pathlib import Path
