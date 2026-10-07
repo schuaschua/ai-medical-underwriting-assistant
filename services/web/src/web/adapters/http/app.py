@@ -7,7 +7,7 @@ import httpx
 from fastapi import FastAPI
 
 from web.adapters.dapr import ServiceClient, build_http_client
-from web.adapters.http.api import SERVICES_STATE
+from web.adapters.http.api import SERVICES_STATE, TRIAGE_STATE
 from web.adapters.http.api import router as api_router
 from web.adapters.http.errors import API_ROUTES_STATE, install_error_handlers
 from web.adapters.http.middleware import (
@@ -15,6 +15,7 @@ from web.adapters.http.middleware import (
     UnhandledErrorMiddleware,
 )
 from web.adapters.http.spa import build_spa_router
+from web.adapters.http.triage import TriageReader
 from web.adapters.telemetry import configure_telemetry, instrument_app
 from web.settings import Settings, get_settings
 
@@ -45,6 +46,17 @@ def create_app(
         title="web", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
     )
     setattr(app.state, SERVICES_STATE, services)
+    setattr(
+        app.state,
+        TRIAGE_STATE,
+        TriageReader(
+            services,
+            max_concurrent_reads=settings.triage_max_concurrent_reads,
+            # The whole queue is answered within the deadline of one call
+            # to another service, so the browser hears the server's answer.
+            deadline_seconds=settings.lifecycle_timeout_seconds,
+        ),
+    )
     install_error_handlers(app)
     # The middleware added last runs first: headers wrap the error fallback.
     # AD-19: no CORS middleware is added, so no cross-origin call is allowed.

@@ -9,6 +9,8 @@ import {
   json,
   pageProgress,
   startedCase,
+  thumbnail,
+  triagePage,
   UPLOADED,
 } from "../test/server";
 import {
@@ -17,6 +19,8 @@ import {
   getClassifications,
   getMe,
   getProgress,
+  getThumbnail,
+  getTriageQueue,
   IDEMPOTENCY_KEY_HEADER,
   NetworkError,
   newIdempotencyKey,
@@ -571,5 +575,134 @@ describe("1.10 API client", () => {
     await expect(getClassifications(UPLOADED.case_id)).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+});
+
+describe("1.11 API client", () => {
+  const CASE = UPLOADED.case_id;
+
+  it("reads the triage queue as the underwriter, with the role header", async () => {
+    const pages = [
+      triagePage(CASE, 2, { pageType: "invoice", confidence: 0.4 }, "customer"),
+      triagePage(CASE, 3, null),
+    ];
+    const server = fakeServer((call) =>
+      call.path === "/api/triage"
+        ? json(200, { pages, has_more: true })
+        : undefined,
+    );
+    setRole("underwriter");
+
+    await expect(getTriageQueue()).resolves.toEqual({ pages, has_more: true });
+
+    expect(server.calls).toEqual([
+      {
+        path: "/api/triage",
+        method: "GET",
+        role: "underwriter",
+        contentType: null,
+        body: null,
+      },
+    ]);
+  });
+
+  it("turns the refusal of the customer into an ApiError with the server's code", async () => {
+    fakeServer();
+    setRole("customer");
+
+    await expect(getTriageQueue()).rejects.toMatchObject({
+      status: 403,
+      code: "role_not_allowed",
+    });
+  });
+
+  it("refuses an answer that is not a queue, or lists half a reading", async () => {
+    const whole = triagePage(CASE, 1);
+    const answers: unknown[] = [
+      { pages: [whole] },
+      { pages: "none", has_more: false },
+      { pages: [{ ...whole, page_id: "" }], has_more: false },
+      { pages: [{ ...whole, thumbnail_path: null }], has_more: false },
+      { pages: [{ ...whole, confidence: null }], has_more: false },
+      { pages: [{ ...whole, confidence: 96 }], has_more: false },
+      { pages: [{ ...whole, reason: null }], has_more: false },
+      { pages: [null], has_more: false },
+    ];
+    setRole("underwriter");
+
+    for (const answer of answers) {
+      fakeServer(() => json(200, answer));
+      await expect(getTriageQueue()).rejects.toBeInstanceOf(ApiError);
+    }
+  });
+
+  it("reads a thumbnail from the address the server gave, with the role header", async () => {
+    const address = triagePage(CASE, 1).thumbnail_path;
+    const server = fakeServer();
+    setRole("underwriter");
+
+    const picture = await getThumbnail(address);
+
+    expect(picture.size).toBe(8);
+    expect(server.calls).toEqual([
+      {
+        path: address,
+        method: "GET",
+        role: "underwriter",
+        contentType: null,
+        body: null,
+      },
+    ]);
+  });
+
+  it("reads no address that is not a thumbnail of this server", async () => {
+    const server = fakeServer();
+    setRole("underwriter");
+
+    for (const address of [
+      "https://example.invalid/api/pages/x/thumbnail",
+      "//example.invalid/api/pages/x/thumbnail",
+      "/api/cases",
+      "pages/x/thumbnail",
+      // Under `/api/pages/`, but not a thumbnail of a page id, and nothing more.
+      "/api/pages/x/thumbnail",
+      "/api/pages/../me",
+      `/api/pages/${CASE}/text`,
+      `/api/pages/${CASE}/thumbnail?size=large`,
+      `/api/pages/${CASE}/thumbnail/more`,
+      `/api/pages/${CASE}/../../me#/thumbnail`,
+      `/api/pages/${CASE.toUpperCase()}/thumbnail`,
+    ]) {
+      await expect(getThumbnail(address)).rejects.toBeInstanceOf(ApiError);
+    }
+    expect(server.calls).toEqual([]);
+  });
+
+  it("refuses a thumbnail that is no picture, and reports the server's error", async () => {
+    const address = triagePage(CASE, 1).thumbnail_path;
+    setRole("underwriter");
+
+    fakeServer(() => json(200, { page_id: "x" }));
+    await expect(getThumbnail(address)).rejects.toMatchObject({ code: null });
+
+    fakeServer(
+      () =>
+        new Response(new Uint8Array(), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    await expect(getThumbnail(address)).rejects.toBeInstanceOf(ApiError);
+
+    fakeServer(() =>
+      json(404, errorBody("not_found", "That page could not be found.")),
+    );
+    await expect(getThumbnail(address)).rejects.toMatchObject({
+      status: 404,
+      code: "not_found",
+    });
+
+    fakeServer(() => thumbnail());
+    await expect(getThumbnail(address)).resolves.toBeDefined();
   });
 });

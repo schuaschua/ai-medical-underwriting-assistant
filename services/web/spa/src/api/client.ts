@@ -13,6 +13,7 @@ import type {
   ErrorCode,
   Me,
   PageDecisionRequest,
+  TriageQueue,
   UploadedCase,
 } from "./contracts.gen";
 
@@ -22,6 +23,8 @@ export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 const API_ROOT = "/api";
 /** The media type of an upload: the body is the PDF itself. */
 const PDF = "application/pdf";
+/** The media type of a page's thumbnail. */
+const PNG = "image/png";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -83,12 +86,18 @@ function isErrorBody(value: unknown): value is ErrorBody {
   );
 }
 
-async function request<T>(
+/**
+ * One call to the server and its answer, read whole within the time limit.
+ * A success is read as `accept` says: JSON, or the bytes of a file. A
+ * failure is always read as JSON, for the server's error body.
+ */
+async function exchange(
   method: "GET" | "POST",
   path: string,
-  options: RequestOptions = {},
-): Promise<T> {
-  const headers = new Headers({ Accept: "application/json" });
+  options: RequestOptions,
+  accept: "application/json" | typeof PNG,
+): Promise<{ response: Response; payload: unknown }> {
+  const headers = new Headers({ Accept: accept });
   // Read at call time, so a call made after a role switch carries the new role.
   const role = getRole();
   if (role !== null) {
@@ -123,7 +132,10 @@ async function request<T>(
   try {
     response = await fetch(`${API_ROOT}${path}`, init);
     // Read inside the time limit too: a body can stall after the headers.
-    payload = await response.json().catch(() => null);
+    payload =
+      response.ok && accept === PNG
+        ? await response.blob()
+        : await response.json().catch(() => null);
   } catch {
     throw new NetworkError();
   } finally {
@@ -137,6 +149,20 @@ async function request<T>(
     }
     throw new ApiError(response.status, null, "The request failed.", null);
   }
+  return { response, payload };
+}
+
+async function request<T>(
+  method: "GET" | "POST",
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const { response, payload } = await exchange(
+    method,
+    path,
+    options,
+    "application/json",
+  );
   if (typeof payload !== "object" || payload === null) {
     // A success must carry a JSON object: an empty or non-JSON body is a fault.
     throw new ApiError(response.status, null, "The answer was not JSON.", null);
@@ -301,6 +327,18 @@ export async function getClassifications(
 }
 
 /**
+ * Whether a failed decision call may have stored the decision all the same:
+ * no answer came, the server said the fault was its own, or it answered
+ * "done" with something that was not the decision. Only a refusal (4xx)
+ * stored nothing.
+ */
+export function mayBeStored(error: unknown): boolean {
+  return (
+    !(error instanceof ApiError) || error.status < 400 || error.status >= 500
+  );
+}
+
+/**
  * Send a person's decision about one page. The server takes the actor from
  * the role header and decides whether that role may make that decision.
  * Safe to repeat: the same decision again is answered with the stored one.
@@ -324,4 +362,79 @@ export async function decidePage(
     throw new ApiError(200, null, "The answer was not the decision.", null);
   }
   return recorded as DecisionRecorded;
+}
+
+/** A page's thumbnail on this server: `/api/pages/<page id>/thumbnail`, and nothing after it. */
+const THUMBNAIL_ADDRESS =
+  /^\/api\/pages\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/thumbnail$/;
+
+/** Whether a value is text with something in it. */
+function isText(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/**
+ * Whether a value has what a row of the triage queue is shown with. What the
+ * classifier said is there whole, or not at all.
+ */
+function isTriagePage(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const page = value as Record<string, unknown>;
+  return (
+    isText(page.case_id) &&
+    isText(page.page_id) &&
+    typeof page.page_number === "number" &&
+    isText(page.thumbnail_path) &&
+    ((page.page_type === null &&
+      page.confidence === null &&
+      page.reason === null) ||
+      (typeof page.page_type === "string" &&
+        isUnitNumber(page.confidence) &&
+        typeof page.reason === "string"))
+  );
+}
+
+/**
+ * Read the pages that wait for the underwriter, across cases, each with
+ * what the classifier said of it. Only the underwriter role may.
+ */
+export async function getTriageQueue(): Promise<TriageQueue> {
+  const queue = await request<unknown>("GET", "/triage");
+  const record = queue as Record<string, unknown>;
+  if (
+    !Array.isArray(record.pages) ||
+    !record.pages.every(isTriagePage) ||
+    typeof record.has_more !== "boolean"
+  ) {
+    throw new ApiError(200, null, "The answer was not a triage queue.", null);
+  }
+  return queue as TriageQueue;
+}
+
+/**
+ * Read a page's thumbnail, the picture of the redacted page, from the
+ * address the server gave for it. It is read here, with the role header
+ * every call carries, and not by an image element, which could send none.
+ */
+export async function getThumbnail(address: string): Promise<Blob> {
+  if (!THUMBNAIL_ADDRESS.test(address)) {
+    // Only this server's own thumbnails are read, whatever an answer names.
+    throw new ApiError(200, null, "The address was not a thumbnail's.", null);
+  }
+  const { response, payload } = await exchange(
+    "GET",
+    address.slice(API_ROOT.length),
+    {},
+    PNG,
+  );
+  const picture = payload as Blob;
+  if (
+    response.headers.get("Content-Type")?.split(";")[0]?.trim() !== PNG ||
+    picture.size === 0
+  ) {
+    throw new ApiError(200, null, "The answer was not a picture.", null);
+  }
+  return picture;
 }

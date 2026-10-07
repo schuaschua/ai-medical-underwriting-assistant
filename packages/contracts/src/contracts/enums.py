@@ -65,6 +65,15 @@ class DemoRole(StrEnum):
     UNDERWRITER = "underwriter"
 
 
+class QueuedBy(StrEnum):
+    """How a page came to wait in the triage queue (AD-7, AD-10)."""
+
+    # The gate was not sure of the page.
+    GATE = "gate"
+    # The gate was sure the page is not medical, and the customer kept it.
+    CUSTOMER = "customer"
+
+
 class PageType(StrEnum):
     LAB_REPORT = "lab_report"
     ATTENDING_PHYSICIAN_STATEMENT = "attending_physician_statement"

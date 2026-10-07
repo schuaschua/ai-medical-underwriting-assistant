@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ApiError, decidePage } from "../api/client";
+import { decidePage, mayBeStored } from "../api/client";
 import type {
   Classification,
   Decision,
@@ -14,17 +14,6 @@ type State =
   | { kind: "sending"; repeating: Decision | null }
   | { kind: "answered" }
   | { kind: "failed"; decision: Decision; error: unknown };
-
-/**
- * Whether a failed call may have stored the decision all the same: no answer
- * came, the server said the fault was its own, or it answered "done" with
- * something that was not the decision. Only a refusal (4xx) stored nothing.
- */
-function mayBeStored(error: unknown): boolean {
-  return (
-    !(error instanceof ApiError) || error.status < 400 || error.status >= 500
-  );
-}
 
 /** What the prompt says: the type and confidence the server gave, in plain words. */
 function promptText(classification: Classification | undefined): string {

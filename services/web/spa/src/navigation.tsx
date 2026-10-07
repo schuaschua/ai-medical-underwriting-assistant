@@ -3,6 +3,7 @@
 import type { ReactElement } from "react";
 import type { DemoRole } from "./api/contracts.gen";
 import { CustomerHome } from "./screens/CustomerHome";
+import { TriageQueue } from "./screens/TriageQueue";
 import { UnderwriterHome } from "./screens/UnderwriterHome";
 import { UploadDocument } from "./screens/UploadDocument";
 import { strings } from "./strings";
@@ -36,6 +37,11 @@ export const SCREENS: Record<DemoRole, readonly Screen[]> = {
       path: HOME_PATHS.underwriter,
       label: strings.navigation.home,
       element: <UnderwriterHome />,
+    },
+    {
+      path: `${HOME_PATHS.underwriter}/triage`,
+      label: strings.navigation.triage,
+      element: <TriageQueue />,
     },
   ],
 };

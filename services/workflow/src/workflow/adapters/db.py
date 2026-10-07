@@ -29,6 +29,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     event,
+    exists,
     insert,
     select,
     update,
@@ -53,17 +54,27 @@ from contracts.enums import (
 )
 from contracts.errors import ErrorCode
 from contracts.ids import new_id
-from contracts.models.workflow import AuditTrail, CaseProgress, PageProgress
+from contracts.models.workflow import (
+    AuditTrail,
+    CaseProgress,
+    PageProgress,
+    PageQueue,
+    QueuedPage,
+)
 from workflow.adapters.credential import azure_credential
 from workflow.adapters.telemetry import adapter_span
 from workflow.domain.case_status import case_status_after_gate, case_status_following
-from workflow.domain.decisions import case_takes_decisions
+from workflow.domain.decisions import (
+    CASE_STATUSES_TAKING_DECISIONS,
+    case_takes_decisions,
+)
 from workflow.domain.entities import (
     CaseRecord,
     PageDecision,
     SettledCase,
     StartParameters,
 )
+from workflow.domain.queue import queued_by
 from workflow.domain.recording import (
     Decided,
     DecisionOutcome,
@@ -935,6 +946,68 @@ class SqlCaseStore:
                 return AuditTrail(
                     case_id=case_id, events=[_audit_record(row) for row in events]
                 )
+
+    async def queue(self, status: PageStatus, limit: int) -> PageQueue:
+        """The pages across cases in `status` that a person can still decide, oldest waiting first."""
+        # AD-10: a page the customer kept has a `keep` decision of its own.
+        kept_by_customer = (
+            exists()
+            .where(
+                human_decision_table.c.page_id == page_status_table.c.page_id,
+                human_decision_table.c.decision == Decision.KEEP.value,
+            )
+            .label("kept_by_customer")
+        )
+        statement = (
+            select(
+                page_status_table.c.case_id,
+                page_status_table.c.page_id,
+                page_status_table.c.page_number,
+                case_status_table.c.classifier_contender,
+                kept_by_customer,
+            )
+            .join(
+                case_status_table,
+                case_status_table.c.case_id == page_status_table.c.case_id,
+            )
+            .where(
+                page_status_table.c.page_status == status.value,
+                # AD-17: nobody decides the pages of an eval run.
+                case_status_table.c.eval_run_id.is_(None),
+                # The rule of `case_takes_decisions`, in the statement: a
+                # page of a failed or completed case, or of a case told to
+                # stop after the gate, would be listed and then refused.
+                case_status_table.c.case_status.in_(
+                    _values(CASE_STATUSES_TAKING_DECISIONS)
+                ),
+                case_status_table.c.stop_after.is_distinct_from(StopAfter.GATE.value),
+            )
+            # A page's `updated_at` is when it got the status it waits in.
+            .order_by(
+                page_status_table.c.updated_at,
+                page_status_table.c.case_id,
+                page_status_table.c.page_number,
+            )
+            # One more than is listed: that one says more pages wait.
+            .limit(limit + 1)
+        )
+        with adapter_span(tracer, "workflow.db.read_page_queue"):
+            async with self._database.connect() as connection:
+                rows = (await connection.execute(statement)).all()
+        return PageQueue(
+            pages=[
+                QueuedPage(
+                    case_id=row.case_id,
+                    page_id=row.page_id,
+                    page_number=row.page_number,
+                    page_status=status,
+                    classifier_contender=ClassifierContender(row.classifier_contender),
+                    queued_by=queued_by(status, bool(row.kept_by_customer)),
+                )
+                for row in rows[:limit]
+            ],
+            has_more=len(rows) > limit,
+        )
 
 
 class SqlTrailGuard:

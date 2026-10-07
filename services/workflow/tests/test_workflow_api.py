@@ -275,13 +275,15 @@ def test_story_1_6_no_route_takes_a_stage_result_or_changes_the_audit_trail(
         for method in route.methods or ()
     )
 
-    # The whole surface: two probes, start, two reads, and the one decision
-    # operation (story 1.10, AD-10). Stage results come from the
-    # orchestration's activities, never over HTTP (AD-2).
+    # The whole surface: two probes, start, two reads, the one decision
+    # operation (story 1.10, AD-10) and the read of a queue (story 1.11).
+    # Stage results come from the orchestration's activities, never over
+    # HTTP (AD-2).
     assert routes == [
         ("GET", "/cases/{case_id}/audit"),
         ("GET", "/cases/{case_id}/progress"),
         ("GET", "/health"),
+        ("GET", "/pages"),
         ("GET", "/ready"),
         ("HEAD", "/health"),
         ("HEAD", "/ready"),

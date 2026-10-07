@@ -1,4 +1,4 @@
-"""The routes of `workflow`: the probes, the start of a case, its progress, its audit trail and decisions.
+"""The routes of `workflow`: the probes, the start of a case, its progress, its audit trail, decisions and the queues.
 
 Only `web` calls these, through Dapr (spine, Operations). Stage results are
 not posted here: the orchestration's activities record them (AD-2, AD-8).
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Protocol
 
-from fastapi import APIRouter, Body, Path, Request
+from fastapi import APIRouter, Body, Path, Query, Request
 
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
@@ -23,6 +23,8 @@ from contracts.models.workflow import (
     CaseStarted,
     DecisionRecorded,
     DecisionRequest,
+    PageQueue,
+    PageQueueQuery,
     StartCaseRequest,
 )
 from contracts.operations import get_operation
@@ -36,6 +38,7 @@ from workflow.domain.cases import (
 from workflow.domain.decisions import record_decision
 from workflow.domain.entities import StartParameters
 from workflow.domain.ports import CaseStore, LifecycleEngine
+from workflow.domain.queue import DEFAULT_PAGE_QUEUE_LIMIT, read_page_queue
 from workflow.settings import HEALTH_PATH, READY_PATH
 
 logger = logging.getLogger(__name__)
@@ -71,6 +74,8 @@ class Dependencies:
     head_revision: str
     # What a case is started with when the request leaves a field out.
     defaults: StartParameters
+    # How many pages one read of a queue lists at most.
+    page_queue_limit: int = DEFAULT_PAGE_QUEUE_LIMIT
     now: Callable[[], datetime] = field(default=utc_now)
 
 
@@ -154,6 +159,17 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             engine=dependencies.engine,
             trace_id=current_trace_id(request.headers.get("traceparent")),
             now=dependencies.now,
+        )
+
+    # The cross-case queue (spine, Operations): the pages that wait in the
+    # asked status. A missing or unknown status, or any other query
+    # parameter, is refused with 422 before anything is read.
+    @router.get(get_operation("list_pages_by_status").path)
+    async def page_queue_route(query: Annotated[PageQueueQuery, Query()]) -> PageQueue:
+        return await read_page_queue(
+            query.status,
+            store=dependencies.store,
+            limit=dependencies.page_queue_limit,
         )
 
     return router

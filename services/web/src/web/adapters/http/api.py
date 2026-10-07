@@ -1,28 +1,37 @@
-"""The `/api` routes: health, the role echo, the upload, the case's lifecycle and decisions.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, decisions and triage.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
 to `intake`, asks `workflow` to start the case, reads progress and the audit
 trail from `workflow` and the classifications from `classification`, and
 passes a person's decision about a page on to `workflow` with the request's
-demo role as the actor (AD-9, AD-10).
+demo role as the actor (AD-9, AD-10). The underwriter's triage queue is
+`workflow`'s queue joined with `classification`'s readings
+(`adapters/http/triage.py`).
 
 A route is added to `role_checked`, never to `router` itself, so that it
 cannot be reached without a valid `X-Demo-Role` (spine AD-9). A route for one
 role only adds `Depends(role_for(RouteGroup.<role>))` of its own.
 
 No route here returns a document file; the uploaded original is never served
-by any service (AD-21).
+by any service (AD-21). The one image served is a page's thumbnail, which
+`intake` makes from the redacted PDF.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Path, Request
+from fastapi import APIRouter, Body, Depends, Path, Request, Response
 
 from contracts.enums import DemoRole
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
 from contracts.models.classification import ClassificationList
-from contracts.models.web import Health, Me, PageDecisionRequest, UploadedCase
+from contracts.models.web import (
+    Health,
+    Me,
+    PageDecisionRequest,
+    TriageQueue,
+    UploadedCase,
+)
 from contracts.models.workflow import (
     AuditTrail,
     CaseProgress,
@@ -36,12 +45,17 @@ from contracts.upload import IDEMPOTENCY_KEY_HEADER, parse_idempotency_key
 from web.adapters.dapr import ServiceClient
 from web.adapters.http.errors import API_PREFIX
 from web.adapters.http.roles import role_for
+from web.adapters.http.triage import TriageReader
 from web.adapters.http.upload import checked_pdf, declared_length
 from web.domain.roles import RouteGroup
 from web.settings import HEALTH_PATH
 
 # Where the app factory keeps the client for calls to other services.
 SERVICES_STATE = "services"
+# Where it keeps the reader of the triage queue.
+TRIAGE_STATE = "triage"
+# The underwriter's queue. It is `web`'s own resource: no one service owns it.
+TRIAGE_PATH = "/triage"
 
 any_role = role_for(RouteGroup.ANY_ROLE)
 customer_only = role_for(RouteGroup.CUSTOMER)
@@ -57,6 +71,11 @@ PageIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 def _services(request: Request) -> ServiceClient:
     services: ServiceClient = getattr(request.app.state, SERVICES_STATE)
     return services
+
+
+def _triage(request: Request) -> TriageReader:
+    triage: TriageReader = getattr(request.app.state, TRIAGE_STATE)
+    return triage
 
 
 # Every route here is refused with 400 without a demo role.
@@ -160,6 +179,29 @@ async def record_decision(
         page_id,
         DecisionRequest(decision=decision.decision, actor=role.value),
         traceparent=request.headers.get("traceparent"),
+    )
+
+
+# The pages that wait for the underwriter, across cases, each with what the
+# classifier read on it. For the underwriter only (AD-9). Which pages are
+# listed, and in what order, is `workflow`'s to say; the decision about one
+# goes through the decision route above.
+@role_checked.get(TRIAGE_PATH)
+async def read_triage_queue(
+    request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
+) -> TriageQueue:
+    return await _triage(request).read(traceparent=request.headers.get("traceparent"))
+
+
+# A page's thumbnail, for either role: the picture `intake` made of the
+# redacted page (AD-21). The same resource path as on the owning service.
+@role_checked.get(get_operation("read_page_thumbnail").path)
+async def read_page_thumbnail(page_id: PageIdPath, request: Request) -> Response:
+    content = await _services(request).read_page_thumbnail(
+        page_id, traceparent=request.headers.get("traceparent")
+    )
+    return Response(
+        content, media_type=get_operation("read_page_thumbnail").response_media_type
     )
 
 

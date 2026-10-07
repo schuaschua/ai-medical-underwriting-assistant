@@ -31,8 +31,9 @@ holds the ruff, mypy and pytest settings for every member.
   and a reason (database schema `classification`); its prompt is in
   `services/classification/src/classification/prompts/`. `web` calls `intake` and `workflow` through
   its Dapr sidecar: it asks `intake` to create a case from an upload, then asks `workflow` to start
-  it. It passes a person's decision about a page on to `workflow`, and reads the classifications from
-  `classification`. `workflow` commands `intake` and `classification`, and `classification` reads
+  it. It passes a person's decision about a page on to `workflow`, reads the classifications from
+  `classification`, and composes the underwriter's triage queue from `workflow`'s queue and those
+  classifications; a page's thumbnail it reads from `intake`. `workflow` commands `intake` and `classification`, and `classification` reads
   each page from `intake`. No service imports another service's code.
 
 ### Install and check
@@ -166,9 +167,41 @@ The customer sees the same message whether or not the answer was saved: after a 
 answer, or a fault of the server, the answer may be stored, so only the same answer can be sent again
 ("Try again"), also once the page shows a new status. After a refusal nothing was saved, and both
 answers are offered again. To see it locally, upload
-`data/cases/case-002.pdf`: three of its pages go back to the customer. The underwriter's screen for
-accept and deny comes with the triage queue (story 1.11); until then those two decisions can be sent
-through the API.
+`data/cases/case-002.pdf`: three of its pages go back to the customer.
+
+**The triage queue (story 1.11).** `GET /pages?status=<status>` on `workflow` is the queue across
+cases: the pages in that status, the one that has waited longest first. The status must be one a
+page waits for a person in (`awaiting_triage` or `awaiting_customer`); a missing or unknown status,
+or any other, is refused with `validation_failed` (422). Left out are the pages of a case that
+belongs to an eval run, and of a case that takes no decision (failed, completed, or started with
+`stop_after: gate`), so nothing is listed that would be refused. Each page names the classifier its
+case runs with and, in triage, how it got there (`queued_by`: `gate`, or `customer` for a page the
+customer kept). One read lists at most `WORKFLOW_PAGE_QUEUE_LIMIT` pages (default 100) and says with
+`has_more` when more wait.
+
+`web` serves the underwriter's queue at `GET /api/triage` (the customer role is refused with
+`role_not_allowed`). It reads the triage queue from `workflow` and, once per case with a waiting
+page, the classifications from `classification` (at most `WEB_TRIAGE_MAX_CONCURRENT_READS` at a
+time, default 8, all within `WEB_LIFECYCLE_TIMEOUT_SECONDS`), and joins them into one payload per
+page: case, page, page number, `thumbnail_path`, and the `page_type`, `is_medical`, `confidence` and
+`reason` of the classifier the case runs with. A page whose classification cannot be read is listed
+without those four and can still be decided. `web` holds no rule about the queue and keeps nothing.
+`GET /api/pages/<page_id>/thumbnail` serves, to either role, the PNG `intake` made of the redacted
+page; no route serves anything of an original.
+
+The underwriter's "Triage queue" screen lists those pages in the server's order, each with its
+thumbnail, the predicted type in plain words, the confidence as a percentage, the reason (shown as
+text) and how the page got there, with Accept and Deny. It reads the queue again every few seconds,
+and at once after a decision; an empty queue says "Nothing is waiting." A decision goes through the
+decision route above, as the underwriter. A failure is shown on the row: after a refusal both
+buttons are offered again, and after a call that may have been stored only "Try again", which sends
+the same decision, and whose row stays until that call succeeds even if the server no longer lists
+the page. A page that was decided in another tab (`not_awaiting_decision`) gets a plain note and
+leaves at the next read. The thumbnail is read by the API client, with the role header every call
+carries, and drawn on a canvas: an image element could not send the header, and the content security
+policy allows no `blob:` or `data:` picture. To see it locally, run
+`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`, upload `data/cases/case-002.pdf` as the customer and
+keep a page, then switch to the underwriter.
 The progress of a case, and of a page, also carries the error code of the stage that failed, if one
 did (`error_code`); the screen does not show it yet.
 
@@ -226,7 +259,7 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | `web`'s Dapr sidecar | `http://localhost:3500` |
 | `intake` (`/health`, `/ready`, `POST /cases`, `POST /cases/<case_id>/redaction`, `GET /cases/<case_id>/pages`, `GET /pages/<page_id>/text`, `/boxes` and `/thumbnail`, `GET /documents/<document_id>/file`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
 | Stand-in for Azure AI Language (this machine only) | `http://localhost:5100` |
-| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`, `POST /cases/<case_id>/pages/<page_id>/decisions`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
+| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`, `POST /cases/<case_id>/pages/<page_id>/decisions`, `GET /pages?status=<status>`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
 | `classification` (`/health`, `/ready`, `POST /classifications`, `GET /cases/<case_id>/classifications`), and its Dapr sidecar | `http://localhost:8003`, `http://localhost:3503` |
 | Stand-in for the Foundry chat deployment (this machine only) | `http://localhost:5101` |
 | PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |

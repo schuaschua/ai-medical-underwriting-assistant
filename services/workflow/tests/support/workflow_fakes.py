@@ -23,11 +23,18 @@ from contracts.models.classification import ClassificationResult
 from contracts.models.extraction import FactSetResult
 from contracts.models.intake import RedactionResult
 from contracts.models.verdict import VerdictRunResult
-from contracts.models.workflow import AuditTrail, CaseProgress, PageProgress
+from contracts.models.workflow import (
+    AuditTrail,
+    CaseProgress,
+    PageProgress,
+    PageQueue,
+    QueuedPage,
+)
 from workflow.domain.case_status import case_status_after_gate, case_status_following
 from workflow.domain.decisions import case_takes_decisions
 from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
 from workflow.domain.ports import EngineState
+from workflow.domain.queue import queued_by
 from workflow.domain.recording import (
     Decided,
     DecisionOutcome,
@@ -57,6 +64,8 @@ class MemoryPage:
     case_id: str
     page_number: int
     page_status: PageStatus
+    # When the page got the status it has.
+    updated_at: datetime = OCCURRED_AT
 
 
 @dataclass
@@ -126,9 +135,10 @@ class MemoryCaseStore:
             raise StoreDown
         if change is not None:
             self.pages[change.page_id].page_status = change.page_status
+            self.pages[change.page_id].updated_at = recorded_at
         for new_page in recording.new_pages:
             self.pages[new_page.page_id] = MemoryPage(
-                audit.case_id, new_page.page_number, PageStatus.UPLOADED
+                audit.case_id, new_page.page_number, PageStatus.UPLOADED, recorded_at
             )
         if recording.case_status is not None:
             case = replace(case, case_status=recording.case_status)
@@ -199,6 +209,7 @@ class MemoryCaseStore:
             # Nothing above has been applied yet, as after a rollback.
             raise StoreDown
         page.page_status = change.page_status
+        page.updated_at = recorded_at
         self.decisions.append(wanted)
         self._follow_pages(audit.case_id, at_the_gate=False)
         # The event takes the eval run of its case, as the real store sets it.
@@ -268,6 +279,41 @@ class MemoryCaseStore:
         return AuditTrail(
             case_id=case_id,
             events=[event[3] for event in sorted(events, key=lambda e: e[:3])],
+        )
+
+    async def queue(self, status: PageStatus, limit: int) -> PageQueue:
+        if self.fail:
+            raise StoreDown
+        kept = {
+            decision.page_id
+            for decision in self.decisions
+            if decision.decision is Decision.KEEP
+        }
+        waiting = sorted(
+            (page.updated_at, page.case_id, page.page_number, page_id)
+            for page_id, page in self.pages.items()
+            if page.page_status is status
+            and self.cases[page.case_id].parameters.eval_run_id is None
+            and case_takes_decisions(
+                self.cases[page.case_id].case_status,
+                self.cases[page.case_id].parameters.stop_after,
+            )
+        )
+        return PageQueue(
+            pages=[
+                QueuedPage(
+                    case_id=case_id,
+                    page_id=page_id,
+                    page_number=page_number,
+                    page_status=status,
+                    classifier_contender=self.cases[
+                        case_id
+                    ].parameters.classifier_contender,
+                    queued_by=queued_by(status, page_id in kept),
+                )
+                for _, case_id, page_number, page_id in waiting[:limit]
+            ],
+            has_more=len(waiting) > limit,
         )
 
 

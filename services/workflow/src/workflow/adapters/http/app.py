@@ -155,6 +155,7 @@ def create_app(
             trail_guard=SqlTrailGuard(database),
             head_revision=bundled_head(),
             defaults=default_parameters(settings),
+            page_queue_limit=settings.page_queue_limit,
         )
     wired = dependencies
 

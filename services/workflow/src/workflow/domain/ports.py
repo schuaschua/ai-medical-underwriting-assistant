@@ -9,7 +9,7 @@ from contracts.audit import RouteDetail
 from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
 from contracts.models.classification import ClassificationResult
 from contracts.models.intake import RedactionResult
-from contracts.models.workflow import AuditTrail, CaseProgress
+from contracts.models.workflow import AuditTrail, CaseProgress, PageQueue
 from workflow.domain.entities import CaseRecord, SettledCase
 from workflow.domain.recording import Decided, Recording, RecordOutcome
 
@@ -79,6 +79,17 @@ class CaseStore(Protocol):
 
     async def audit_trail(self, case_id: str) -> AuditTrail | None:
         """The case's audit events in time order, or None if the case is unknown."""
+        ...
+
+    async def queue(self, status: PageStatus, limit: int) -> PageQueue:
+        """The pages across cases in `status`, oldest waiting first, at most `limit` of them.
+
+        Left out: every page of a case that belongs to an eval run, and every
+        page of a case that takes no decision (`domain/decisions.py`: failed,
+        completed, or told to stop after the gate). `has_more` says that more
+        such pages wait than are listed. Each page says how it came to wait
+        (`domain/queue.py`).
+        """
         ...
 
 

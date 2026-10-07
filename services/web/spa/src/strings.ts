@@ -5,6 +5,7 @@ import type {
   ErrorCode,
   PageStatus,
   PageType,
+  QueuedBy,
 } from "./api/contracts.gen";
 
 /** The largest upload, in MB, as the wording states it. The server enforces it. */
@@ -43,12 +44,14 @@ export const strings = {
     label: "Screens",
     home: "Home",
     upload: "Upload a document",
+    triage: "Triage queue",
   },
   home: {
     customerHeading: "Customer home",
     customerIntro: "Use “Upload a document” to send us a PDF.",
     underwriterHeading: "Underwriter home",
-    underwriterIntro: "The triage queue will be available here.",
+    underwriterIntro:
+      "Use “Triage queue” to accept or deny the pages that are waiting.",
     checking: "Checking with the server…",
     confirmed: (role: string) => `The server sees you as: ${role}.`,
   },
@@ -128,6 +131,51 @@ export const strings = {
     tryAgain: "Try again",
     tryAgainFor: (pageNumber: number) =>
       `Try again to save your answer for page ${pageNumber}`,
+  },
+  triage: {
+    heading: "Triage queue",
+    intro:
+      "Pages the classifier was not sure of, and pages a customer kept. Accept a page to have it read, or deny it.",
+    reading: "Reading the queue…",
+    empty: "Nothing is waiting.",
+    more: "More pages are waiting than are shown here. They appear as these are decided.",
+    // A read failed after the queue was shown: what is shown may be out of date.
+    stale:
+      "The queue could not be read again. What is shown may be out of date.",
+    checkAgain: "Check again",
+    tableLabel: "Pages waiting for a decision",
+    thumbnailColumn: "Page",
+    caseColumn: "Case",
+    readingColumn: "What the classifier said",
+    decisionColumn: "Decision",
+    pageOf: (pageNumber: number) => `Page ${pageNumber}`,
+    thumbnailOf: (pageNumber: number, caseId: string) =>
+      `Thumbnail of page ${pageNumber} of case ${caseId}`,
+    thumbnailLoading: "Loading the picture…",
+    thumbnailUnavailable: "The picture could not be shown.",
+    looksLike: (pageType: string, confidence: string) =>
+      `Looks like ${pageType} (${confidence}).`,
+    reasonLabel: "Reason:",
+    noReading: "What the classifier said of this page could not be read.",
+    queuedBy: {
+      gate: "Here because the classifier was not sure.",
+      customer: "Here because the customer kept it.",
+    } satisfies Record<QueuedBy, string>,
+    decisionFor: (pageNumber: number, caseId: string) =>
+      `Decision for page ${pageNumber} of case ${caseId}`,
+    accept: "Accept",
+    acceptFor: (pageNumber: number, caseId: string) =>
+      `Accept page ${pageNumber} of case ${caseId}`,
+    deny: "Deny",
+    denyFor: (pageNumber: number, caseId: string) =>
+      `Deny page ${pageNumber} of case ${caseId}`,
+    sending: "Saving your decision…",
+    saved: "Your decision was saved.",
+    decidedElsewhere:
+      "This page was already decided. It will leave the queue shortly.",
+    tryAgain: "Try again",
+    tryAgainFor: (pageNumber: number, caseId: string) =>
+      `Try again to save your decision for page ${pageNumber} of case ${caseId}`,
   },
   notFound: {
     heading: "Page not found",

@@ -91,11 +91,52 @@ export function decisionRecorded(
     page_id: pageId,
     decision,
     actor: role,
-    page_status: decision === "keep" ? "awaiting_triage" : "discarded",
+    page_status:
+      {
+        keep: "awaiting_triage",
+        accept: "extracting",
+        deny: "denied",
+      }[decision] ?? "discarded",
     occurred_at: "2026-10-07T09:00:00Z",
   };
 }
 
+/** One page of the triage queue, as `web` lists it for the page of that number. */
+export function triagePage(
+  caseId: string,
+  pageNumber: number,
+  reading: { pageType: string; confidence: number; reason?: string } | null = {
+    pageType: "lab_report",
+    confidence: 0.6,
+  },
+  queuedBy: string | null = "gate",
+) {
+  const pageId = `${caseId.slice(0, -4)}${String(pageNumber).padStart(4, "0")}`;
+  return {
+    case_id: caseId,
+    page_id: pageId,
+    page_number: pageNumber,
+    thumbnail_path: `/api/pages/${pageId}/thumbnail`,
+    page_type: reading?.pageType ?? null,
+    is_medical:
+      reading === null
+        ? null
+        : !["id_document", "invoice", "other"].includes(reading.pageType),
+    confidence: reading?.confidence ?? null,
+    reason: reading === null ? null : (reading.reason ?? "A synthetic reason."),
+    queued_by: queuedBy,
+  };
+}
+
+/** A thumbnail as `web` serves it. The bytes are no picture and need not be. */
+export function thumbnail(): Response {
+  return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
+    status: 200,
+    headers: { "Content-Type": "image/png" },
+  });
+}
+
+const THUMBNAIL_ROUTE = /^\/api\/pages\/[^/]+\/thumbnail$/;
 const CASE_ROUTE = /^\/api\/cases\/([^/]+)\/(start|progress|classifications)$/;
 const DECISION_ROUTE = /^\/api\/cases\/([^/]+)\/pages\/([^/]+)\/decisions$/;
 
@@ -187,6 +228,20 @@ export function fakeServer(
       }
       if (caseId !== undefined && resource === "classifications") {
         return json(200, { case_id: caseId, classifications: [] });
+      }
+      if (call.path === "/api/triage") {
+        return call.role === "underwriter"
+          ? json(200, { pages: [], has_more: false })
+          : json(
+              403,
+              errorBody(
+                "role_not_allowed",
+                "This action is not open to your role.",
+              ),
+            );
+      }
+      if (THUMBNAIL_ROUTE.test(call.path)) {
+        return thumbnail();
       }
       const [, decidedCase, decidedPage] = DECISION_ROUTE.exec(call.path) ?? [];
       if (

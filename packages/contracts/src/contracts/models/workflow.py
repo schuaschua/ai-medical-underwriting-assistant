@@ -12,6 +12,7 @@ from contracts.enums import (
     Decision,
     DemoRole,
     PageStatus,
+    QueuedBy,
     RetrieverConfig,
     StageStatus,
     StopAfter,
@@ -138,9 +139,20 @@ class QueuedPage(ContractModel):
     page_id: PageId
     page_number: PageNumber
     page_status: PageStatus
+    # What the case was started with: the classifier whose reading the gate used.
+    classifier_contender: ClassifierContender
+    # For a page that waits for triage: how it got there. Null in any other queue.
+    queued_by: QueuedBy | None = None
 
 
 class PageQueue(ContractModel):
-    """Response of `GET /pages?status=`: pages across cases, eval-run cases left out."""
+    """Response of `GET /pages?status=`: the pages across cases that wait in that status.
+
+    Oldest waiting first. Pages of a case that belongs to an eval run, that is
+    failed or completed, or that was started with `stop_after: gate` are left
+    out. The answer is bounded: `has_more` says that more pages wait than are
+    listed.
+    """
 
     pages: list[QueuedPage]
+    has_more: bool

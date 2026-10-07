@@ -700,6 +700,11 @@ def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
         # decision about one. Neither returns a file.
         ("GET", "/api/cases/{case_id}/classifications"),
         ("POST", "/api/cases/{case_id}/pages/{page_id}/decisions"),
+        # Story 1.11: the underwriter's queue, and the thumbnail `intake`
+        # made of a redacted page. The one picture served is of the redacted
+        # page; still nothing returns a document or anything of an original.
+        ("GET", "/api/triage"),
+        ("GET", "/api/pages/{page_id}/thumbnail"),
     }
 
 

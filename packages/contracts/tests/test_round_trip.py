@@ -48,6 +48,25 @@ REDACTION_AUDIT = audit(
 )
 ROUTE_DETAIL = {"route": "awaiting_triage", "threshold": 0.9}
 ROUTE_AUDIT = audit("page.routed", actor="workflow:gate", detail=ROUTE_DETAIL)
+QUEUED_PAGE = {
+    "case_id": CASE,
+    "page_id": PAGE,
+    "page_number": 3,
+    "page_status": "awaiting_triage",
+    "classifier_contender": "llm",
+    "queued_by": "gate",
+}
+TRIAGE_PAGE = {
+    "case_id": CASE,
+    "page_id": PAGE,
+    "page_number": 3,
+    "thumbnail_path": f"/api/pages/{PAGE}/thumbnail",
+    "page_type": "lab_report",
+    "is_medical": True,
+    "confidence": 0.6,
+    "reason": "Lists laboratory values with reference ranges.",
+    "queued_by": "gate",
+}
 CLASSIFICATION = {
     "classification_id": REF,
     "case_id": CASE,
@@ -242,21 +261,26 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "events": [REDACTION_AUDIT, audit("page.classified"), ROUTE_AUDIT],
     },
     "PageQueueQuery": {"status": "awaiting_triage"},
-    "QueuedPage": {
-        "case_id": CASE,
-        "page_id": PAGE,
-        "page_number": 3,
-        "page_status": "awaiting_triage",
-    },
+    "QueuedPage": QUEUED_PAGE,
     "PageQueue": {
+        "pages": [QUEUED_PAGE, {**QUEUED_PAGE, "queued_by": "customer"}],
+        "has_more": False,
+    },
+    "TriagePage": TRIAGE_PAGE,
+    "TriageQueue": {
         "pages": [
+            TRIAGE_PAGE,
+            # A page whose classification could not be read.
             {
-                "case_id": CASE,
-                "page_id": PAGE,
-                "page_number": 3,
-                "page_status": "awaiting_triage",
-            }
-        ]
+                **TRIAGE_PAGE,
+                "page_type": None,
+                "is_medical": None,
+                "confidence": None,
+                "reason": None,
+                "queued_by": None,
+            },
+        ],
+        "has_more": True,
     },
     "ClassifierOutput": {"page_type": "invoice", "reason": "Shows an amount due."},
     "ClassifyCommand": {

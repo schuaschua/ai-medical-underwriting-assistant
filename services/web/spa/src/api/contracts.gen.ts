@@ -86,6 +86,10 @@ export type Decision = "keep" | "discard" | "accept" | "deny";
  */
 export type DemoRole = "customer" | "underwriter";
 export type HttpMethod = "GET" | "POST";
+/**
+ * How a page came to wait in the triage queue (AD-7, AD-10).
+ */
+export type QueuedBy = "gate" | "customer";
 export type ReasonEffect = "none" | "debit" | "decline";
 /**
  * The seven services, by Dapr app id (AD-1).
@@ -156,6 +160,7 @@ export interface Contracts {
   PageStatus: PageStatus;
   PageText: PageText;
   PageType: PageType;
+  QueuedBy: QueuedBy;
   QueuedPage: QueuedPage;
   ReadRuleArguments: ReadRuleArguments;
   Reason: Reason;
@@ -176,6 +181,8 @@ export interface Contracts {
   StopAfter: StopAfter;
   SystemReason: SystemReason;
   ToolName: ToolName;
+  TriagePage: TriagePage;
+  TriageQueue: TriageQueue;
   UploadedCase: UploadedCase;
   Verdict: Verdict;
   VerdictOutput: VerdictOutput;
@@ -479,16 +486,24 @@ export interface PageList {
   pages: Page[];
 }
 /**
- * Response of `GET /pages?status=`: pages across cases, eval-run cases left out.
+ * Response of `GET /pages?status=`: the pages across cases that wait in that status.
+ *
+ * Oldest waiting first. Pages of a case that belongs to an eval run, that is
+ * failed or completed, or that was started with `stop_after: gate` are left
+ * out. The answer is bounded: `has_more` says that more pages wait than are
+ * listed.
  */
 export interface PageQueue {
+  has_more: boolean;
   pages: QueuedPage[];
 }
 export interface QueuedPage {
   case_id: string;
+  classifier_contender: ClassifierContender;
   page_id: string;
   page_number: number;
   page_status: PageStatus;
+  queued_by?: QueuedBy | null;
 }
 /**
  * Query of `GET /pages?status=`.
@@ -597,6 +612,32 @@ export interface StartCaseRequest {
   eval_run_id?: string | null;
   retriever_configs?: [RetrieverConfig, ...RetrieverConfig[]] | null;
   stop_after?: StopAfter | null;
+}
+/**
+ * One page that waits for the underwriter, with what the classifier said of it.
+ *
+ * `web` composes it: the page from `workflow`'s queue, the reading from
+ * `classification`, for the classifier the case was started with. The four
+ * fields of the reading are null together when it could not be read; the
+ * page can be decided all the same.
+ */
+export interface TriagePage {
+  case_id: string;
+  confidence: number | null;
+  is_medical: boolean | null;
+  page_id: string;
+  page_number: number;
+  page_type: PageType | null;
+  queued_by?: QueuedBy | null;
+  reason: string | null;
+  thumbnail_path: string;
+}
+/**
+ * Response of `GET /api/triage`: the pages that wait for the underwriter, oldest first.
+ */
+export interface TriageQueue {
+  has_more: boolean;
+  pages: TriagePage[];
 }
 /**
  * Response of `POST /api/cases`: the case `intake` created.

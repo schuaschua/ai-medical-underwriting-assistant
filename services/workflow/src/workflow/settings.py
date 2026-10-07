@@ -14,6 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from contracts.enums import ClassifierContender, RetrieverConfig
 from workflow.domain.gate import DEFAULT_GATE_THRESHOLD
+from workflow.domain.queue import DEFAULT_PAGE_QUEUE_LIMIT
 
 # The Dapr app id; also the service name telemetry is reported under, and the
 # name of the one database schema the service owns (spine AD-4).
@@ -122,6 +123,10 @@ class Settings(BaseSettings):
     # confirms it and keeps it in its history: a change applies to cases
     # started after it, and a case in flight goes on with the value it has.
     gate_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = DEFAULT_GATE_THRESHOLD
+
+    # How many pages one read of a queue (`GET /pages?status=`) lists at most.
+    # When more wait, the answer says so and the rest follow as pages are decided.
+    page_queue_limit: Annotated[int, Field(ge=1, le=1000)] = DEFAULT_PAGE_QUEUE_LIMIT
 
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.

@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     # This one bounds the whole call to `workflow`, from request to answer, so
     # the browser shows the server's answer, not its own timeout.
     lifecycle_timeout_seconds: Annotated[float, Field(gt=0)] = 20.0
+    # The triage queue is composed from one read of `workflow` and one read of
+    # `classification` per case that has a waiting page. At most this many of
+    # those reads are under way at once; the whole composition has the
+    # deadline above, and a reading not in hand by then is left out.
+    triage_max_concurrent_reads: Annotated[int, Field(ge=1, le=64)] = 8
+
     # Upload deadlines, shortest first, so each caller outlasts the one it calls:
     #   intake 90 s (INTAKE_UPLOAD_DEADLINE_SECONDS)  <  web 120 s (this setting)
     #   <  browser 150 s (UPLOAD_TIMEOUT_MS in the SPA's api/client.ts).

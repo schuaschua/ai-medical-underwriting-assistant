@@ -1225,8 +1225,12 @@
     },
     "PageQueue": {
       "additionalProperties": false,
-      "description": "Response of `GET /pages?status=`: pages across cases, eval-run cases left out.",
+      "description": "Response of `GET /pages?status=`: the pages across cases that wait in that status.\n\nOldest waiting first. Pages of a case that belongs to an eval run, that is\nfailed or completed, or that was started with `stop_after: gate` are left\nout. The answer is bounded: `has_more` says that more pages wait than are\nlisted.",
       "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
         "pages": {
           "items": {
             "$ref": "#/$defs/QueuedPage"
@@ -1236,7 +1240,8 @@
         }
       },
       "required": [
-        "pages"
+        "pages",
+        "has_more"
       ],
       "title": "PageQueue",
       "type": "object"
@@ -1309,6 +1314,15 @@
       "title": "PageType",
       "type": "string"
     },
+    "QueuedBy": {
+      "description": "How a page came to wait in the triage queue (AD-7, AD-10).",
+      "enum": [
+        "gate",
+        "customer"
+      ],
+      "title": "QueuedBy",
+      "type": "string"
+    },
     "QueuedPage": {
       "additionalProperties": false,
       "properties": {
@@ -1316,6 +1330,9 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "title": "Case Id",
           "type": "string"
+        },
+        "classifier_contender": {
+          "$ref": "#/$defs/ClassifierContender"
         },
         "page_id": {
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -1329,13 +1346,25 @@
         },
         "page_status": {
           "$ref": "#/$defs/PageStatus"
+        },
+        "queued_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueuedBy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
         "case_id",
         "page_id",
         "page_number",
-        "page_status"
+        "page_status",
+        "classifier_contender"
       ],
       "title": "QueuedPage",
       "type": "object"
@@ -1833,6 +1862,124 @@
       ],
       "title": "ToolName",
       "type": "string"
+    },
+    "TriagePage": {
+      "additionalProperties": false,
+      "description": "One page that waits for the underwriter, with what the classifier said of it.\n\n`web` composes it: the page from `workflow`'s queue, the reading from\n`classification`, for the classifier the case was started with. The four\nfields of the reading are null together when it could not be read; the\npage can be decided all the same.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Confidence"
+        },
+        "is_medical": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Is Medical"
+        },
+        "page_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "page_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "queued_by": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueuedBy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reason"
+        },
+        "thumbnail_path": {
+          "pattern": "\\S",
+          "title": "Thumbnail Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "page_id",
+        "page_number",
+        "thumbnail_path",
+        "page_type",
+        "is_medical",
+        "confidence",
+        "reason"
+      ],
+      "title": "TriagePage",
+      "type": "object"
+    },
+    "TriageQueue": {
+      "additionalProperties": false,
+      "description": "Response of `GET /api/triage`: the pages that wait for the underwriter, oldest first.",
+      "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
+        "pages": {
+          "items": {
+            "$ref": "#/$defs/TriagePage"
+          },
+          "title": "Pages",
+          "type": "array"
+        }
+      },
+      "required": [
+        "pages",
+        "has_more"
+      ],
+      "title": "TriageQueue",
+      "type": "object"
     },
     "UploadedCase": {
       "additionalProperties": false,

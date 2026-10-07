@@ -13,7 +13,7 @@ from opentelemetry import propagate
 from pydantic import ValidationError
 
 from contracts.base import ContractModel
-from contracts.enums import Service
+from contracts.enums import PageStatus, Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
 from contracts.models.classification import ClassificationList
 from contracts.models.intake import CaseCreated
@@ -23,6 +23,8 @@ from contracts.models.workflow import (
     CaseStarted,
     DecisionRecorded,
     DecisionRequest,
+    PageQueue,
+    PageQueueQuery,
     StartCaseRequest,
 )
 from contracts.operations import Operation, get_operation
@@ -65,6 +67,11 @@ _DECISION_REFUSALS = frozenset(
         ErrorCode.NOT_AWAITING_DECISION,
     }
 )
+# The queue is asked for with a status `web` itself names, so no refusal of
+# it is the user's: whatever `workflow` refuses is this service's fault.
+_NO_REFUSAL: frozenset[ErrorCode] = frozenset()
+# What `intake` may say about a page's thumbnail: it holds no such page.
+_UNKNOWN_PAGE = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
 
 
 def sidecar_base_url(settings: Settings) -> str:
@@ -254,6 +261,36 @@ class ServiceClient:
             body=decision.model_dump(mode="json"),
         )
 
+    async def list_pages_by_status(
+        self, status: PageStatus, *, traceparent: str | None
+    ) -> PageQueue:
+        """`GET /pages?status=` on `workflow`: the pages across cases that wait in that status."""
+        return await self._call(
+            get_operation("list_pages_by_status"),
+            {},
+            PageQueue,
+            passed_on=_NO_REFUSAL,
+            traceparent=traceparent,
+            query=PageQueueQuery(status=status).model_dump(mode="json"),
+        )
+
+    async def read_page_thumbnail(
+        self, page_id: str, *, traceparent: str | None
+    ) -> bytes:
+        """`GET /pages/{page_id}/thumbnail` on `intake`: the redacted page as a PNG."""
+        operation = get_operation("read_page_thumbnail")
+        response = await self._send(
+            operation,
+            {"page_id": page_id},
+            passed_on=_UNKNOWN_PAGE,
+            traceparent=traceparent,
+        )
+        media_type = response.headers.get("content-type", "").split(";")[0].strip()
+        if media_type != operation.response_media_type or not response.content:
+            # Whatever this is, it is not handed to a browser as an image.
+            raise self._invalid_body(operation, response)
+        return response.content
+
     async def _call[T: ContractModel](
         self,
         operation: Operation,
@@ -263,8 +300,33 @@ class ServiceClient:
         passed_on: frozenset[ErrorCode],
         traceparent: str | None,
         body: dict[str, object] | None = None,
+        query: dict[str, str] | None = None,
     ) -> T:
         """One JSON operation of another service, answered with its contract model."""
+        response = await self._send(
+            operation,
+            path_parameters,
+            passed_on=passed_on,
+            traceparent=traceparent,
+            body=body,
+            query=query,
+        )
+        try:
+            return answer.model_validate_json(response.content)
+        except ValidationError:
+            raise self._invalid_body(operation, response) from None
+
+    async def _send(
+        self,
+        operation: Operation,
+        path_parameters: dict[str, str],
+        *,
+        passed_on: frozenset[ErrorCode],
+        traceparent: str | None,
+        body: dict[str, object] | None = None,
+        query: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """One operation of another service: its successful answer, or the error to raise."""
         try:
             # One deadline for the whole call, shorter than the browser's:
             #   workflow's scheduler call 10 s  <  web 20 s
@@ -279,6 +341,7 @@ class ServiceClient:
                         operation.owner, operation.path.format(**path_parameters)
                     ),
                     json=body,
+                    params=query,
                     headers=trace_headers(traceparent),
                     timeout=self._lifecycle_timeout,
                 )
@@ -292,20 +355,21 @@ class ServiceClient:
             )
             raise _unavailable() from error
         if response.is_success:
-            try:
-                return answer.model_validate_json(response.content)
-            except ValidationError:
-                logger.error(
-                    "service call failed: service=%s operation=%s status=%d "
-                    "code=invalid_body",
-                    operation.owner.value,
-                    operation.name,
-                    response.status_code,
-                )
-                raise _unavailable() from None
+            return response
         raise self._refusal(
             response, operation.owner, operation.name, passed_on, "request"
         )
+
+    @staticmethod
+    def _invalid_body(operation: Operation, response: httpx.Response) -> DomainError:
+        """A success that does not carry what the operation answers with: the service's fault."""
+        logger.error(
+            "service call failed: service=%s operation=%s status=%d code=invalid_body",
+            operation.owner.value,
+            operation.name,
+            response.status_code,
+        )
+        return _unavailable()
 
     @staticmethod
     def _refusal(
