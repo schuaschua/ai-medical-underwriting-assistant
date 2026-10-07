@@ -13,6 +13,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from contracts.enums import ClassifierContender, RetrieverConfig
+from workflow.domain.gate import DEFAULT_GATE_THRESHOLD
 
 # The Dapr app id; also the service name telemetry is reported under, and the
 # name of the one database schema the service owns (spine AD-4).
@@ -113,6 +114,14 @@ class Settings(BaseSettings):
     default_retriever_configs: Annotated[list[RetrieverConfig], Field(min_length=1)] = [
         RetrieverConfig.R3
     ]
+
+    # AD-7: the gate's threshold. A page classified with this confidence or
+    # more is sent on by its label; one below it goes to triage. It is used
+    # only by `workflow`'s gate and is never sent to another service, the SPA
+    # or a prompt. A case takes the value in force when its lifecycle
+    # confirms it and keeps it in its history: a change applies to cases
+    # started after it, and a case in flight goes on with the value it has.
+    gate_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = DEFAULT_GATE_THRESHOLD
 
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.

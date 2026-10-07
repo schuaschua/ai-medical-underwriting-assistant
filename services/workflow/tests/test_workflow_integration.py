@@ -246,10 +246,13 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     scheduler_client: DurableTaskSchedulerClient,
 ) -> None:
     case_id = new_id()
-    first = service.post(f"/cases/{case_id}/start", json={"stop_after": "gate"})
+    # Started with nothing asked for: every page of the stand-in's case goes
+    # on to extraction, so the case is `running` before, while and after its
+    # lifecycle runs (story 1.9), and each answer below can be compared whole.
+    first = service.post(f"/cases/{case_id}/start")
     # Once more straight away, and again after the orchestration has ended:
     # without the guard the scheduler would put a new run in a finished one's place.
-    again_at_once = service.post(f"/cases/{case_id}/start", json={"stop_after": "gate"})
+    again_at_once = service.post(f"/cases/{case_id}/start")
     before = completed(scheduler_client, case_id)
     rows_before = query(
         service_settings, "SELECT * FROM workflow.case_status ORDER BY case_id"
@@ -260,6 +263,8 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     for response in (first, again_at_once, again_later):
         assert response.status_code == 200
         assert response.json() == first.json()
+    assert first.json()["case_status"] == "running"
+    assert first.json()["stop_after"] is None
     (after,) = instances_of(scheduler_client, case_id)
     assert after.instance_id == case_id
     # The same run, not a new one in its place.
@@ -271,12 +276,15 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     )
     assert len(rows_before) == 1
     # Nothing was run a second time: the trail holds the one event of the
-    # one redaction (story 1.7) and one for each of its two pages'
-    # classification (story 1.8), and no more.
+    # one redaction (story 1.7), one for each of its two pages'
+    # classification (story 1.8) and one for each page's route (story 1.9),
+    # and no more.
     assert [row[0] for row in audit_rows(service_settings, case_id)] == [
         "document.redacted",
         "page.classified",
         "page.classified",
+        "page.routed",
+        "page.routed",
     ]
 
 
@@ -343,14 +351,17 @@ def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
     assert progress.case_status is CaseStatus.RUNNING
     # Story 1.7: redaction is done, and its pages and its event are there.
     # Story 1.8: each page is classified, with an event of its own.
+    # Story 1.9: the gate sends each on, here to extraction, with its event.
     assert [page.page_status.value for page in progress.pages] == [
-        "classified",
-        "classified",
+        "extracting",
+        "extracting",
     ]
     assert sorted(event.action.value for event in trail.events) == [
         "document.redacted",
         "page.classified",
         "page.classified",
+        "page.routed",
+        "page.routed",
     ]
 
 

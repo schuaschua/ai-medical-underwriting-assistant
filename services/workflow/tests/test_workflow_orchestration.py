@@ -79,11 +79,22 @@ class RecordingContext:
         return task.CompletableTask[Any]()
 
 
-CONFIRMED = {"outcome": "ok", "case_status": "running"}
+CONFIRMED = {"outcome": "ok", "case_status": "running", "gate_threshold": 0.9}
 # Story 1.7: redaction, the first stage, is done and its result recorded.
 # Story 1.8: it hands on the id of its one page, which is then classified.
 REDACTED = {"outcome": "ok", "case_status": "running", "page_ids": [new_id()]}
-CLASSIFIED = [{"outcome": "ok", "case_status": "running"}]
+# Story 1.9: a done classification hands on what the gate needs, and the gate
+# routes the page (here to extraction, so the case goes on running).
+CLASSIFIED = [
+    {
+        "outcome": "ok",
+        "case_status": "running",
+        "classification_id": new_id(),
+        "is_medical": True,
+        "confidence": 0.95,
+    }
+]
+ROUTED = [{"outcome": "ok", "case_status": "running", "route": "extracting"}]
 
 
 def run_lifecycle(
@@ -115,7 +126,7 @@ def run_lifecycle(
 def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
     case_id: str,
 ) -> None:
-    asked, result = run_lifecycle(case_id, [CONFIRMED, REDACTED, CLASSIFIED])
+    asked, result = run_lifecycle(case_id, [CONFIRMED, REDACTED, CLASSIFIED, ROUTED])
 
     # The first activity, retried on failure (AD-6); ids only go in and out.
     # What follows it is redaction, the first stage (story 1.7).
@@ -129,9 +140,8 @@ def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
 
 def test_story_1_6_the_orchestrator_is_deterministic(case_id: str) -> None:
     # Replayed from history, the same answers must lead to the same requests.
-    assert run_lifecycle(case_id, [CONFIRMED, REDACTED, CLASSIFIED]) == run_lifecycle(
-        case_id, [CONFIRMED, REDACTED, CLASSIFIED]
-    )
+    answers: list[object] = [CONFIRMED, REDACTED, CLASSIFIED, ROUTED]
+    assert run_lifecycle(case_id, answers) == run_lifecycle(case_id, answers)
     failed = task.TaskFailedError("failed", RuntimeError("x"))
     assert run_lifecycle(case_id, [failed, {}]) == run_lifecycle(case_id, [failed, {}])
 
@@ -249,7 +259,8 @@ def test_story_1_6_the_first_activity_reports_the_started_case_as_running(
             task.ActivityContext(case_id, 1), case_id
         )
 
-    assert answer == {"outcome": "ok", "case_status": "running"}
+    # Story 1.9: with the gate's threshold in force, for the case's history.
+    assert answer == {"outcome": "ok", "case_status": "running", "gate_threshold": 0.9}
 
 
 def test_story_1_6_an_error_no_retry_can_mend_is_answered_not_raised(

@@ -65,6 +65,11 @@ apps:
       # AD-3: this service's own sidecar (daprHTTPPort above), through which
       # it commands the stage services.
       WORKFLOW_DAPR_HTTP_PORT: "3502"
+      # AD-7: the gate's threshold, which only this service is given. A page
+      # classified at it or above is routed by its label, one under it goes
+      # to triage. A case keeps the value in force when its lifecycle
+      # confirmed it: a change applies to cases started after it.
+      WORKFLOW_GATE_THRESHOLD: "0.90"
   - appID: classification
     appDirPath: ./services/classification
     appProtocol: http

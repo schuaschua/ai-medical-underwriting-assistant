@@ -1,8 +1,9 @@
-"""The case orchestration: sequencing only (spine AD-2, AD-5).
+"""The case orchestration: sequencing and gate routing only (spine AD-2, AD-5, AD-7).
 
 Orchestrator code is replayed from its history, so it must be deterministic:
-no clock, no random value, no I/O. It only names the next activity. Every
-activity is one step of work that may run more than once.
+no clock, no random value, no I/O. It names the next activity, and it calls
+the gate's pure rule on values an activity returned. Every activity is one
+step of work that may run more than once.
 """
 
 from collections.abc import Generator
@@ -11,6 +12,13 @@ from typing import Any
 
 from durabletask import task
 
+from contracts.enums import CaseStatus, StopAfter
+from workflow.domain.gate import (
+    Route,
+    case_status_after_gate,
+    is_unit_number,
+    route_page,
+)
 from workflow.settings import Settings
 
 # The names the engine keeps in its history: changing one orphans running cases.
@@ -18,6 +26,8 @@ CASE_LIFECYCLE = "case_lifecycle"
 CONFIRM_CASE_STARTED = "confirm_case_started"
 REDACT_DOCUMENT = "redact_document"
 CLASSIFY_PAGE = "classify_page"
+ROUTE_PAGE = "route_page"
+SETTLE_CASE_AFTER_GATE = "settle_case_after_gate"
 MARK_CASE_FAILED = "mark_case_failed"
 
 # What an activity answers with. An error that no retry can mend is an
@@ -29,8 +39,49 @@ REFUSED = "refused"
 CASE_STATUS = "case_status"
 PAGE_IDS = "page_ids"
 FAILED = "failed"
+# What a done classification hands on for the gate: small values only (AD-6).
+CLASSIFICATION_ID = "classification_id"
+IS_MEDICAL = "is_medical"
+CONFIDENCE = "confidence"
+# AD-7: the gate's threshold as the confirm step answered it. It is kept in
+# the case's history with that answer, so a replay routes with the same value
+# whatever the setting has become since.
+GATE_THRESHOLD = "gate_threshold"
+# The route the trail holds for a page, as the route activity answers it.
+ROUTE = "route"
 
 CaseLifecycle = task.Orchestrator[dict[str, Any], dict[str, str]]
+
+
+def _stop_after(started: dict[str, Any]) -> StopAfter | None:
+    """Where the case was told to stop, as the start stored it; anything else is "nowhere"."""
+    try:
+        return StopAfter(str(started.get("stop_after")))
+    except ValueError:
+        return None
+
+
+def _gate_route(answer: dict[str, Any], threshold: float) -> Route | None:
+    """The gate's route for one classified page, or None if the answer lacks what the gate needs."""
+    is_medical = answer.get(IS_MEDICAL)
+    confidence = answer.get(CONFIDENCE)
+    if (
+        not isinstance(answer.get(CLASSIFICATION_ID), str)
+        or not isinstance(is_medical, bool)
+        or not is_unit_number(confidence)
+    ):
+        return None
+    return route_page(
+        is_medical=is_medical, confidence=float(confidence), threshold=threshold
+    )
+
+
+def _stored_route(answer: dict[str, Any]) -> Route | None:
+    """The route a route activity says the trail holds for its page, if it names one."""
+    try:
+        return Route(str(answer.get(ROUTE)))
+    except ValueError:
+        return None
 
 
 def activity_retry_policy(settings: Settings) -> task.RetryPolicy:
@@ -67,7 +118,9 @@ def build_case_lifecycle(
     """Build the one orchestration of a case. Its instance id is the `case_id`.
 
     `stage_policy` is the retry policy of the stage commands; without one
-    they are retried like every other activity.
+    they are retried like every other activity. Nothing of the settings'
+    values is built in: what a case's run depends on comes from the answers
+    in its history.
     """
     stage_policy = stage_policy or retry_policy
 
@@ -80,13 +133,19 @@ def build_case_lifecycle(
         eval_run_id = started.get("eval_run_id")
         about = {"case_id": case_id, "eval_run_id": eval_run_id}
         try:
-            confirmed: dict[str, str] | None = yield context.call_activity(
+            confirmed: dict[str, Any] | None = yield context.call_activity(
                 CONFIRM_CASE_STARTED, input=case_id, retry_policy=retry_policy
             )
         except task.TaskFailedError:
             # Every retry failed.
             confirmed = None
-        if confirmed is None or confirmed.get(OUTCOME) != OK:
+        if (
+            confirmed is None
+            or confirmed.get(OUTCOME) != OK
+            # AD-7: without a threshold from the confirm step no page could
+            # be routed; nothing is assumed in its place.
+            or not is_unit_number(confirmed.get(GATE_THRESHOLD))
+        ):
             # The case cannot go on. It is marked failed, with its one
             # case-level `stage.failed` event (AD-8), instead of being left
             # `running` for ever.
@@ -94,6 +153,8 @@ def build_case_lifecycle(
                 MARK_CASE_FAILED, input=about, retry_policy=retry_policy
             )
             return {"case_id": case_id, CASE_STATUS: FAILED}
+
+        gate_threshold = float(confirmed[GATE_THRESHOLD])
 
         # AD-21: redaction is the first stage. Nothing else reads the document
         # before it is done.
@@ -119,7 +180,8 @@ def build_case_lifecycle(
         # AD-13: every page is classified, each by a command of its own, all
         # at once, with the one contender the case was started with. Ids only
         # go in (AD-6): the stage reads the page from `intake` itself.
-        classifying: list[task.Task[dict[str, str]]] = [
+        page_ids: list[str] = list(redacted.get(PAGE_IDS, []))
+        classifying: list[task.Task[dict[str, Any]]] = [
             context.call_activity(
                 CLASSIFY_PAGE,
                 input={
@@ -129,11 +191,11 @@ def build_case_lifecycle(
                 },
                 retry_policy=stage_policy,
             )
-            for page_id in redacted.get(PAGE_IDS, [])
+            for page_id in page_ids
         ]
         # A redaction that is done and names no page leaves nothing to
         # classify and nothing that would ever move the case on.
-        classified: list[dict[str, str]] | None = None
+        classified: list[dict[str, Any]] | None = None
         if classifying:
             try:
                 # Waits for every page, also when one of them has failed.
@@ -154,8 +216,84 @@ def build_case_lifecycle(
             # A failed classification has failed its page and the case, in
             # the recording of its result (AD-8).
             return {"case_id": case_id, CASE_STATUS: FAILED}
-        # Every page is `classified` and the case is `running`. The lifecycle
-        # ends here for now: the gate routes each page from this point (story 1.9).
-        return {"case_id": case_id, CASE_STATUS: redacted[CASE_STATUS]}
+
+        # AD-7: the gate. Every page is `classified`; each is routed by the
+        # one rule, on what its classification answered, and the route is
+        # recorded by an activity, with its status change and its event in
+        # one transaction (AD-8).
+        routes = [
+            route
+            for route in (_gate_route(answer, gate_threshold) for answer in classified)
+            if route is not None
+        ]
+        if len(routes) != len(classified):
+            # A classification answered without what the gate needs. No page
+            # is routed on a guess: the case cannot go on.
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        routing: list[task.Task[dict[str, str]]] = [
+            context.call_activity(
+                ROUTE_PAGE,
+                input={
+                    **about,
+                    "page_id": page_id,
+                    CLASSIFICATION_ID: answer[CLASSIFICATION_ID],
+                    ROUTE: route.value,
+                    "threshold": gate_threshold,
+                },
+                retry_policy=retry_policy,
+            )
+            for page_id, answer, route in zip(page_ids, classified, routes, strict=True)
+        ]
+        try:
+            routed: list[dict[str, str]] | None = yield task.when_all(routing)
+        except task.TaskFailedError:
+            routed = None
+        if routed is None or any(answer.get(OUTCOME) != OK for answer in routed):
+            # A route was refused or could not be recorded: as above.
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        if any(answer.get(CASE_STATUS) == FAILED for answer in routed):
+            # The case failed while its pages were being routed.
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        # The case is settled on the routes the trail holds, as the route
+        # activities answered them, not on what was worked out above: a route
+        # recorded by an earlier run of an activity is the one that counts.
+        stored = [
+            route
+            for route in (_stored_route(answer) for answer in routed)
+            if route is not None
+        ]
+        if len(stored) != len(routed):
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+
+        after_gate = case_status_after_gate(stored, _stop_after(started))
+        if after_gate is CaseStatus.RUNNING:
+            # Every page went on to extraction: the case goes on running.
+            return {"case_id": case_id, CASE_STATUS: after_gate.value}
+        # A page waits for a person, or the case was told to stop after the
+        # gate. The lifecycle ends here for now: the waits for decisions come
+        # with stories 1.10 and 1.11, extraction with story 2.4.
+        try:
+            settled: dict[str, str] | None = yield context.call_activity(
+                SETTLE_CASE_AFTER_GATE,
+                input={"case_id": case_id, CASE_STATUS: after_gate.value},
+                retry_policy=retry_policy,
+            )
+        except task.TaskFailedError:
+            settled = None
+        if settled is None or settled.get(OUTCOME) != OK:
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        return {"case_id": case_id, CASE_STATUS: settled[CASE_STATUS]}
 
     return case_lifecycle

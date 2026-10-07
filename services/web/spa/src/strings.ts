@@ -1,5 +1,10 @@
 // Every piece of user-facing text (coding-style.md rule 18).
-import type { CaseStatus, DemoRole, ErrorCode } from "./api/contracts.gen";
+import type {
+  CaseStatus,
+  DemoRole,
+  ErrorCode,
+  PageStatus,
+} from "./api/contracts.gen";
 
 /** The largest upload, in MB, as the wording states it. The server enforces it. */
 export const MAX_UPLOAD_MB = 10;
@@ -60,6 +65,9 @@ export const strings = {
     checkAgainFor: (caseId: string) => `Check case ${caseId} again`,
     startAgain: "Start it again",
     startAgainFor: (caseId: string) => `Start case ${caseId} again`,
+    pagesOf: (caseId: string) => `Pages of case ${caseId}`,
+    pageBadge: (pageNumber: number, status: string) =>
+      `Page ${pageNumber}: ${status}`,
   },
   caseStatus: {
     running: "Running",
@@ -67,6 +75,19 @@ export const strings = {
     completed: "Completed",
     failed: "Failed",
   } satisfies Record<CaseStatus, string>,
+  // A page's status is the server's; this only words it, for the customer
+  // who reads it on the upload screen.
+  pageStatus: {
+    uploaded: "Received",
+    classified: "Classified",
+    awaiting_customer: "Needs your answer",
+    awaiting_triage: "Waiting for the underwriter",
+    extracting: "Being read",
+    extracted: "Read",
+    discarded: "Discarded",
+    denied: "Denied",
+    failed: "Failed",
+  } satisfies Record<PageStatus, string>,
   notFound: {
     heading: "Page not found",
     body: "This screen does not exist, or is not open to your role.",

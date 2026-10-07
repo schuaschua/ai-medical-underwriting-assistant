@@ -205,6 +205,23 @@ def test_story_1_8_the_stand_in_refuses_a_request_the_gateway_would_not_send(
 # --- Its modes -----------------------------------------------------------------------------
 
 
+def test_story_1_9_in_mixed_mode_the_runs_differ_on_some_page_types_only() -> None:
+    stand_in = FoundryStandIn(Mode.MIXED)
+
+    def named(text: str) -> Counter[str]:
+        answers = run_page(stand_in, text, runs=5)
+        return Counter(json.loads(answer)["page_type"] for answer in answers)
+
+    # Sure of these: every run names the same type.
+    assert named("Example Clinic\nInvoice") == {"invoice": 5}
+    assert named("Application form") == {"application_form": 5}
+    assert named("Payslip") == {"other": 5}
+    # Not sure of these: three of five agree, each time the page is run.
+    assert named("Laboratory report") == {"lab_report": 3, "other": 2}
+    assert named("Passport") == {"id_document": 3, "other": 2}
+    assert named("Laboratory report\nSecond") == {"lab_report": 3, "other": 2}
+
+
 def test_story_1_8_in_disagree_mode_three_of_five_runs_of_a_page_agree() -> None:
     stand_in = FoundryStandIn(Mode.DISAGREE)
 
@@ -269,7 +286,13 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
             # Story 1.4's guard: nothing under `services/` reads the answer key.
             assert "answer-key" not in text
     # The mode switch exists only in the stand-in.
-    assert [mode.value for mode in Mode] == ["ok", "disagree", "invalid", "throttled"]
+    assert [mode.value for mode in Mode] == [
+        "ok",
+        "disagree",
+        "mixed",
+        "invalid",
+        "throttled",
+    ]
 
 
 def test_story_1_8_the_stand_in_listens_on_loopback_only(
@@ -296,3 +319,5 @@ def test_story_1_8_the_stand_in_listens_on_loopback_only(
     dev = (Path(REPOSITORY_ROOT) / "tools" / "dev.sh").read_text()
     assert f"model_port={DEFAULT_PORT}" in dev
     assert "synthdata.foundry_standin" in dev
+    # Story 1.9: the mode of the local stand-in is chosen by a variable.
+    assert '--mode "${FOUNDRY_STANDIN_MODE:-ok}"' in dev

@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from contracts.audit import AuditRecord
+from contracts.audit import AuditAction, AuditRecord, RouteDetail
 from contracts.enums import CaseStatus, ClassifierContender, PageStatus
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
@@ -96,7 +96,9 @@ class MemoryCaseStore:
             page = self.pages.get(change.page_id)
             if page is None or page.case_id != audit.case_id:
                 return RecordOutcome.UNKNOWN_PAGE
-            if change.page_status not in PAGE_TRANSITIONS[page.page_status]:
+            if change.page_status not in PAGE_TRANSITIONS[page.page_status] or (
+                change.only_from not in (None, page.page_status)
+            ):
                 return RecordOutcome.OUT_OF_ORDER
         if recording.new_pages and any(
             page.case_id == audit.case_id for page in self.pages.values()
@@ -128,12 +130,50 @@ class MemoryCaseStore:
         self.events.append((recorded_at, recording))
         return RecordOutcome.RECORDED
 
+    async def route_of(
+        self, case_id: str, page_id: str, ref: str
+    ) -> RouteDetail | None:
+        if self.fail:
+            raise StoreDown
+        for _, recording in self.events:
+            audit = recording.audit
+            if (audit.case_id, audit.page_id, audit.action, audit.ref) == (
+                case_id,
+                page_id,
+                AuditAction.PAGE_ROUTED,
+                ref,
+            ) and isinstance(audit.detail, RouteDetail):
+                return audit.detail
+        return None
+
+    async def move_case(
+        self, case_id: str, case_status: CaseStatus, moved_at: datetime
+    ) -> CaseStatus | None:
+        if self.fail:
+            raise StoreDown
+        case = self.cases.get(case_id)
+        if case is None:
+            return None
+        if case_status in CASE_TRANSITIONS[case.case_status]:
+            case = replace(case, case_status=case_status)
+            self.cases[case_id] = case
+        return case.case_status
+
     async def progress(self, case_id: str) -> CaseProgress | None:
         if self.fail:
             raise StoreDown
         case = self.cases.get(case_id)
         if case is None:
             return None
+        failures = [
+            (recording.audit.page_id, recording.error_code)
+            for _, recording in self.events
+            if recording.audit.case_id == case_id and recording.error_code is not None
+        ]
+        page_codes: dict[str, ErrorCode] = {}
+        for failed_page_id, code in failures:
+            if failed_page_id is not None:
+                page_codes.setdefault(failed_page_id, code)
         pages = sorted(
             (
                 (page.page_number, page_id, page.page_status)
@@ -146,9 +186,15 @@ class MemoryCaseStore:
             case_status=case.case_status,
             redaction_status=case.redaction_status,
             pages=[
-                PageProgress(page_id=page_id, page_number=number, page_status=status)
+                PageProgress(
+                    page_id=page_id,
+                    page_number=number,
+                    page_status=status,
+                    error_code=page_codes.get(page_id),
+                )
                 for number, page_id, status in pages
             ],
+            error_code=failures[0][1] if failures else None,
         )
 
     async def audit_trail(self, case_id: str) -> AuditTrail | None:
@@ -266,7 +312,13 @@ def redaction_failed(
 
 
 def classification_done(
-    case_id: str, page_id: str, **audit_changes: Any
+    case_id: str,
+    page_id: str,
+    *,
+    page_type: str = "lab_report",
+    is_medical: bool = True,
+    confidence: float = 0.95,
+    **audit_changes: Any,
 ) -> ClassificationResult:
     classification_id = new_id()
     return ClassificationResult.model_validate(
@@ -290,9 +342,9 @@ def classification_done(
                 "case_id": case_id,
                 "page_id": page_id,
                 "contender": "llm",
-                "page_type": "lab_report",
-                "is_medical": True,
-                "confidence": 0.95,
+                "page_type": page_type,
+                "is_medical": is_medical,
+                "confidence": confidence,
                 "reason": "A table of laboratory values.",
             },
         }
@@ -398,6 +450,9 @@ class FakeStages:
     failing_page_numbers: frozenset[int] = frozenset()
     # As `script`, for the next classify commands.
     classify_script: list[str] = field(default_factory=list)
+    # Story 1.9. What the classifier reads on a page, by page number, as
+    # (page type, medical or not, confidence); a lab report at 0.95 otherwise.
+    readings: dict[int, tuple[str, bool, float]] = field(default_factory=dict)
     classifications: dict[tuple[str, str], ClassificationResult] = field(
         default_factory=dict
     )
@@ -463,9 +518,24 @@ class FakeStages:
                     eval_run_id=eval_run_id,
                 )
                 if failing
-                else classification_done(case_id, page_id, eval_run_id=eval_run_id)
+                else self._read(case_id, page_id, page_number, eval_run_id)
             )
         return self.classifications[key]
+
+    def _read(
+        self, case_id: str, page_id: str, page_number: int, eval_run_id: str | None
+    ) -> ClassificationResult:
+        if page_number not in self.readings:
+            return classification_done(case_id, page_id, eval_run_id=eval_run_id)
+        page_type, is_medical, confidence = self.readings[page_number]
+        return classification_done(
+            case_id,
+            page_id,
+            page_type=page_type,
+            is_medical=is_medical,
+            confidence=confidence,
+            eval_run_id=eval_run_id,
+        )
 
     @staticmethod
     def _follow(script: list[str], not_found_message: str) -> None:

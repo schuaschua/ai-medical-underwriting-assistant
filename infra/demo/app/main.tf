@@ -499,6 +499,8 @@ module "workflow" {
         { name = "WORKFLOW_SCHEDULER_TASK_HUB", value = local.foundation.durable_task_hub_name },
         { name = "WORKFLOW_SCHEDULER_ENTRA_AUTH", value = "true" },
         { name = "WORKFLOW_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
+        # Spine AD-7: only workflow gets the gate's threshold.
+        { name = "WORKFLOW_GATE_THRESHOLD", value = tostring(var.gate_threshold) },
       ]
 
       # azure.md rule 22. Startup and liveness ask the process; readiness

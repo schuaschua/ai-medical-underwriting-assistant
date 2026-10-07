@@ -481,6 +481,87 @@ def test_story_1_6_progress_is_read_from_workflow_by_either_role(
     assert response.headers["cache-control"] == "no-store"
 
 
+@pytest.mark.parametrize("role", [CUSTOMER, UNDERWRITER])
+def test_story_1_9_routed_page_statuses_pass_through_as_workflow_answered(
+    client: TestClient, sidecar: FakeSidecar, role: dict[str, str]
+) -> None:
+    case_id = new_id()
+    client.post(f"/api/cases/{case_id}/start", headers=CUSTOMER)
+    statuses = ["extracting", "awaiting_customer", "awaiting_triage"]
+    answered = {
+        "case_id": case_id,
+        "case_status": "awaiting_human",
+        "redaction_status": "done",
+        "pages": [
+            {
+                "page_id": new_id(),
+                "page_number": number,
+                "page_status": status,
+                "error_code": None,
+            }
+            for number, status in enumerate(statuses, start=1)
+        ],
+        "error_code": None,
+    }
+    sidecar.answers["GET progress"] = httpx.Response(200, json=answered)
+
+    response = client.get(f"/api/cases/{case_id}/progress", headers=role)
+
+    # `web` computes no route and no status: what `workflow` said is what the
+    # SPA gets, field for field, with nothing about the gate added.
+    assert response.status_code == 200
+    assert response.json() == answered
+
+
+def test_story_1_9_the_failure_reason_passes_through_on_the_case_and_the_page(
+    client: TestClient, sidecar: FakeSidecar
+) -> None:
+    case_id = new_id()
+    client.post(f"/api/cases/{case_id}/start", headers=CUSTOMER)
+    answered = {
+        "case_id": case_id,
+        "case_status": "failed",
+        "redaction_status": "done",
+        "pages": [
+            {
+                "page_id": new_id(),
+                "page_number": 1,
+                "page_status": "classified",
+                "error_code": None,
+            },
+            {
+                "page_id": new_id(),
+                "page_number": 2,
+                "page_status": "failed",
+                "error_code": "invalid_model_output",
+            },
+        ],
+        "error_code": "invalid_model_output",
+    }
+    sidecar.answers["GET progress"] = httpx.Response(200, json=answered)
+
+    response = client.get(f"/api/cases/{case_id}/progress", headers=CUSTOMER)
+
+    assert response.json() == answered
+    # An answer of an older `workflow`, without the field, reads as "nothing failed".
+    older = {**answered, "pages": []}
+    del older["error_code"]
+    sidecar.answers["GET progress"] = httpx.Response(200, json=older)
+    assert (
+        client.get(f"/api/cases/{case_id}/progress", headers=CUSTOMER).json()[
+            "error_code"
+        ]
+        is None
+    )
+    # A code that is not in the catalogue is not passed on.
+    sidecar.answers["GET progress"] = httpx.Response(
+        200, json={**answered, "error_code": "it broke"}
+    )
+    refused = client.get(f"/api/cases/{case_id}/progress", headers=CUSTOMER)
+    assert refused.status_code == 502
+    assert "it broke" not in refused.text
+
+
 def test_story_1_6_the_audit_trail_is_read_from_workflow_by_the_underwriter_only(
     client: TestClient, sidecar: FakeSidecar
 ) -> None:

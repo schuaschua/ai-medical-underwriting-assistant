@@ -30,17 +30,32 @@ export function startedCase(caseId: string, caseStatus = "running") {
   };
 }
 
-/** The progress of a case with no pages yet. */
+/** One page of a progress, as `workflow` lists it: its number and its status. */
+export function pageProgress(
+  pageNumber: number,
+  pageStatus: string,
+  errorCode: string | null = null,
+) {
+  return {
+    page_id: `019a0000-0000-7000-8000-0000000001${String(pageNumber).padStart(2, "0")}`,
+    page_number: pageNumber,
+    page_status: pageStatus,
+    error_code: errorCode,
+  };
+}
+
+/** The progress of a case; with no pages yet unless some are given. */
 export function caseProgress(
   caseId: string,
   caseStatus = "running",
   redactionStatus = "running",
+  pages: ReturnType<typeof pageProgress>[] = [],
 ) {
   return {
     case_id: caseId,
     case_status: caseStatus,
     redaction_status: redactionStatus,
-    pages: [],
+    pages,
   };
 }
 

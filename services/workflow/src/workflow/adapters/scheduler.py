@@ -27,21 +27,40 @@ from workflow.adapters.dapr import trace_headers
 from workflow.adapters.orchestration import (
     CASE_LIFECYCLE,
     CASE_STATUS,
+    CLASSIFICATION_ID,
     CLASSIFY_PAGE,
+    CONFIDENCE,
     CONFIRM_CASE_STARTED,
+    GATE_THRESHOLD,
+    IS_MEDICAL,
     MARK_CASE_FAILED,
     OK,
     OUTCOME,
     PAGE_IDS,
     REDACT_DOCUMENT,
     REFUSED,
+    ROUTE,
+    ROUTE_PAGE,
+    SETTLE_CASE_AFTER_GATE,
     activity_retry_policy,
     build_case_lifecycle,
     stage_retry_policy,
 )
 from workflow.adapters.telemetry import current_trace_id
-from workflow.domain.cases import confirm_started, fail_case, record_stage_result
+from workflow.domain.cases import (
+    confirm_started,
+    fail_case,
+    record_route,
+    record_stage_result,
+    settle_case_after_gate,
+)
 from workflow.domain.entities import CaseRecord
+from workflow.domain.gate import (
+    DEFAULT_GATE_THRESHOLD,
+    STATUSES_THE_GATE_SETS,
+    Route,
+    is_unit_number,
+)
 from workflow.domain.lifecycle import case_started
 from workflow.domain.ports import CaseStore, EngineState, StageServices
 from workflow.domain.recording import RecordOutcome
@@ -242,6 +261,7 @@ class Activities:
         timeout_seconds: float,
         stages: StageServices,
         stage_timeout_seconds: float = 200.0,
+        gate_threshold: float = DEFAULT_GATE_THRESHOLD,
     ) -> None:
         self._store = store
         self._loop = loop
@@ -249,11 +269,20 @@ class Activities:
         self._stages = stages
         # AD-6: longer than a stage's own deadline of 180 s.
         self._stage_timeout_seconds = stage_timeout_seconds
+        # AD-7: the setting `WORKFLOW_GATE_THRESHOLD`, handed to a case when
+        # it is confirmed and to no case after that.
+        self._gate_threshold = gate_threshold
 
     def confirm_case_started(
         self, context: task.ActivityContext, case_id: str
-    ) -> dict[str, str]:
-        """The lifecycle's first step: the case the engine runs is the one that was stored."""
+    ) -> dict[str, Any]:
+        """The lifecycle's first step: the case the engine runs is the one that was stored.
+
+        The answer also carries the gate's threshold in force now (AD-7).
+        The engine keeps the answer in the case's history, so the case is
+        routed with this value however often it is replayed, also after the
+        setting has changed.
+        """
         try:
             status = self._run(
                 CONFIRM_CASE_STARTED,
@@ -262,7 +291,11 @@ class Activities:
             )
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}
-        return {OUTCOME: OK, "case_status": status.value}
+        return {
+            OUTCOME: OK,
+            "case_status": status.value,
+            GATE_THRESHOLD: self._gate_threshold,
+        }
 
     def redact_document(
         self, context: task.ActivityContext, command: dict[str, str | None]
@@ -299,7 +332,7 @@ class Activities:
 
     def classify_page(
         self, context: task.ActivityContext, command: dict[str, str | None]
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """AD-13: have `classification` classify one page, and record the result it stored.
 
         As for redaction: one call to the stage, then the one recording path;
@@ -307,7 +340,9 @@ class Activities:
         the command again. A page that is not the case's, or a contender the
         stage cannot run, is answered as refused, not retried. A done result
         moves its page to `classified`; a failed one fails the page and the
-        case (AD-8). Nothing here routes the page (AD-7).
+        case (AD-8). Nothing here routes the page (AD-7): a done result's
+        answer hands on what the gate needs, the classification's id, its
+        medical-or-not and its confidence, and no more (AD-6).
         """
         case_id = str(command["case_id"])
         page_id = str(command["page_id"])
@@ -339,7 +374,116 @@ class Activities:
             outcome = self.record(CLASSIFY_PAGE, result)
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}
-        return self._stage_answer(CLASSIFY_PAGE, result, outcome)
+        answer = self._stage_answer(CLASSIFY_PAGE, result, outcome)
+        classification = result.classification
+        if (
+            answer.get(CASE_STATUS) == CaseStatus.RUNNING.value
+            and classification is not None
+        ):
+            return {
+                **answer,
+                CLASSIFICATION_ID: result.classification_id,
+                IS_MEDICAL: classification.is_medical,
+                CONFIDENCE: classification.confidence,
+            }
+        return answer
+
+    def route_page(
+        self, context: task.ActivityContext, routed: dict[str, Any]
+    ) -> dict[str, str]:
+        """AD-7: record the route the gate gave one page, through the one recording path.
+
+        The orchestration worked the route out; this writes the page's new
+        status and its `page.routed` event in one transaction (AD-8). Run
+        again, it finds the event and writes nothing. It answers with the
+        route the trail holds for the page, which after such a repeat is the
+        one stored the first time. A page that is not `classified`, or not
+        the case's, and anything handed in that is missing or not valid, is
+        answered as refused.
+        """
+        # Everything the activity was handed is read and checked here: what
+        # is missing or not valid would be so on every retry, and is answered.
+        case_id = str(routed.get("case_id"))
+        try:
+            page_id = routed["page_id"]
+            classification_id = routed[CLASSIFICATION_ID]
+            threshold = routed["threshold"]
+            route = Route(str(routed[ROUTE]))
+            if (
+                not isinstance(routed["case_id"], str)
+                or not isinstance(page_id, str)
+                or not isinstance(classification_id, str)
+                or not is_unit_number(threshold)
+            ):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            logger.error(
+                "activity failed: activity=%s case_id=%s reason=invalid_route "
+                "retry=False",
+                ROUTE_PAGE,
+                case_id,
+            )
+            return {OUTCOME: REFUSED, "reason": ErrorCode.VALIDATION_FAILED.value}
+        try:
+            outcome, stored = self._run(
+                ROUTE_PAGE,
+                case_id,
+                record_route(
+                    case_id,
+                    page_id,
+                    classification_id,
+                    route,
+                    float(threshold),
+                    store=self._store,
+                    eval_run_id=routed.get("eval_run_id"),
+                    trace_id=current_trace_id(None),
+                ),
+            )
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        if outcome is RecordOutcome.CASE_FAILED:
+            return {OUTCOME: OK, CASE_STATUS: CaseStatus.FAILED.value}
+        if outcome in _IN_THE_TRAIL and stored is not None:
+            # The route the trail holds: written now, or by an earlier run.
+            return {
+                OUTCOME: OK,
+                CASE_STATUS: CaseStatus.RUNNING.value,
+                ROUTE: stored.value,
+            }
+        logger.error(
+            "route not recorded: activity=%s case_id=%s outcome=%s",
+            ROUTE_PAGE,
+            case_id,
+            outcome.value,
+        )
+        return {OUTCOME: REFUSED, "reason": outcome.value}
+
+    def settle_case_after_gate(
+        self, context: task.ActivityContext, settled: dict[str, str]
+    ) -> dict[str, str]:
+        """Give the case the status the gate left it with; answer with the one it has now.
+
+        Only `awaiting_human` and `completed` are taken: anything else,
+        `failed` among them, is answered as refused.
+        """
+        case_id = str(settled.get("case_id"))
+        try:
+            wanted = CaseStatus(str(settled.get(CASE_STATUS)))
+            if wanted not in STATUSES_THE_GATE_SETS or not isinstance(
+                settled.get("case_id"), str
+            ):
+                raise ValueError
+        except ValueError:
+            return {OUTCOME: REFUSED, "reason": ErrorCode.VALIDATION_FAILED.value}
+        try:
+            status = self._run(
+                SETTLE_CASE_AFTER_GATE,
+                case_id,
+                settle_case_after_gate(case_id, wanted, store=self._store),
+            )
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        return {OUTCOME: OK, CASE_STATUS: status.value}
 
     @staticmethod
     def _stage_answer(
@@ -453,11 +597,14 @@ def build_worker(
     )
     worker.add_orchestrator(
         build_case_lifecycle(
-            activity_retry_policy(settings), stage_retry_policy(settings)
+            activity_retry_policy(settings),
+            stage_retry_policy(settings),
         )
     )
     worker.add_activity(activities.confirm_case_started)
     worker.add_activity(activities.redact_document)
     worker.add_activity(activities.classify_page)
+    worker.add_activity(activities.route_page)
+    worker.add_activity(activities.settle_case_after_gate)
     worker.add_activity(activities.mark_case_failed)
     return worker

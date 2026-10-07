@@ -70,9 +70,15 @@ def _before[S](table: Mapping[S, frozenset[S]], target: S) -> frozenset[S]:
     return frozenset(source for source, targets in table.items() if target in targets)
 
 
-def page_statuses_before(target: PageStatus) -> frozenset[PageStatus]:
-    """The page statuses from which `target` may be reached."""
-    return _before(PAGE_TRANSITIONS, target)
+def page_statuses_before(
+    target: PageStatus, only_from: PageStatus | None = None
+) -> frozenset[PageStatus]:
+    """The page statuses from which `target` may be reached.
+
+    With `only_from`, that status alone, and only if the table allows it.
+    """
+    before = _before(PAGE_TRANSITIONS, target)
+    return before if only_from is None else before & {only_from}
 
 
 def case_statuses_before(target: CaseStatus) -> frozenset[CaseStatus]:

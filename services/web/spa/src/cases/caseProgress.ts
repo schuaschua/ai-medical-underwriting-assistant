@@ -2,7 +2,7 @@
 // progress by polling (AD-19); it never works a status out for itself.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getProgress, startCase } from "../api/client";
-import type { CaseStatus } from "../api/contracts.gen";
+import type { CaseStatus, PageProgress } from "../api/contracts.gen";
 
 /** How often the progress of each case is read again. */
 export const PROGRESS_POLL_MS = 3_000;
@@ -14,8 +14,16 @@ export type CaseState =
   | { kind: "checking" }
   /** The server has been asked to start the case. */
   | { kind: "starting" }
-  /** `redactionFailed`: the server said the redaction stage failed. */
-  | { kind: "started"; status: CaseStatus; redactionFailed?: boolean }
+  /**
+   * `redactionFailed`: the server said the redaction stage failed. `pages`:
+   * the case's pages as the server last listed them, each with its status.
+   */
+  | {
+      kind: "started";
+      status: CaseStatus;
+      redactionFailed?: boolean;
+      pages: readonly PageProgress[];
+    }
   /** The document was received, but its case is not started. */
   | { kind: "not_started"; error: unknown }
   /** No read has succeeded yet, and the last one failed. */
@@ -25,7 +33,8 @@ export type CaseStates = Readonly<Record<string, CaseState>>;
 
 const CHECKING: CaseState = { kind: "checking" };
 
-// A case in one of these statuses will not change again, so it is not read again.
+// A case in one of these statuses will not change again, so it is not read
+// again. A case that is running, or waiting for a person, is.
 const FINISHED: readonly CaseStatus[] = ["completed", "failed"];
 
 function isFinished(state: CaseState): boolean {
@@ -107,7 +116,12 @@ export function useCaseProgress(caseIds: readonly string[]): {
         (started) => {
           mine.failures = 0;
           mine.notBefore = 0;
-          set(caseId, { kind: "started", status: started.case_status });
+          // The answer to a start lists no pages: the next read brings them.
+          set(caseId, {
+            kind: "started",
+            status: started.case_status,
+            pages: [],
+          });
         },
         (error: unknown) => set(caseId, { kind: "not_started", error }),
       );
@@ -148,6 +162,7 @@ export function useCaseProgress(caseIds: readonly string[]): {
                 kind: "started",
                 status: progress.case_status,
                 redactionFailed: progress.redaction_status === "failed",
+                pages: progress.pages,
               });
             }
           },

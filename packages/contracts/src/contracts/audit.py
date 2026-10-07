@@ -1,18 +1,28 @@
 """The audit action catalogue and the audit record (AD-8)."""
 
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import model_validator
 
-from contracts.base import ContractModel, Count, NonEmptyStr, TraceId, UtcDatetime
-from contracts.enums import ActorKind, DemoRole, Service
+from contracts.base import (
+    Confidence,
+    ContractModel,
+    Count,
+    NonEmptyStr,
+    TraceId,
+    UtcDatetime,
+)
+from contracts.enums import ActorKind, DemoRole, PageStatus, Service
 from contracts.ids import CaseId, EvalRunId, PageId, Uuid7Str
 
 
 class AuditAction(StrEnum):
     DOCUMENT_REDACTED = "document.redacted"
     PAGE_CLASSIFIED = "page.classified"
+    # AD-7: the gate sent a classified page on. Added in story 1.9, so that the
+    # status change out of `classified` has its event (AD-8).
+    PAGE_ROUTED = "page.routed"
     PAGE_KEPT = "page.kept"
     PAGE_DISCARDED = "page.discarded"
     PAGE_ACCEPTED = "page.accepted"
@@ -49,6 +59,18 @@ def ai_actor(service: Service, deployment: str) -> str:
     return f"{service.value}{_AI_ACTOR_SEPARATOR}{deployment}"
 
 
+class RouteDetail(ContractModel):
+    """Detail of `page.routed`: the status the gate gave the page, and the threshold it used."""
+
+    # The three statuses the gate may give a page (AD-7), and no other.
+    route: Literal[
+        PageStatus.EXTRACTING,
+        PageStatus.AWAITING_CUSTOMER,
+        PageStatus.AWAITING_TRIAGE,
+    ]
+    threshold: Confidence
+
+
 class AuditRecord(ContractModel):
     """One row of the audit trail; `workflow` is the only writer."""
 
@@ -62,8 +84,9 @@ class AuditRecord(ContractModel):
     page_id: PageId | None
     # Id of the owning record: classification, fact set, verdict run, human decision.
     ref: Uuid7Str
-    # For `document.redacted`, category to count, never the values; otherwise null.
-    detail: dict[NonEmptyStr, Count] | None
+    # For `document.redacted`, category to count, never the values; for
+    # `page.routed`, the route and the threshold; otherwise null.
+    detail: dict[NonEmptyStr, Count] | RouteDetail | None
     trace_id: TraceId
     eval_run_id: EvalRunId | None
 
@@ -83,11 +106,17 @@ class AuditRecord(ContractModel):
         return self
 
     @model_validator(mode="after")
-    def _detail_only_for_redaction(self) -> Self:
-        redacted = self.action is AuditAction.DOCUMENT_REDACTED
-        if redacted != (self.detail is not None):
+    def _detail_fits_the_action(self) -> Self:
+        if self.action is AuditAction.DOCUMENT_REDACTED:
+            fits = isinstance(self.detail, dict)
+        elif self.action is AuditAction.PAGE_ROUTED:
+            fits = isinstance(self.detail, RouteDetail)
+        else:
+            fits = self.detail is None
+        if not fits:
             raise ValueError(
-                "detail is the redaction counts for document.redacted, else null"
+                "detail is the redaction counts for document.redacted, "
+                "the route for page.routed, else null"
             )
         return self
 

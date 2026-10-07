@@ -40,6 +40,11 @@ redaction_categories = [
   "PolicyNumber",
 ]
 
+# The gate (spine AD-7): medical at this confidence or more goes to
+# extraction, non-medical at it or more back to the customer, anything under
+# it to triage. Only workflow is given it.
+gate_threshold = 0.90
+
 # Classification (spine AD-13): the LLM classifier's confidence is the share
 # of this many runs that agree. Whether the runs differ at all on the real
 # deployment waits for the final Azure test session (deferred-work.md).

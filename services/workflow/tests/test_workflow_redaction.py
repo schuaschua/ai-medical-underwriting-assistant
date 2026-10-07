@@ -70,7 +70,7 @@ RETRY = task.RetryPolicy(
 STAGE_RETRY = task.RetryPolicy(
     first_retry_interval=timedelta(seconds=1), max_number_of_attempts=9
 )
-CONFIRMED = {"outcome": "ok", "case_status": "running"}
+CONFIRMED = {"outcome": "ok", "case_status": "running", "gate_threshold": 0.9}
 TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
 
 
@@ -95,7 +95,10 @@ def run_lifecycle(
 ) -> tuple[list[dict[str, Any]], Any]:
     """Run the orchestrator to its end, answering each activity in turn."""
     context = RecordingContext()
-    steps: Any = build_case_lifecycle(RETRY, STAGE_RETRY)(context, started)  # type: ignore[arg-type]  # the stand-in has the one method used
+    steps: Any = build_case_lifecycle(RETRY, STAGE_RETRY)(
+        context,  # type: ignore[arg-type]  # the stand-in has the one method used
+        started,
+    )
     assert inspect.isgenerator(steps)
     steps = cast(Any, steps)
     next(steps)
@@ -121,7 +124,17 @@ def test_story_1_7_redaction_is_the_first_stage_the_orchestration_commands(
         [
             CONFIRMED,
             {"outcome": "ok", "case_status": "running", "page_ids": [new_id()]},
-            [{"outcome": "ok", "case_status": "running"}],
+            [
+                {
+                    "outcome": "ok",
+                    "case_status": "running",
+                    "classification_id": new_id(),
+                    "is_medical": True,
+                    "confidence": 0.95,
+                }
+            ],
+            # Story 1.9: the gate routes the page, here on to extraction.
+            [{"outcome": "ok", "case_status": "running", "route": "extracting"}],
         ],
     )
 
@@ -196,7 +209,18 @@ def test_story_1_7_stop_after_names_no_stage_at_or_before_redaction(
         [
             CONFIRMED,
             {"outcome": "ok", "case_status": "running", "page_ids": [new_id()]},
-            [{"outcome": "ok", "case_status": "running"}],
+            [
+                {
+                    "outcome": "ok",
+                    "case_status": "running",
+                    "classification_id": new_id(),
+                    "is_medical": True,
+                    "confidence": 0.95,
+                }
+            ],
+            # Story 1.9: the page is routed, and the case ends at the gate.
+            [{"outcome": "ok", "case_status": "running", "route": "extracting"}],
+            {"outcome": "ok", "case_status": "completed"},
         ],
     )
 

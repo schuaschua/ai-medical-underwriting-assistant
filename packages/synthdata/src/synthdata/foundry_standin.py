@@ -47,6 +47,11 @@ DISAGREE_CYCLE = 5
 # ... the last this many name another page type.
 DISAGREE_MINORITY = 2
 
+# In the `mixed` mode, the page types whose runs disagree: one medical type
+# and one that is not. A page's type is read from its own text, so the same
+# page is always treated the same way.
+MIXED_UNSURE_TYPES = frozenset({PageType.LAB_REPORT, PageType.ID_DOCUMENT})
+
 # The heading that tells a page type, as the generator prints it, in the
 # order they are looked for. A page with none of them is `other`: a payslip,
 # a utility bill, a blank page.
@@ -78,6 +83,10 @@ class Mode(StrEnum):
     OK = "ok"
     # Repeated runs of one page differ: three of every five agree.
     DISAGREE = "disagree"
+    # Runs differ as in `disagree`, but only on pages of the types in
+    # `MIXED_UNSURE_TYPES`: one case then has pages the classifier is sure of
+    # and pages it is not, and shows every route of the gate.
+    MIXED = "mixed"
     # The answer is prose, not the JSON object that was asked for.
     INVALID = "invalid"
     # Every call is answered 429 with a `Retry-After`.
@@ -163,10 +172,10 @@ class FoundryStandIn:
             return "This page looks like a medical document to me."
         page_type = classify_text(text)
         run = self._run_number(text)
-        if (
-            self.mode is Mode.DISAGREE
-            and run % DISAGREE_CYCLE >= DISAGREE_CYCLE - DISAGREE_MINORITY
-        ):
+        disagrees = self.mode is Mode.DISAGREE or (
+            self.mode is Mode.MIXED and page_type in MIXED_UNSURE_TYPES
+        )
+        if disagrees and run % DISAGREE_CYCLE >= DISAGREE_CYCLE - DISAGREE_MINORITY:
             page_type = other_than(page_type)
         return answer_for(page_type)
 

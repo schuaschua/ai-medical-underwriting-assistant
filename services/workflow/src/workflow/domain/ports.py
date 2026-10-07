@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
+from contracts.audit import RouteDetail
 from contracts.enums import CaseStatus, ClassifierContender
 from contracts.models.classification import ClassificationResult
 from contracts.models.intake import RedactionResult
@@ -36,8 +37,29 @@ class CaseStore(Protocol):
         """
         ...
 
+    async def route_of(
+        self, case_id: str, page_id: str, ref: str
+    ) -> RouteDetail | None:
+        """The detail of the `page.routed` event in the trail for that page and reference, if any."""
+        ...
+
+    async def move_case(
+        self, case_id: str, case_status: CaseStatus, moved_at: datetime
+    ) -> CaseStatus | None:
+        """Give the case a status, if it may follow the one the case has.
+
+        Returns the status the case has afterwards: the one asked for, or the
+        one it kept because the change was not allowed
+        (`domain/transitions.py`). None if the case is unknown. Asking again
+        changes nothing.
+        """
+        ...
+
     async def progress(self, case_id: str) -> CaseProgress | None:
-        """The case's status and its pages, or None if the case is unknown."""
+        """The case's status and its pages, each with the code of its failure if a stage failed.
+
+        None if the case is unknown.
+        """
         ...
 
     async def audit_trail(self, case_id: str) -> AuditTrail | None:

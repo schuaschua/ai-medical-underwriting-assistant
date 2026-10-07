@@ -227,10 +227,27 @@ export async function startCase(caseId: string): Promise<CaseStarted> {
   return started as unknown as CaseStarted;
 }
 
+/** Whether a value has what a page of a progress is shown with. */
+function isPageProgress(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const page = value as Record<string, unknown>;
+  return (
+    typeof page.page_id === "string" &&
+    typeof page.page_number === "number" &&
+    typeof page.page_status === "string"
+  );
+}
+
 /** Read a case's status and pages. 404 `not_found` if it was never started. */
 export async function getProgress(caseId: string): Promise<CaseProgress> {
   const progress = await request<unknown>("GET", casePath(caseId, "progress"));
-  if (!isAboutCase(progress, caseId) || !Array.isArray(progress.pages)) {
+  if (
+    !isAboutCase(progress, caseId) ||
+    !Array.isArray(progress.pages) ||
+    !progress.pages.every(isPageProgress)
+  ) {
     throw new ApiError(200, null, "The answer was not a progress.", null);
   }
   return progress as unknown as CaseProgress;

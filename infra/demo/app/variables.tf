@@ -99,6 +99,16 @@ variable "classification_ready_path" {
   type        = string
 }
 
+variable "gate_threshold" {
+  description = "The gate's confidence threshold (spine AD-7): a page classified at or above it is routed by its label, one below it goes to triage. Passed to workflow only. A case keeps the value in force when its lifecycle confirmed it, so a change applies to cases started after it."
+  type        = number
+
+  validation {
+    condition     = var.gate_threshold >= 0 && var.gate_threshold <= 1
+    error_message = "gate_threshold must be from 0 to 1."
+  }
+}
+
 variable "classifier_runs" {
   description = "How often the LLM classifier runs the model on one page; its confidence is the share of those runs that agree (spine AD-13)."
   type        = number

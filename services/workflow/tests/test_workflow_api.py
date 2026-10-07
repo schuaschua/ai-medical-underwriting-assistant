@@ -207,6 +207,8 @@ def test_story_1_6_progress_of_a_started_case_has_its_status_and_no_pages_yet(
         "case_status": "running",
         "redaction_status": "running",
         "pages": [],
+        # Story 1.9: the failure reason, null while nothing has failed.
+        "error_code": None,
     }
 
 

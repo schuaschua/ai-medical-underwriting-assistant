@@ -1,5 +1,6 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { uploadDocument } from "../api/client";
+import type { PageProgress } from "../api/contracts.gen";
 import {
   stateOf,
   useCaseProgress,
@@ -43,6 +44,40 @@ function caseText(state: CaseState): string {
     case "unreadable":
       return strings.upload.caseUnreadable;
   }
+}
+
+/**
+ * One badge per page: its number and the status the server gave it, in page
+ * order. Nothing here works a status out (AD-7, AD-19).
+ */
+function PageBadges({
+  caseId,
+  pages,
+}: {
+  caseId: string;
+  pages: readonly PageProgress[];
+}) {
+  if (pages.length === 0) {
+    return null;
+  }
+  const inPageOrder = [...pages].sort(
+    (one, other) => one.page_number - other.page_number,
+  );
+  return (
+    <ul aria-label={strings.upload.pagesOf(caseId)}>
+      {inPageOrder.map((page) => (
+        <li key={page.page_id}>
+          {strings.upload.pageBadge(
+            page.page_number,
+            // A status this build has no wording for is shown as it came.
+            Object.hasOwn(strings.pageStatus, page.page_status)
+              ? strings.pageStatus[page.page_status]
+              : page.page_status,
+          )}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** The customer's upload screen: one PDF in, and the cases uploaded so far. */
@@ -163,6 +198,12 @@ export function UploadDocument() {
                   </td>
                   <td>
                     {caseText(caseState)}
+                    {caseState.kind === "started" && (
+                      <PageBadges
+                        caseId={item.case_id}
+                        pages={caseState.pages}
+                      />
+                    )}
                     {caseState.kind === "not_started" && (
                       <>
                         {" "}

@@ -95,15 +95,18 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         workflow_service_settings, scheduler_client, sidecar, case_id
     )
 
-    # Every page ends `classified`, and the case goes on `running`: nothing
-    # routes a page or waits for a human yet.
+    # Every page was classified, and the lifecycle has ended (`start_and_wait`
+    # waited for it): the gate sent each medical page on to extraction and
+    # each other page back to the customer (story 1.9), so the case waits for
+    # a human.
     page_ids = [page.page_id for page in intake.pages(case_id).pages]
     assert len(page_ids) == 6
     assert [(page.page_id, page.page_status.value) for page in progress.pages] == [
-        (page_id, "classified") for page_id in page_ids
+        (page_id, "extracting" if expected["is_medical"] else "awaiting_customer")
+        for page_id, expected in zip(page_ids, key["pages"], strict=True)
     ]
-    assert progress.case_status.value == "running"
-    assert output == {"case_id": case_id, "case_status": "running"}
+    assert progress.case_status.value == "awaiting_human"
+    assert output == {"case_id": case_id, "case_status": "awaiting_human"}
 
     # The service lists one classification per page, each with a page type,
     # medical or not, a confidence from 0 to 1, a one-line reason and the
@@ -128,8 +131,15 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
     # The audit trail: one `page.classified` event per page, whose actor
     # names the service and the model deployment, after the redaction.
     assert trail.events[0].action.value == "document.redacted"
-    classified = trail.events[1:]
-    assert [event.action.value for event in classified] == ["page.classified"] * 6
+    # Then one `page.routed` event per page (story 1.9): thirteen events in all.
+    assert sorted(event.action.value for event in trail.events) == [
+        "document.redacted",
+        *["page.classified"] * 6,
+        *["page.routed"] * 6,
+    ]
+    classified = [
+        event for event in trail.events if event.action.value == "page.classified"
+    ]
     assert sorted(event.page_id or "" for event in classified) == sorted(page_ids)
     for event in classified:
         assert (event.actor_kind.value, event.actor) == ("ai", ACTOR)
@@ -178,7 +188,7 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
         intake=intake.app(), classification=classification.app()
     )
 
-    progress, _, _ = start_and_wait(
+    progress, _, output = start_and_wait(
         workflow_service_settings, scheduler_client, sidecar, case_id
     )
 
@@ -186,7 +196,13 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
     listed = {
         item.page_id: item for item in classification.listed(case_id).classifications
     }
-    assert {page.page_status.value for page in progress.pages} == {"classified"}
+    # Under the gate's 0.90 every such page goes to triage (story 1.9), and
+    # the case waits for a human.
+    assert [page.page_status.value for page in progress.pages] == [
+        "awaiting_triage"
+    ] * 3
+    assert progress.case_status.value == "awaiting_human"
+    assert output == {"case_id": case_id, "case_status": "awaiting_human"}
     for page, expected in zip(progress.pages, key["pages"], strict=True):
         item = listed[page.page_id]
         assert item.page_type.value == expected["page_type"]

@@ -175,6 +175,8 @@ def create_app(
                         settings.activity_timeout_seconds,
                         stages,
                         settings.stage_timeout_seconds,
+                        # AD-7: the one place the threshold enters the lifecycle.
+                        settings.gate_threshold,
                     )
                     async with running_worker(
                         build_worker(settings, activities),

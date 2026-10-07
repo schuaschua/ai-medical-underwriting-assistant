@@ -10,6 +10,7 @@ export type ToolName = "list_facts" | "search_rules" | "read_rule";
 export type AuditAction =
   | "document.redacted"
   | "page.classified"
+  | "page.routed"
   | "page.kept"
   | "page.discarded"
   | "page.accepted"
@@ -18,6 +19,33 @@ export type AuditAction =
   | "verdict.suggested"
   | "stage.failed";
 export type CaseStatus = "running" | "awaiting_human" | "completed" | "failed";
+/**
+ * Every `error.code` a service may return.
+ */
+export type ErrorCode =
+  | "validation_failed"
+  | "invalid_role"
+  | "role_not_allowed"
+  | "actor_not_human"
+  | "not_found"
+  | "method_not_allowed"
+  | "file_too_large"
+  | "unsupported_file_type"
+  | "payload_too_large"
+  | "unsupported_media_type"
+  | "too_many_requests"
+  | "in_progress"
+  | "not_redacted"
+  | "not_awaiting_decision"
+  | "pages_not_terminal"
+  | "rule_not_seen"
+  | "stage_timeout"
+  | "stage_failed"
+  | "redaction_failed"
+  | "invalid_model_output"
+  | "model_unavailable"
+  | "upstream_unavailable"
+  | "internal_error";
 export type PageStatus =
   | "uploaded"
   | "classified"
@@ -49,33 +77,6 @@ export type PageType =
   | "id_document"
   | "invoice"
   | "other";
-/**
- * Every `error.code` a service may return.
- */
-export type ErrorCode =
-  | "validation_failed"
-  | "invalid_role"
-  | "role_not_allowed"
-  | "actor_not_human"
-  | "not_found"
-  | "method_not_allowed"
-  | "file_too_large"
-  | "unsupported_file_type"
-  | "payload_too_large"
-  | "unsupported_media_type"
-  | "too_many_requests"
-  | "in_progress"
-  | "not_redacted"
-  | "not_awaiting_decision"
-  | "pages_not_terminal"
-  | "rule_not_seen"
-  | "stage_timeout"
-  | "stage_failed"
-  | "redaction_failed"
-  | "invalid_model_output"
-  | "model_unavailable"
-  | "upstream_unavailable"
-  | "internal_error";
 /**
  * The human-reserved actions (AD-10).
  */
@@ -161,6 +162,7 @@ export interface Contracts {
   RedactionCommand: RedactionCommand;
   RedactionResult: RedactionResult;
   RetrieverConfig: RetrieverConfig;
+  RouteDetail: RouteDetail;
   RuleReadQuery: RuleReadQuery;
   RuleText: RuleText;
   SearchItem: SearchItem;
@@ -221,18 +223,28 @@ export interface AuditRecord {
   actor: string;
   actor_kind: ActorKind;
   case_id: string;
-  detail: {
-    /**
-     * This interface was referenced by `undefined`'s JSON-Schema definition
-     * via the `patternProperty` "\S".
-     */
-    [k: string]: number;
-  } | null;
+  detail:
+    | {
+        /**
+         * This interface was referenced by `undefined`'s JSON-Schema definition
+         * via the `patternProperty` "\S".
+         */
+        [k: string]: number;
+      }
+    | RouteDetail
+    | null;
   eval_run_id: string | null;
   occurred_at: string;
   page_id: string | null;
   ref: string;
   trace_id: string;
+}
+/**
+ * Detail of `page.routed`: the status the gate gave the page, and the threshold it used.
+ */
+export interface RouteDetail {
+  route: "extracting" | "awaiting_customer" | "awaiting_triage";
+  threshold: number;
 }
 /**
  * Response of `GET /cases/{case_id}/audit`: events in time order.
@@ -254,10 +266,12 @@ export interface CaseCreated {
 export interface CaseProgress {
   case_id: string;
   case_status: CaseStatus;
+  error_code?: ErrorCode | null;
   pages: PageProgress[];
   redaction_status: StageStatus;
 }
 export interface PageProgress {
+  error_code?: ErrorCode | null;
   page_id: string;
   page_number: number;
   page_status: PageStatus;

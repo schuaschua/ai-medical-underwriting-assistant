@@ -5,6 +5,7 @@ import {
   errorBody,
   fakeServer,
   json,
+  pageProgress,
   startedCase,
   UPLOADED,
 } from "../test/server";
@@ -276,6 +277,41 @@ describe("1.6 API client", () => {
       method: "GET",
       role: "customer",
     });
+  });
+
+  it("1.9 reads the pages of a progress, and refuses a page that is not one", async () => {
+    let pages: unknown[] = [pageProgress(1, "extracting")];
+    fakeServer((call) =>
+      call.path.endsWith("/progress")
+        ? json(200, { ...caseProgress(UPLOADED.case_id), pages })
+        : undefined,
+    );
+    setRole("customer");
+
+    await expect(getProgress(UPLOADED.case_id)).resolves.toMatchObject({
+      pages: [{ page_number: 1, page_status: "extracting", error_code: null }],
+    });
+
+    const good = pageProgress(2, "classified");
+    const without = (field: keyof typeof good) =>
+      Object.fromEntries(Object.entries(good).filter(([key]) => key !== field));
+    for (const broken of [
+      null,
+      "page 1",
+      // One field missing or of the wrong type at a time.
+      without("page_id"),
+      { ...good, page_id: 7 },
+      without("page_number"),
+      { ...good, page_number: "2" },
+      without("page_status"),
+      { ...good, page_status: null },
+    ]) {
+      pages = [pageProgress(1, "extracting"), broken];
+      await expect(getProgress(UPLOADED.case_id)).rejects.toMatchObject({
+        status: 200,
+        code: null,
+      });
+    }
   });
 
   it("keeps a case id from changing the path it is sent on", async () => {

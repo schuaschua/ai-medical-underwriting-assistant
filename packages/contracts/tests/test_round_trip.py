@@ -46,6 +46,8 @@ REDACTION_AUDIT = audit(
     detail={"Person": 3, "Email": 1},
     eval_run_id=EVAL,
 )
+ROUTE_DETAIL = {"route": "awaiting_triage", "threshold": 0.9}
+ROUTE_AUDIT = audit("page.routed", actor="workflow:gate", detail=ROUTE_DETAIL)
 CLASSIFICATION = {
     "classification_id": REF,
     "case_id": CASE,
@@ -122,6 +124,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
         }
     },
     "AuditRecord": audit("page.kept", actor_kind="human", actor="customer"),
+    "RouteDetail": ROUTE_DETAIL,
     "CaseCreated": {"case_id": CASE, "document_id": DOCUMENT},
     "Health": {"status": "ok"},
     "Me": {"role": "customer"},
@@ -216,19 +219,26 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "PageProgress": {
         "page_id": PAGE,
         "page_number": 1,
-        "page_status": "awaiting_triage",
+        "page_status": "failed",
+        "error_code": "model_unavailable",
     },
     "CaseProgress": {
         "case_id": CASE,
         "case_status": "awaiting_human",
         "redaction_status": "done",
         "pages": [
-            {"page_id": PAGE, "page_number": 1, "page_status": "awaiting_customer"}
+            {
+                "page_id": PAGE,
+                "page_number": 1,
+                "page_status": "awaiting_customer",
+                "error_code": None,
+            }
         ],
+        "error_code": None,
     },
     "AuditTrail": {
         "case_id": CASE,
-        "events": [REDACTION_AUDIT, audit("page.classified")],
+        "events": [REDACTION_AUDIT, audit("page.classified"), ROUTE_AUDIT],
     },
     "PageQueueQuery": {"status": "awaiting_triage"},
     "QueuedPage": {

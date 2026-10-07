@@ -136,6 +136,7 @@
       "enum": [
         "document.redacted",
         "page.classified",
+        "page.routed",
         "page.kept",
         "page.discarded",
         "page.accepted",
@@ -177,6 +178,9 @@
                 }
               },
               "type": "object"
+            },
+            {
+              "$ref": "#/$defs/RouteDetail"
             },
             {
               "type": "null"
@@ -296,6 +300,17 @@
         },
         "case_status": {
           "$ref": "#/$defs/CaseStatus"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "pages": {
           "items": {
@@ -1158,6 +1173,17 @@
     "PageProgress": {
       "additionalProperties": false,
       "properties": {
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "page_id": {
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "title": "Page Id",
@@ -1458,6 +1484,33 @@
       ],
       "title": "RetrieverConfig",
       "type": "string"
+    },
+    "RouteDetail": {
+      "additionalProperties": false,
+      "description": "Detail of `page.routed`: the status the gate gave the page, and the threshold it used.",
+      "properties": {
+        "route": {
+          "enum": [
+            "extracting",
+            "awaiting_customer",
+            "awaiting_triage"
+          ],
+          "title": "Route",
+          "type": "string"
+        },
+        "threshold": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "route",
+        "threshold"
+      ],
+      "title": "RouteDetail",
+      "type": "object"
     },
     "RuleReadQuery": {
       "additionalProperties": false,

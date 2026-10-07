@@ -101,9 +101,26 @@ agreed as the confidence, and one of the agreeing runs' one-line reasons. A tie 
 comes first in the contracts' list of page types. The page then shows as `classified`, and the audit
 trail holds a `page.classified` event naming the service and the model deployment. If the model's
 answer is not what was asked for, or the model cannot be had after three retries, or 180 seconds pass,
-that page and its case are shown as failed. Nothing routes a page yet: after classification the case
-stays `running` (the gate is story 1.9). `GET /cases/<case_id>/classifications` on the service lists
-what was stored; no screen shows it yet.
+that page and its case are shown as failed. `GET /cases/<case_id>/classifications` on the service
+lists what was stored; no screen shows it yet.
+
+Then the gate routes every classified page. It is one rule in `workflow` and nowhere else: a medical
+page classified with a confidence of 0.90 or more goes on to extraction (`extracting`), a non-medical
+page at 0.90 or more goes back to the customer (`awaiting_customer`), and any page under 0.90 goes to
+the underwriter's triage (`awaiting_triage`); exactly 0.90 counts as "or more". The threshold is the
+setting `WORKFLOW_GATE_THRESHOLD` (default `0.90`, refused at start-up outside 0 to 1); only
+`workflow` is given it, and no other service, screen or prompt works out a route. A case keeps the
+value in force when its lifecycle confirmed it, so a change applies to cases started after it.
+Each route is written with a `page.routed` event by `workflow:gate`, which names the classification it
+came from, the route and the threshold used. After the gate a case with a page that waits for a person
+shows as `awaiting_human`; a case whose pages all went to extraction stays `running`; a case started
+with `stop_after: gate` ends as `completed`. The lifecycle ends there for now: the customer's and the
+underwriter's decisions and extraction come with later stories.
+
+The upload screen shows each case's pages under its status, one badge per page with the page number
+and the status the server gave it, and updates them as it reads the progress again every few seconds.
+The progress of a case, and of a page, also carries the error code of the stage that failed, if one
+did (`error_code`); the screen does not show it yet.
 
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
@@ -120,8 +137,12 @@ The chat model is a stand-in too: `uv run python -m synthdata.foundry_standin` (
 (`POST /openai/v1/chat/completions`) in the shape of a chat completion. It is not a model: it tells
 the page types apart by the headings on the synthetic pages and does not look at the picture, so its
 runs always agree and every confidence is 1.0. Start it with `--mode disagree` (three of five runs
-agree, so 0.6), `--mode invalid` (an answer that is not the JSON asked for) or `--mode throttled`
-(every call answered 429) to see the other outcomes. It is part of the same dev-only package, and
+agree, so 0.6, which sends every page to triage), `--mode mixed` (its runs disagree only on pages it
+takes for a laboratory report or an identity document, so one case shows all three routes of the
+gate: with `data/cases/case-002.pdf` two pages go to extraction, one to triage and three back to the
+customer), `--mode invalid` (an answer that is not the JSON asked for) or `--mode throttled`
+(every call answered 429) to see the other outcomes; with `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
+(`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`). It is part of the same dev-only package, and
 `classification` refuses a plain-HTTP model endpoint that is not on this machine. Locally the audit
 trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT` in `dapr.yaml`); in
 Azure that setting is the name of the real deployment.

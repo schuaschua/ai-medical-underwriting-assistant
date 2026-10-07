@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
 from psycopg import errors as pg_errors
+from pydantic import BaseModel
 from sqlalchemy import (
     URL,
     Column,
@@ -37,7 +38,7 @@ from sqlalchemy.dialects.postgresql import insert as upsert
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from contracts.audit import AuditAction, AuditRecord
+from contracts.audit import AuditAction, AuditRecord, RouteDetail
 from contracts.enums import (
     ActorKind,
     CaseStatus,
@@ -47,6 +48,7 @@ from contracts.enums import (
     StageStatus,
     StopAfter,
 )
+from contracts.errors import ErrorCode
 from contracts.ids import new_id
 from contracts.models.workflow import AuditTrail, CaseProgress, PageProgress
 from workflow.adapters.credential import azure_credential
@@ -357,6 +359,11 @@ def _case(row: Row[*tuple[Any, ...]]) -> CaseRecord:
     )
 
 
+def _detail_json(detail: object) -> object:
+    """An audit record's detail as the JSON the column stores."""
+    return detail.model_dump(mode="json") if isinstance(detail, BaseModel) else detail
+
+
 def _audit_record(row: Row[*tuple[Any, ...]]) -> AuditRecord:
     return AuditRecord(
         actor_kind=ActorKind(row.actor_kind),
@@ -482,7 +489,9 @@ class SqlCaseStore:
                 .where(
                     *this_page,
                     page_status_table.c.page_status.in_(
-                        _values(page_statuses_before(change.page_status))
+                        _values(
+                            page_statuses_before(change.page_status, change.only_from)
+                        )
                     ),
                 )
                 .values(page_status=change.page_status.value, updated_at=recorded_at)
@@ -562,7 +571,7 @@ class SqlCaseStore:
                 case_id=audit.case_id,
                 page_id=audit.page_id,
                 ref=audit.ref,
-                detail=audit.detail,
+                detail=_detail_json(audit.detail),
                 error_code=recording.error_code.value
                 if recording.error_code is not None
                 else None,
@@ -572,8 +581,51 @@ class SqlCaseStore:
             )
         )
 
+    async def route_of(
+        self, case_id: str, page_id: str, ref: str
+    ) -> RouteDetail | None:
+        """The detail of the page's `page.routed` event under that reference, if it is in the trail."""
+        with adapter_span(tracer, "workflow.db.read_route"):
+            async with self._database.connect() as connection:
+                result = await connection.execute(
+                    select(audit_event_table.c.detail).where(
+                        audit_event_table.c.case_id == case_id,
+                        audit_event_table.c.page_id == page_id,
+                        audit_event_table.c.action == AuditAction.PAGE_ROUTED.value,
+                        audit_event_table.c.ref == ref,
+                    )
+                )
+                detail = result.scalar_one_or_none()
+        return RouteDetail.model_validate(detail) if detail is not None else None
+
+    async def move_case(
+        self, case_id: str, case_status: CaseStatus, moved_at: datetime
+    ) -> CaseStatus | None:
+        """Give the case a status if it may follow the one it has; return the one it has now."""
+        with adapter_span(tracer, "workflow.db.move_case"):
+            async with self._database.begin() as connection:
+                # Made only from a status the new one may follow
+                # (domain/transitions.py), in the statement that makes it.
+                await connection.execute(
+                    update(case_status_table)
+                    .where(
+                        case_status_table.c.case_id == case_id,
+                        case_status_table.c.case_status.in_(
+                            _values(case_statuses_before(case_status))
+                        ),
+                    )
+                    .values(case_status=case_status.value, updated_at=moved_at)
+                )
+                result = await connection.execute(
+                    select(case_status_table.c.case_status).where(
+                        case_status_table.c.case_id == case_id
+                    )
+                )
+                value = result.scalar_one_or_none()
+        return CaseStatus(value) if value is not None else None
+
     async def progress(self, case_id: str) -> CaseProgress | None:
-        """The case's status and its tracked pages, by page number."""
+        """The case's status and its tracked pages, by page number, with their failure codes."""
         with adapter_span(tracer, "workflow.db.read_progress"):
             async with self._database.connect() as connection:
                 found = await connection.execute(
@@ -594,6 +646,33 @@ class SqlCaseStore:
                     .where(page_status_table.c.case_id == case_id)
                     .order_by(page_status_table.c.page_number)
                 )
+                # The failure reason is the code stored with a `stage.failed`
+                # event: the case's is that of its first one, a page's that
+                # of the event about that page.
+                failures = (
+                    await connection.execute(
+                        select(
+                            audit_event_table.c.page_id,
+                            audit_event_table.c.error_code,
+                        )
+                        .where(
+                            audit_event_table.c.case_id == case_id,
+                            audit_event_table.c.action
+                            == AuditAction.STAGE_FAILED.value,
+                            audit_event_table.c.error_code.is_not(None),
+                        )
+                        .order_by(
+                            audit_event_table.c.recorded_at,
+                            audit_event_table.c.audit_event_id,
+                        )
+                    )
+                ).all()
+                page_codes: dict[str, ErrorCode] = {}
+                for failure in failures:
+                    if failure.page_id is not None:
+                        page_codes.setdefault(
+                            failure.page_id, ErrorCode(failure.error_code)
+                        )
                 return CaseProgress(
                     case_id=case_id,
                     case_status=CaseStatus(case.case_status),
@@ -603,9 +682,11 @@ class SqlCaseStore:
                             page_id=page.page_id,
                             page_number=page.page_number,
                             page_status=PageStatus(page.page_status),
+                            error_code=page_codes.get(page.page_id),
                         )
                         for page in pages
                     ],
+                    error_code=ErrorCode(failures[0].error_code) if failures else None,
                 )
 
     async def audit_trail(self, case_id: str) -> AuditTrail | None:

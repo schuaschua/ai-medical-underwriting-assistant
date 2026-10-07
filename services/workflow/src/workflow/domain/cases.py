@@ -16,6 +16,7 @@ from contracts.models.workflow import (
     StartCaseRequest,
 )
 from workflow.domain.entities import StartParameters
+from workflow.domain.gate import STATUSES_THE_GATE_SETS, Route, route_recording
 from workflow.domain.lifecycle import (
     case_started,
     new_case,
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 UNKNOWN_CASE_MESSAGE = "That case could not be found."
 UNKNOWN_PAGE_MESSAGE = "That page could not be found."
+NOT_A_GATE_STATUS_MESSAGE = "The gate does not give a case that status."
 NOT_STARTED_MESSAGE = "The case could not be started. Please try again."
 
 
@@ -152,6 +154,86 @@ async def record_stage_result(
     if outcome is RecordOutcome.UNKNOWN_PAGE:
         raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_PAGE_MESSAGE)
     return outcome
+
+
+async def record_route(
+    case_id: str,
+    page_id: str,
+    classification_id: str,
+    route: Route,
+    threshold: float,
+    *,
+    store: CaseStore,
+    eval_run_id: str | None = None,
+    trace_id: str | None = None,
+    now: Callable[[], datetime] = utc_now,
+) -> tuple[RecordOutcome, Route | None]:
+    """Record the gate's route of one page: its status and `page.routed`, together (AD-7, AD-8).
+
+    Goes through the recording path, so it is safe to repeat: a route that
+    is in the trail already writes nothing. Answers with how it was left and
+    the route the trail holds for the page: the one given if it was written
+    now, the one written before if it was there already (which is what the
+    page was given, whatever is asked for now), and none if nothing is
+    stored. An unknown case or page is `not_found`.
+    """
+    recording = route_recording(
+        case_id,
+        page_id,
+        classification_id,
+        route,
+        threshold,
+        occurred_at=now(),
+        eval_run_id=eval_run_id,
+        trace_id=trace_id,
+    )
+    outcome = await store.record(recording, now())
+    logger.info(
+        "page routed %s: case_id=%s page_id=%s route=%s ref=%s",
+        outcome.value,
+        case_id,
+        page_id,
+        route.value,
+        classification_id,
+    )
+    if outcome is RecordOutcome.UNKNOWN_CASE:
+        raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_CASE_MESSAGE)
+    if outcome is RecordOutcome.UNKNOWN_PAGE:
+        raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_PAGE_MESSAGE)
+    if outcome is RecordOutcome.RECORDED:
+        return outcome, route
+    if outcome is RecordOutcome.DUPLICATE:
+        stored = await store.route_of(case_id, page_id, classification_id)
+        return outcome, Route(stored.route.value) if stored is not None else None
+    return outcome, None
+
+
+async def settle_case_after_gate(
+    case_id: str,
+    case_status: CaseStatus,
+    *,
+    store: CaseStore,
+    now: Callable[[], datetime] = utc_now,
+) -> CaseStatus:
+    """Give a case the status the gate left it with; answer with the status it has now.
+
+    The gate leaves a case waiting for a human or, told to stop there,
+    completed: any other status is `validation_failed`. A case that has
+    failed in the meantime stays failed. Safe to repeat. `not_found` for a
+    case never started.
+    """
+    if case_status not in STATUSES_THE_GATE_SETS:
+        raise DomainError(ErrorCode.VALIDATION_FAILED, NOT_A_GATE_STATUS_MESSAGE)
+    status = await store.move_case(case_id, case_status, now())
+    if status is None:
+        raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_CASE_MESSAGE)
+    logger.info(
+        "case after the gate: case_id=%s wanted=%s case_status=%s",
+        case_id,
+        case_status.value,
+        status.value,
+    )
+    return status
 
 
 async def read_progress(case_id: str, *, store: CaseStore) -> CaseProgress:

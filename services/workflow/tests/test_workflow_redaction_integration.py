@@ -112,7 +112,7 @@ def test_story_1_7_a_started_case_is_redacted_and_its_pages_are_tracked_as_uploa
     }
     # Redaction is done, and each page of the result is tracked: as
     # `uploaded` first, and by now, the lifecycle having run on, as
-    # `classified` (story 1.8, test_workflow_classification_integration.py).
+    # `classified` (story 1.8) and then routed by the gate (story 1.9).
     assert (progress.case_status.value, progress.redaction_status.value) == (
         "running",
         "done",
@@ -121,7 +121,7 @@ def test_story_1_7_a_started_case_is_redacted_and_its_pages_are_tracked_as_uploa
     assert [(page.page_id, page.page_number) for page in progress.pages] == [
         (page_id, number) for number, page_id in enumerate(result.page_ids, 1)
     ]
-    assert {page.page_status.value for page in progress.pages} == {"classified"}
+    assert {page.page_status.value for page in progress.pages} == {"extracting"}
     # One `document.redacted` event whose detail is a count per category.
     (event,) = (
         event for event in trail.events if event.action.value == "document.redacted"

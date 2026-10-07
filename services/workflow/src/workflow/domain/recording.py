@@ -50,6 +50,9 @@ class NewPage:
 class PageChange:
     page_id: str
     page_status: PageStatus
+    # Set when the change may be made from this one status only, and not from
+    # every status the transition table lists before `page_status`.
+    only_from: PageStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -53,13 +53,24 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
         trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
 
     # Progress: redaction done, and the six pages of the case tracked: as
-    # `uploaded` when redaction ended, and as `classified` by now (story 1.8).
+    # `uploaded` when redaction ended. The lifecycle has ended by now
+    # (`completed` above waited for it): each page is classified (story 1.8)
+    # and routed by the gate (story 1.9), the three medical pages on to
+    # extraction and the other three back to the customer, so the case waits
+    # for a human.
     assert (progress.case_status.value, progress.redaction_status.value) == (
-        "running",
+        "awaiting_human",
         "done",
     )
     assert [page.page_number for page in progress.pages] == [1, 2, 3, 4, 5, 6]
-    assert {page.page_status.value for page in progress.pages} == {"classified"}
+    assert [page.page_status.value for page in progress.pages] == [
+        "extracting",
+        "extracting",
+        "extracting",
+        "awaiting_customer",
+        "awaiting_customer",
+        "awaiting_customer",
+    ]
     # They are the pages `intake` holds, in the same order.
     assert [page.page_id for page in progress.pages] == [
         page.page_id for page in intake.pages(case_id).pages
@@ -72,7 +83,7 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
         "document.redacted",
         "intake:azure-ai-language",
     )
-    assert event.detail is not None
+    assert isinstance(event.detail, dict)
     assert event.detail["Person"] >= 2
     assert all(isinstance(count, int) for count in event.detail.values())
     assert set(event.detail) <= {

@@ -26,6 +26,7 @@ import {
   errorBody,
   fakeServer,
   json,
+  pageProgress,
   startedCase,
   UPLOADED,
   type RecordedCall,
@@ -1300,5 +1301,227 @@ describe("1.7 a case whose redaction failed", () => {
     );
     expect(screen.queryByText(UPLOAD_AGAIN)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("1.9 page badges", () => {
+  const PROGRESS_PATH = `/api/cases/${UPLOADED.case_id}/progress`;
+  const OTHER_CASE = "019a0000-0000-7000-8000-000000000011";
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function storeCases(...caseIds: string[]) {
+    window.sessionStorage.setItem(
+      CASES_STORAGE_KEY,
+      JSON.stringify(
+        caseIds.map((case_id) => ({
+          case_id,
+          document_id: UPLOADED.document_id,
+        })),
+      ),
+    );
+  }
+
+  function badges(caseId: string = UPLOADED.case_id): string[] {
+    const list = screen.queryByRole("list", {
+      name: `Pages of case ${caseId}`,
+    });
+    return list === null
+      ? []
+      : within(list)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent ?? "");
+  }
+
+  function reads(server: { calls: RecordedCall[] }): number {
+    return server.calls.filter((call) => call.path === PROGRESS_PATH).length;
+  }
+
+  async function nextPoll() {
+    await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS));
+  }
+
+  it("shows one badge per page with its number and the status the server gave it, in page order", async () => {
+    // The server's list, here out of order on purpose.
+    fakeServer((call) =>
+      call.path === PROGRESS_PATH
+        ? json(
+            200,
+            caseProgress(UPLOADED.case_id, "awaiting_human", "done", [
+              pageProgress(3, "awaiting_triage"),
+              pageProgress(1, "extracting"),
+              pageProgress(2, "awaiting_customer"),
+            ]),
+          )
+        : undefined,
+    );
+    storeCases(UPLOADED.case_id);
+
+    openUploadScreen();
+
+    await waitFor(() =>
+      expect(badges()).toEqual([
+        "Page 1: Being read",
+        "Page 2: Needs your answer",
+        "Page 3: Waiting for the underwriter",
+      ]),
+    );
+    // Under the case they belong to, beside its own status.
+    const [row] = caseRows();
+    expect(row?.[0]).toBe(UPLOADED.case_id);
+    expect(row?.[1]).toContain("Waiting for a decision");
+  });
+
+  it("changes the badges as polling brings new statuses, without a reload, and goes on while the case waits for a person", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let progress = caseProgress(UPLOADED.case_id, "running", "running");
+    const server = fakeServer((call) =>
+      call.path === PROGRESS_PATH ? json(200, progress) : undefined,
+    );
+    storeCases(UPLOADED.case_id);
+
+    openUploadScreen();
+    await waitFor(() =>
+      expect(caseRows()).toEqual([[UPLOADED.case_id, "Running"]]),
+    );
+    // Until redaction is done the case has no pages, and no badges.
+    expect(badges()).toEqual([]);
+
+    progress = caseProgress(UPLOADED.case_id, "running", "done", [
+      pageProgress(1, "uploaded"),
+      pageProgress(2, "uploaded"),
+    ]);
+    await nextPoll();
+    expect(badges()).toEqual(["Page 1: Received", "Page 2: Received"]);
+
+    progress = caseProgress(UPLOADED.case_id, "running", "done", [
+      pageProgress(1, "classified"),
+      pageProgress(2, "uploaded"),
+    ]);
+    await nextPoll();
+    expect(badges()).toEqual(["Page 1: Classified", "Page 2: Received"]);
+
+    progress = caseProgress(UPLOADED.case_id, "awaiting_human", "done", [
+      pageProgress(1, "extracting"),
+      pageProgress(2, "awaiting_customer"),
+    ]);
+    await nextPoll();
+    expect(badges()).toEqual([
+      "Page 1: Being read",
+      "Page 2: Needs your answer",
+    ]);
+
+    // A case that waits for a person can still change: it is read again,
+    // and a later status is shown.
+    const before = reads(server);
+    progress = caseProgress(UPLOADED.case_id, "awaiting_human", "done", [
+      pageProgress(1, "extracted"),
+      pageProgress(2, "discarded"),
+    ]);
+    await nextPoll();
+    expect(reads(server)).toBe(before + 1);
+    expect(badges()).toEqual(["Page 1: Read", "Page 2: Discarded"]);
+
+    // A finished case is read no more; its badges stay.
+    progress = caseProgress(UPLOADED.case_id, "completed", "done", [
+      pageProgress(1, "extracted"),
+      pageProgress(2, "discarded"),
+    ]);
+    await nextPoll();
+    const finished = reads(server);
+    await nextPoll();
+    await nextPoll();
+    expect(reads(server)).toBe(finished);
+    expect(badges()).toEqual(["Page 1: Read", "Page 2: Discarded"]);
+  });
+
+  it("shows each case's own pages", async () => {
+    fakeServer((call) => {
+      if (call.path === PROGRESS_PATH) {
+        return json(
+          200,
+          caseProgress(UPLOADED.case_id, "running", "done", [
+            pageProgress(1, "extracting"),
+          ]),
+        );
+      }
+      if (call.path === `/api/cases/${OTHER_CASE}/progress`) {
+        return json(
+          200,
+          caseProgress(OTHER_CASE, "failed", "done", [
+            pageProgress(1, "classified"),
+            pageProgress(2, "failed", "invalid_model_output"),
+          ]),
+        );
+      }
+      return undefined;
+    });
+    storeCases(UPLOADED.case_id, OTHER_CASE);
+
+    openUploadScreen();
+
+    await waitFor(() => expect(badges()).toEqual(["Page 1: Being read"]));
+    await waitFor(() =>
+      expect(badges(OTHER_CASE)).toEqual([
+        "Page 1: Classified",
+        "Page 2: Failed",
+      ]),
+    );
+  });
+
+  it("has a wording for every page status, in the strings module", () => {
+    const statuses = [
+      "uploaded",
+      "classified",
+      "awaiting_customer",
+      "awaiting_triage",
+      "extracting",
+      "extracted",
+      "discarded",
+      "denied",
+      "failed",
+    ];
+
+    expect(Object.keys(strings.pageStatus).sort()).toEqual(statuses.sort());
+    for (const wording of Object.values(strings.pageStatus)) {
+      expect(wording.trim()).not.toBe("");
+    }
+    expect(strings.upload.pageBadge(2, strings.pageStatus.denied)).toBe(
+      "Page 2: Denied",
+    );
+  });
+
+  it("shows a status it has no wording for as the server sent it", async () => {
+    fakeServer((call) =>
+      call.path === PROGRESS_PATH
+        ? json(
+            200,
+            caseProgress(UPLOADED.case_id, "running", "done", [
+              pageProgress(1, "archived"),
+            ]),
+          )
+        : undefined,
+    );
+    storeCases(UPLOADED.case_id);
+
+    openUploadScreen();
+
+    await waitFor(() => expect(badges()).toEqual(["Page 1: archived"]));
+  });
+
+  it("works out no status or route in the browser", () => {
+    const sources = [
+      "src/screens/UploadDocument.tsx",
+      "src/cases/caseProgress.ts",
+      "src/strings.ts",
+      "src/api/client.ts",
+    ].map((path) => readFileSync(resolve(process.cwd(), path), "utf8"));
+
+    for (const source of sources) {
+      // No threshold, no confidence and no medical-or-not reach the screen.
+      expect(source).not.toMatch(/threshold|confidence|is_medical|0\.9/i);
+    }
   });
 });

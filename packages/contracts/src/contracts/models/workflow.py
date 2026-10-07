@@ -16,6 +16,7 @@ from contracts.enums import (
     StageStatus,
     StopAfter,
 )
+from contracts.errors import ErrorCode
 from contracts.ids import CaseId, DecisionId, EvalRunId, PageId
 
 RetrieverConfigs = Annotated[list[RetrieverConfig], Field(min_length=1)]
@@ -94,6 +95,8 @@ class PageProgress(ContractModel):
     page_id: PageId
     page_number: PageNumber
     page_status: PageStatus
+    # Set when a stage failed on this page: the code of its `stage.failed` event.
+    error_code: ErrorCode | None = None
 
 
 class CaseProgress(ContractModel):
@@ -104,6 +107,8 @@ class CaseProgress(ContractModel):
     redaction_status: StageStatus
     # Empty until redaction is done.
     pages: list[PageProgress]
+    # Set when a stage failed: the code of the case's first `stage.failed` event.
+    error_code: ErrorCode | None = None
 
 
 class AuditTrail(ContractModel):

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from contracts.audit import AuditAction, AuditRecord, ai_actor
+from contracts.audit import AuditAction, AuditRecord, RouteDetail, ai_actor
 from contracts.base import ContractModel, NonEmptyStr, OneLine, TraceId
 from contracts.enums import Service
 from contracts.errors import (
@@ -33,7 +33,12 @@ from contracts.models.verdict import (
     VerdictRun,
     VerdictRunResult,
 )
-from contracts.models.workflow import CaseStarted, DecisionRequest, StartCaseRequest
+from contracts.models.workflow import (
+    CaseProgress,
+    CaseStarted,
+    DecisionRequest,
+    StartCaseRequest,
+)
 
 CASE = "0199b7a0-0000-7000-8000-000000000001"
 OTHER_CASE = "0199b7a0-0000-7000-8000-0000000000ff"
@@ -236,6 +241,8 @@ def test_story_1_1_audit_actions_are_the_spine_catalogue() -> None:
     assert {action.value for action in AuditAction} == {
         "document.redacted",
         "page.classified",
+        # Story 1.9: the gate's own action, added to the spine's catalogue.
+        "page.routed",
         "page.kept",
         "page.discarded",
         "page.accepted",
@@ -292,6 +299,71 @@ def test_story_1_1_audit_detail_is_redaction_counts_and_nothing_else() -> None:
         AuditRecord.model_validate({**redacted, "detail": {"Person": "Jane Doe"}})
     with pytest.raises(ValidationError):
         AuditRecord.model_validate(audit(detail={"Person": 2}))
+
+
+def test_story_1_9_a_routed_page_carries_the_route_and_the_threshold() -> None:
+    detail = {"route": "awaiting_customer", "threshold": 0.9}
+    routed = audit(action="page.routed", actor="workflow:gate", detail=detail)
+
+    record = AuditRecord.model_validate(routed)
+
+    assert record.detail == RouteDetail.model_validate(detail)
+    assert record.model_dump(mode="json")["detail"] == detail
+    for route in ("extracting", "awaiting_customer", "awaiting_triage"):
+        assert RouteDetail.model_validate({"route": route, "threshold": 0.9})
+    for wrong in (
+        # A route is never without its detail, and never carries counts.
+        {**routed, "detail": None},
+        {**routed, "detail": {"Person": 2}},
+        {**routed, "detail": {"route": "somewhere", "threshold": 0.9}},
+        # A page status, but not one the gate gives.
+        *(
+            {**routed, "detail": {"route": status, "threshold": 0.9}}
+            for status in (
+                "uploaded",
+                "classified",
+                "extracted",
+                "discarded",
+                "denied",
+                "failed",
+            )
+        ),
+        {**routed, "detail": {"route": "extracting", "threshold": 1.5}},
+        {**routed, "detail": {"route": "extracting"}},
+        # A page action names its page; the gate is not a human.
+        {**routed, "page_id": None},
+        {**routed, "actor_kind": "human", "actor": "underwriter"},
+        # No other action carries a route.
+        audit(detail=detail),
+        audit(action="document.redacted", page_id=None, detail=detail),
+    ):
+        with pytest.raises(ValidationError):
+            AuditRecord.model_validate(wrong)
+
+
+def test_story_1_9_progress_carries_a_failure_reason_from_the_catalogue() -> None:
+    page = {"page_id": PAGE, "page_number": 1, "page_status": "failed"}
+    case = {
+        "case_id": CASE,
+        "case_status": "failed",
+        "redaction_status": "done",
+        "pages": [{**page, "error_code": "invalid_model_output"}],
+        "error_code": "invalid_model_output",
+    }
+
+    progress = CaseProgress.model_validate(case)
+
+    assert progress.error_code is ErrorCode.INVALID_MODEL_OUTPUT
+    assert progress.pages[0].error_code is ErrorCode.INVALID_MODEL_OUTPUT
+    # Nothing failed: both are null, also when the field is left out.
+    untouched = CaseProgress.model_validate(
+        {**case, "case_status": "running", "pages": [page], "error_code": None}
+    )
+    assert untouched.error_code is None
+    assert untouched.pages[0].error_code is None
+    assert untouched.model_dump(mode="json")["pages"][0]["error_code"] is None
+    with pytest.raises(ValidationError):
+        CaseProgress.model_validate({**case, "error_code": "it broke"})
 
 
 # --- errors

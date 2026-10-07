@@ -65,8 +65,16 @@ RETRY = task.RetryPolicy(
 STAGE_RETRY = task.RetryPolicy(
     first_retry_interval=timedelta(seconds=1), max_number_of_attempts=9
 )
-CONFIRMED = {"outcome": "ok", "case_status": "running"}
-CLASSIFIED = {"outcome": "ok", "case_status": "running"}
+CONFIRMED = {"outcome": "ok", "case_status": "running", "gate_threshold": 0.9}
+# Story 1.9: a done classification hands on what the gate needs.
+CLASSIFIED = {
+    "outcome": "ok",
+    "case_status": "running",
+    "classification_id": new_id(),
+    "is_medical": True,
+    "confidence": 0.95,
+}
+ROUTED = {"outcome": "ok", "case_status": "running", "route": "extracting"}
 TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
 
 
@@ -93,7 +101,10 @@ def run_lifecycle(
     test can see which were asked for together.
     """
     context = RecordingContext()
-    steps: Any = build_case_lifecycle(RETRY, STAGE_RETRY)(context, started)  # type: ignore[arg-type]  # the stand-in has the one method used
+    steps: Any = build_case_lifecycle(RETRY, STAGE_RETRY)(
+        context,  # type: ignore[arg-type]  # the stand-in has the one method used
+        started,
+    )
     assert inspect.isgenerator(steps)
     steps = cast(Any, steps)
     next(steps)
@@ -126,19 +137,19 @@ def test_story_1_8_after_redaction_every_page_is_classified_by_a_command_of_its_
     }
 
     asked, result, asked_at_each_wait = run_lifecycle(
-        started, [CONFIRMED, redacted(page_ids), [CLASSIFIED] * 3]
+        started, [CONFIRMED, redacted(page_ids), [CLASSIFIED] * 3, [ROUTED] * 3]
     )
 
     # One command per page, in document order, each with ids only (AD-6), the
     # contender the case was started with and the stage's retry policy.
-    assert [step["activity"] for step in asked] == [
+    assert [step["activity"] for step in asked[:5]] == [
         CONFIRM_CASE_STARTED,
         REDACT_DOCUMENT,
         CLASSIFY_PAGE,
         CLASSIFY_PAGE,
         CLASSIFY_PAGE,
     ]
-    assert asked[2:] == [
+    assert asked[2:5] == [
         {
             "activity": CLASSIFY_PAGE,
             "input": {
@@ -152,9 +163,9 @@ def test_story_1_8_after_redaction_every_page_is_classified_by_a_command_of_its_
         for page_id in page_ids
     ]
     # In parallel: all three were asked for before the orchestrator waited.
-    assert asked_at_each_wait == [1, 2, 5]
-    # The pages are classified and the case goes on running: the lifecycle
-    # ends here for now, without a gate, a route or a wait for a human.
+    assert asked_at_each_wait[:3] == [1, 2, 5]
+    # The pages are classified and the case goes on running; what follows is
+    # the gate (story 1.9, test_workflow_gate.py).
     assert result == {"case_id": case_id, "case_status": "running"}
 
 
@@ -267,15 +278,15 @@ def test_story_1_8_a_failed_redaction_classifies_nothing(case_id: str) -> None:
     assert result == {"case_id": case_id, "case_status": "failed"}
 
 
-def test_story_1_8_classification_leads_to_no_route_and_no_wait_for_a_human() -> None:
-    # Stories 1.9 to 1.11 add the gate and the decisions. Until then nothing
-    # in the lifecycle sets an `awaiting_*` status: the orchestrator names
-    # four activities and no more.
-    source = inspect.getsource(build_case_lifecycle)
-
-    assert "awaiting" not in source
-    assert "wait_for_external_event" not in source
-    # The status table allows the routes; nothing built so far takes one.
+def test_story_1_8_classification_itself_routes_nothing_and_waits_for_no_human() -> (
+    None
+):
+    # The classify activity never routes (AD-7): the gate does, after it
+    # (story 1.9). The waits for decisions come with stories 1.10 and 1.11.
+    classify_source = inspect.getsource(Activities.classify_page)
+    assert "record_route" not in classify_source
+    assert "Route(" not in classify_source
+    assert "wait_for_external_event" not in inspect.getsource(build_case_lifecycle)
     assert PageStatus.AWAITING_TRIAGE in PAGE_TRANSITIONS[PageStatus.CLASSIFIED]
 
 
@@ -347,6 +358,19 @@ def classify(
         ]
 
 
+def handed_on(stages: FakeStages, case_id: str, page_id: str) -> dict[str, Any]:
+    """What a done classification answers: its outcome and what the gate needs (story 1.9)."""
+    stored = stages.classifications[(case_id, page_id)]
+    assert stored.classification is not None
+    return {
+        "outcome": "ok",
+        "case_status": "running",
+        "classification_id": stored.classification_id,
+        "is_medical": stored.classification.is_medical,
+        "confidence": stored.classification.confidence,
+    }
+
+
 def test_story_1_8_a_done_classification_moves_its_page_to_classified_with_one_event(
     store: MemoryCaseStore, case_id: str
 ) -> None:
@@ -357,7 +381,7 @@ def test_story_1_8_a_done_classification_moves_its_page_to_classified_with_one_e
     # its stored result, and recording it again writes nothing new.
     answers = classify(store, stages, case_id, first, times=2)
 
-    assert answers == [{"outcome": "ok", "case_status": "running"}] * 2
+    assert answers == [handed_on(stages, case_id, first)] * 2
     assert store.pages[first].page_status is PageStatus.CLASSIFIED
     assert store.pages[second].page_status is PageStatus.UPLOADED
     # The case goes on running: nothing routes the page yet.
@@ -415,7 +439,7 @@ def test_story_1_8_the_classify_activity_waits_the_stage_timeout_not_the_general
         )
 
     # Waited for with the stage's 200 s setting (here 5 s), so it is heard.
-    assert answer == {"outcome": "ok", "case_status": "running"}
+    assert answer == handed_on(stages, case_id, page_id)
     assert store.pages[page_id].page_status is PageStatus.CLASSIFIED
 
 
@@ -438,7 +462,7 @@ def test_story_1_8_a_failed_classification_fails_its_page_and_the_case_with_one_
     # the case. A failed case takes no further result, so the third page's
     # failure writes nothing and the page stays where it was.
     assert answers == [
-        {"outcome": "ok", "case_status": "running"},
+        handed_on(stages, case_id, first),
         {"outcome": "ok", "case_status": "failed"},
         {"outcome": "ok", "case_status": "failed"},
     ]
@@ -489,7 +513,7 @@ def test_story_1_8_in_progress_fails_the_activity_so_the_engine_sends_the_comman
         f"activity failed: activity=classify_page case_id={case_id} "
         "reason=in_progress retry=True"
     ) in caplog.text
-    assert answer == {"outcome": "ok", "case_status": "running"}
+    assert answer == handed_on(stages, case_id, page_id)
     assert len(stages.classify_calls) == 3
     assert store.pages[page_id].page_status is PageStatus.CLASSIFIED
 
