@@ -19,6 +19,10 @@ apps:
     env:
       WEB_HOST: "127.0.0.1"
       WEB_PORT: "8000"
+      # AD-17: the Scoreboard screen shows what a local run of the bake-off
+      # runner wrote (`uv run python -m bakeoff`, stand-in figures), not the
+      # published files in data/scoreboards. Relative to appDirPath.
+      WEB_SCOREBOARDS_DIR: "../../.work/scoreboards"
   - appID: intake
     appDirPath: ./services/intake
     appProtocol: http

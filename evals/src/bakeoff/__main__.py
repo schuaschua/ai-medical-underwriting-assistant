@@ -74,6 +74,13 @@ def _report(result: RunResult) -> None:
             f"recall {row.recall_hits}/{row.recall_searches}, "
             f"verdicts {row.right_runs}/{row.cases}, "
             f"latency {_milliseconds(row.latency_ms_median)}"
+            # A failure of the system, said apart from a wrong verdict.
+            + (
+                f", {row.failed_runs} {'run' if row.failed_runs == 1 else 'runs'}"
+                " failed or missing"
+                if row.failed_runs
+                else ""
+            )
         )
     print(f"  winner: {board.winner.value if board.winner else 'none'}")
     for failed in board.unscored_cases:

@@ -1820,6 +1820,18 @@
             }
           ]
         },
+        "failed_runs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Failed Runs"
+        },
         "latency_ms_median": {
           "anyOf": [
             {
@@ -1948,6 +1960,7 @@
         "verdict_accuracy",
         "right_runs",
         "cases",
+        "failed_runs",
         "latency_ms_median",
         "latency_ms_p95",
         "latency_searches",

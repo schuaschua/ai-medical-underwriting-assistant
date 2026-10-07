@@ -251,7 +251,9 @@ def test_story_1_5_logs_carry_no_file_name_and_no_content(
 
 # GET and HEAD of health share one function, which only the schema builder minds.
 @pytest.mark.filterwarnings("ignore:Duplicate Operation ID")
-def test_story_1_5_no_route_returns_an_original(settings: Settings) -> None:
+def test_story_1_5_no_route_returns_an_original_and_asking_for_one_is_404(
+    settings: Settings, client: TestClient, sidecar: FakeSidecar, case_pdf: bytes
+) -> None:
     app = create_app(settings)
     paths = get_openapi(title="web", version="0", routes=app.routes)["paths"]
     api_routes = {
@@ -299,12 +301,13 @@ def test_story_1_5_no_route_returns_an_original(settings: Settings) -> None:
         # page's text, which is the redacted page's (AD-21).
         ("POST", "/api/searches"),
         ("GET", "/api/pages/{page_id}/text"),
+        # Story 3.5: the two scoreboard files, read only (AD-17): figures
+        # and counts, no document and no page text. No route takes a score.
+        ("GET", "/api/scoreboards/retrieval"),
+        ("GET", "/api/scoreboards/redaction"),
     }
 
-
-def test_story_1_5_asking_for_the_original_is_404(
-    client: TestClient, sidecar: FakeSidecar, case_pdf: bytes
-) -> None:
+    # Asking for the original, under any name one might try, is 404.
     uploaded = client.post("/api/cases", content=case_pdf, headers=CUSTOMER).json()
     case_id, document_id = uploaded["case_id"], uploaded["document_id"]
     calls_for_the_upload = len(sidecar.requests)

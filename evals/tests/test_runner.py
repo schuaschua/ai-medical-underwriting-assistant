@@ -186,6 +186,9 @@ def test_story_3_4_a_run_scores_every_available_row_on_the_same_queries_and_case
         (2, 2),
         (2, 2),
     ]
+    # Story 3.5: a wrong verdict is no failed run, and a row that was not
+    # measured has no such count.
+    assert [rows[row].failed_runs for row in rows] == [0, 0, 0, None, None, None]
     assert (rows["r1"].verdict_accuracy, rows["r2"].verdict_accuracy) == (0.5, 1.0)
     assert board.unscored_cases == []
     # `r2` and `r3` tie on accuracy: the higher recall wins.
@@ -271,6 +274,9 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
         (0, 4),
         (0, 4),
     ]
+    # Story 3.5: a case that was not scored is listed once, as such: its
+    # runs are not counted again as runs that failed.
+    assert (rows["r1"].failed_runs, rows["r3"].failed_runs) == (0, 0)
     # A row left out of the run is not measured and no case was started with it.
     assert not rows["r2"].measured
     assert web.case("case-901").started_with == {
@@ -283,27 +289,35 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
 
     # The run is started again with its id: the hanging case has finished
     # meanwhile, no case is uploaded or started a second time, and the
-    # finished case is read and scored.
+    # finished case is read and scored. The case whose start got no answer
+    # is started now, for the first time.
     web.hanging = set()
     web.failing = set()
+    web.refused_starts = set()
+    web.verdicts["case-904"] = dict.fromkeys(("r1", "r3"), ("standard", None))
+    # Story 3.5: one finished case holds no run of `r1` at all, and `r3`'s
+    # run of another ended as failed.
+    web.missing_runs = {("case-904", "r1")}
+    web.failed_runs = {("case-902", "r3")}
     uploads, starts = list(web.uploads), list(web.starts)
     again = make_run(
         settings.model_copy(update={"eval_run_id": board.run.eval_run_id}), web
     )
 
     assert web.uploads == uploads and len(uploads) == 4
-    assert web.starts == starts and len(starts) == 3
+    assert web.starts == [*starts, "case-904"] and len(starts) == 3
+    starts = list(web.starts)
     assert again.retrieval.run.eval_run_id == board.run.eval_run_id
-    assert [case.case_key for case in again.retrieval.unscored_cases] == [
-        "case-903",
-        "case-904",
-    ]
+    assert [case.case_key for case in again.retrieval.unscored_cases] == ["case-903"]
     resumed = {row.retriever_config.value: row for row in again.retrieval.rows}
-    # `case-901`: `r3` right; `case-902`: both right; `case-903` still wrong.
-    assert [(resumed[row].right_runs, resumed[row].cases) for row in ("r1", "r3")] == [
-        (1, 4),
-        (2, 4),
-    ]
+    # `r1` has all three beside the case that was not scored: a wrong
+    # verdict (`case-901`), a right one (`case-902`) and a run that is
+    # missing (`case-904`), counted apart from the wrong one. `r3` is right
+    # on `case-901` and `case-904`, and its run of `case-902` failed.
+    assert [
+        (resumed[row].right_runs, resumed[row].failed_runs, resumed[row].cases)
+        for row in ("r1", "r3")
+    ] == [(1, 1, 4), (2, 1, 4)]
     assert again.retrieval.winner == "r3"
 
     # A case is started once: the run cannot be resumed with other rows, or

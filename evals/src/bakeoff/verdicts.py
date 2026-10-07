@@ -78,6 +78,16 @@ class CaseOutcome:
             return set()
         return {row for row, run in self.runs.items() if run_is_right(run, expected)}
 
+    def run_failed(self, row: RetrieverConfig) -> bool:
+        """Whether a scored case holds no finished run of this row: the system failed, not the verdict.
+
+        False for a case that was not scored: it is listed as such, once.
+        """
+        if self.unscored is not None:
+            return False
+        run = self.runs.get(row)
+        return run is None or run.status is not StageStatus.DONE
+
 
 @dataclass(frozen=True)
 class CaseRunner:

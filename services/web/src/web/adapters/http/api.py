@@ -1,4 +1,4 @@
-"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage, the result view's reads and the bake-off runner's two.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions, triage, the result view's reads, the bake-off runner's two and the scoreboard files.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
 to `intake`, asks `workflow` to start the case, reads progress, the audit
@@ -24,6 +24,10 @@ The bake-off runner (story 3.4, AD-17) drives the system through these same
 routes, and through two more that exist for it: the eval search, which is
 `retrieval`'s search passed through, and a page's stored text, which its
 redaction check reads. `web` scores nothing and never sees the expected answers.
+
+The scoreboard (story 3.5, AD-17) is the two files the runner wrote, read
+from `web`'s own folder and answered as they are. There is no route that
+takes a score.
 
 The uploaded original is never served by any service (AD-21). The one
 document file served is the redacted PDF, and the one image a page's
@@ -52,6 +56,8 @@ from contracts.models.web import (
     Health,
     Me,
     PageDecisionRequest,
+    RedactionScoreboard,
+    RetrievalScoreboard,
     TriageQueue,
     UploadedCase,
 )
@@ -71,6 +77,7 @@ from contracts.upload import IDEMPOTENCY_KEY_HEADER, parse_idempotency_key
 from web.adapters.dapr import ServiceClient
 from web.adapters.http.errors import API_PREFIX, INVALID_REQUEST_MESSAGE
 from web.adapters.http.roles import role_for
+from web.adapters.http.scoreboards import ScoreboardReader
 from web.adapters.http.triage import TriageReader
 from web.adapters.http.upload import checked_pdf, declared_length
 from web.domain.roles import RouteGroup
@@ -82,6 +89,11 @@ SERVICES_STATE = "services"
 TRIAGE_STATE = "triage"
 # The underwriter's queue. It is `web`'s own resource: no one service owns it.
 TRIAGE_PATH = "/triage"
+# Where it keeps the reader of the scoreboard files.
+SCOREBOARDS_STATE = "scoreboards"
+# The scoreboard files. They are `web`'s own resource: no service owns a score.
+RETRIEVAL_SCOREBOARD_PATH = "/scoreboards/retrieval"
+REDACTION_SCOREBOARD_PATH = "/scoreboards/redaction"
 
 any_role = role_for(RouteGroup.ANY_ROLE)
 customer_only = role_for(RouteGroup.CUSTOMER)
@@ -107,6 +119,11 @@ def _services(request: Request) -> ServiceClient:
 def _triage(request: Request) -> TriageReader:
     triage: TriageReader = getattr(request.app.state, TRIAGE_STATE)
     return triage
+
+
+def _scoreboards(request: Request) -> ScoreboardReader:
+    scoreboards: ScoreboardReader = getattr(request.app.state, SCOREBOARDS_STATE)
+    return scoreboards
 
 
 # Every route here is refused with 400 without a demo role.
@@ -411,6 +428,29 @@ async def read_page_text(
     return await _services(request).read_page_text(
         page_id, traceparent=request.headers.get("traceparent")
     )
+
+
+# --- The scoreboard files (story 3.5) ------------------------------------------------
+#
+# AD-17: the scores are files the bake-off runner wrote. Two reads, for the
+# underwriter only (AD-9): each file is checked against its contracts model
+# and answered as it is. 404 `not_found` until the bake-off has been run. No
+# route here takes a score. The functions are not `async`: reading a file
+# blocks, so the framework runs them on a worker thread.
+
+
+@role_checked.get(RETRIEVAL_SCOREBOARD_PATH)
+def read_retrieval_scoreboard(
+    request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
+) -> RetrievalScoreboard:
+    return _scoreboards(request).retrieval()
+
+
+@role_checked.get(REDACTION_SCOREBOARD_PATH)
+def read_redaction_scoreboard(
+    request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
+) -> RedactionScoreboard:
+    return _scoreboards(request).redaction()
 
 
 router = APIRouter(prefix=API_PREFIX)

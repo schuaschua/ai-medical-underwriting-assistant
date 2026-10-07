@@ -145,6 +145,79 @@ export function caseSummary(
   };
 }
 
+/** When and where a bake-off run was made, as both scoreboard files say it. */
+export const SCOREBOARD_RUN = {
+  eval_run_id: "0199b7a0-0000-7000-8000-000000000006",
+  started_at: "2026-10-08T09:00:00Z",
+  finished_at: "2026-10-08T09:10:05Z",
+  web_address: "http://localhost:8000",
+  stand_ins: true,
+};
+
+/** One row of the retrieval scoreboard: measured with these figures, or not measured. */
+export function rowScore(
+  retrieverConfig: string,
+  measured: boolean,
+  changes: Record<string, unknown> = {},
+) {
+  const numbers = {
+    rule_recall: 0.9744,
+    recall_hits: 38,
+    recall_searches: 39,
+    verdict_accuracy: 0.6818,
+    right_runs: 15,
+    cases: 22,
+    failed_runs: 0,
+    latency_ms_median: 20,
+    latency_ms_p95: 35,
+    latency_searches: 39,
+  };
+  return {
+    retriever_config: retrieverConfig,
+    store: "pgvector",
+    chunk_set: "smart",
+    method: "Vector only",
+    measured,
+    ...(measured
+      ? numbers
+      : Object.fromEntries(Object.keys(numbers).map((name) => [name, null]))),
+    cost: null,
+    effort: null,
+    ...changes,
+  };
+}
+
+/** The retrieval scoreboard as the runner writes it: `r1`, `r2`, `r3` and `r5` measured, `r5` the winner. */
+export function retrievalScoreboard(changes: Record<string, unknown> = {}) {
+  return {
+    run: SCOREBOARD_RUN,
+    top_k: 5,
+    rows: ["r1", "r2", "r3", "r4", "r5", "r6"].map((config) =>
+      rowScore(config, !["r4", "r6"].includes(config)),
+    ),
+    winner: "r5",
+    failed_searches: [],
+    unscored_cases: [],
+    ...changes,
+  };
+}
+
+/** The redaction report of the same run: clean unless told otherwise. */
+export function redactionScoreboard(changes: Record<string, unknown> = {}) {
+  return {
+    run: SCOREBOARD_RUN,
+    clean: true,
+    cases_checked: 22,
+    pages_checked: 94,
+    identifiers_checked: 180,
+    leaks: [],
+    may_also_be_redacted: 30,
+    may_also_be_redacted_masked: 4,
+    cases_not_checked: [],
+    ...changes,
+  };
+}
+
 /** A thumbnail as `web` serves it. The bytes are no picture and need not be. */
 export function thumbnail(): Response {
   return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {

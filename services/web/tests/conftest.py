@@ -35,8 +35,20 @@ def spa_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def settings(spa_dir: Path) -> Settings:
-    return Settings(spa_dir=spa_dir, applicationinsights_connection_string=None)
+def scoreboards_dir(tmp_path: Path) -> Path:
+    # Empty: the bake-off has not been run until a test writes a file here.
+    folder = tmp_path / "scoreboards"
+    folder.mkdir()
+    return folder
+
+
+@pytest.fixture
+def settings(spa_dir: Path, scoreboards_dir: Path) -> Settings:
+    return Settings(
+        spa_dir=spa_dir,
+        scoreboards_dir=scoreboards_dir,
+        applicationinsights_connection_string=None,
+    )
 
 
 @pytest.fixture

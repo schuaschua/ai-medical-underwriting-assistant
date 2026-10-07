@@ -123,9 +123,10 @@ Both are contract models (`contracts.models.web`), so `web` and the SPA can show
 
 - `retrieval.json` (`RetrievalScoreboard`): `run` (the `eval_run_id`, when, the `web` address,
   `stand_ins`), `top_k`, one entry per ladder row (store, chunk set, method, `measured`, rule recall
-  with `recall_hits` and `recall_searches`, verdict accuracy with `right_runs` and `cases`, latency
-  with `latency_searches`, cost, effort), the `winner`, the searches that failed and the cases that
-  were not scored, each with its reason.
+  with `recall_hits` and `recall_searches`, verdict accuracy with `right_runs` and `cases`,
+  `failed_runs` (the runs of scored cases that failed or are missing: not right, and no wrong
+  verdict either), latency with `latency_searches`, cost, effort), the `winner`, the searches that
+  failed and the cases that were not scored, each with its reason.
 - `redaction.json` (`RedactionScoreboard`): the same `run`, `clean`, the cases and pages checked, the
   identifiers looked for, every leak by case, page and category, how many of the answer key's
   "may also be redacted" strings are in no page text any more, and the cases none of whose pages

@@ -35,6 +35,16 @@ jobs:
         # --locked fails the run when uv.lock is out of date instead of rewriting it.
         run: uv sync --locked
 
+      - name: No stand-in figures among the published scoreboards
+        # AD-17: `data/scoreboards` holds results only. A file a local run
+        # wrote says `"stand_ins": true` and is never committed there.
+        run: |
+          if grep --extended-regexp --files-with-matches \
+            '"stand_ins"[[:space:]]*:[[:space:]]*true' data/scoreboards/*.json 2>/dev/null; then
+            echo "::error::A file in data/scoreboards holds stand-in figures."
+            exit 1
+          fi
+
       - name: Format check
         run: uv run ruff format --check .
 
@@ -254,6 +264,30 @@ jobs:
             \( -name 'answer-key' -o -name 'static-metrics.yaml' -o -name 'rule-table.json' \) \
             -print -quit 2>/dev/null)" ]]; then
             echo "::error::The web image holds a file of the answer key or of the runner."
+            exit 1
+          fi
+          # Story 3.5: of `data/`, the image holds the scoreboards folder and
+          # nothing else, the setting points at that copy (its note is
+          # there), and `web` answers for it: the published file when the
+          # checkout holds one, "not run yet" when it does not.
+          if [[ "$(docker exec "$WEB_CONTAINER" ls /app/data)" != "scoreboards" ]]; then
+            echo "::error::The web image must hold data/scoreboards and nothing else of data/."
+            exit 1
+          fi
+          if ! docker exec "$WEB_CONTAINER" python -c \
+            "from web.settings import get_settings; import sys; sys.exit(0 if (get_settings().scoreboards_dir / 'README.md').is_file() else 1)"; then
+            echo "::error::WEB_SCOREBOARDS_DIR in the web image is not the folder the image copied."
+            exit 1
+          fi
+          expected_status=404
+          if [[ -f data/scoreboards/retrieval.json ]]; then
+            expected_status=200
+          fi
+          scoreboard_status="$(curl --silent --show-error --max-time 5 --output /dev/null \
+            --write-out '%{http_code}' --header 'X-Demo-Role: underwriter' \
+            "${WEB_URL}/api/scoreboards/retrieval")"
+          if [[ "$scoreboard_status" != "$expected_status" ]]; then
+            echo "::error::/api/scoreboards/retrieval answered ${scoreboard_status}, not ${expected_status}."
             exit 1
           fi
 

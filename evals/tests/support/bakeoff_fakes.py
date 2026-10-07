@@ -142,6 +142,9 @@ class FakeWeb:
     texts: dict[str, dict[int, str]] = field(default_factory=dict)
     # What each row's run suggests for a case: the verdict and the loading.
     verdicts: dict[str, dict[str, tuple[str, int | None]]] = field(default_factory=dict)
+    # Runs, by case and row, that ended as failed, and runs the case does not hold.
+    failed_runs: set[tuple[str, str]] = field(default_factory=set)
+    missing_runs: set[tuple[str, str]] = field(default_factory=set)
     # Cases that end as failed, and cases that never become final.
     failing: set[str] = field(default_factory=set)
     hanging: set[str] = field(default_factory=set)
@@ -287,22 +290,29 @@ class FakeWeb:
         suggested = self.verdicts.get(case.case_key, {})
         runs = []
         for row in started.get("retriever_configs", []):
+            if (case.case_key, row) in self.missing_runs:
+                continue
+            failed = (case.case_key, row) in self.failed_runs
+            verdict: str | None
+            loading: int | None
             verdict, loading = suggested.get(row, ("refer", None))
+            if failed:
+                verdict, loading = None, None
             runs.append(
                 {
                     "verdict_run_id": new_id(),
                     "case_id": case.case_id,
                     "retriever_config": row,
-                    "status": "done",
+                    "status": "failed" if failed else "done",
                     "label": SUGGESTION_LABEL,
                     "verdict": verdict,
                     "loading_pct": loading,
-                    "confidence": 0.9,
+                    "confidence": None if failed else 0.9,
                     "reasons": [],
                     "system_reasons": ["no_matching_rule"]
                     if verdict == "refer"
                     else [],
-                    "error_code": None,
+                    "error_code": "model_unavailable" if failed else None,
                 }
             )
         return httpx.Response(

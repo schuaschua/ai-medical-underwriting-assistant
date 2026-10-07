@@ -5,9 +5,11 @@ import type { DemoRole } from "./api/contracts.gen";
 import { AUDIT_PATH } from "./audit/auditPath";
 import { CASE_LIST_PATH } from "./cases/caseList";
 import { RESULT_PATH } from "./result/resultPath";
+import { SCOREBOARD_PATH } from "./scoreboard/scoreboard";
 import { AuditTrail } from "./screens/AuditTrail";
 import { CaseList } from "./screens/CaseList";
 import { CustomerHome } from "./screens/CustomerHome";
+import { Scoreboard } from "./screens/Scoreboard";
 import { TriageQueue } from "./screens/TriageQueue";
 import { UnderwriterHome } from "./screens/UnderwriterHome";
 import { UploadDocument } from "./screens/UploadDocument";
@@ -70,6 +72,12 @@ export const SCREENS: Record<DemoRole, readonly Screen[]> = {
       path: AUDIT_PATH,
       label: strings.navigation.audit,
       element: <AuditTrail />,
+    },
+    {
+      // AD-9: for the underwriter only; the customer has no such screen.
+      path: SCOREBOARD_PATH,
+      label: strings.navigation.scoreboard,
+      element: <Scoreboard />,
     },
     {
       // AD-9: for the underwriter only. Reached from the case list and from

@@ -14,6 +14,9 @@ HEALTH_PATH = "/api/health"
 
 # services/web/spa/dist in a checkout; the container image sets WEB_SPA_DIR.
 _DEFAULT_SPA_DIR = Path(__file__).resolve().parents[2] / "spa" / "dist"
+# data/scoreboards in a checkout; the container image sets WEB_SCOREBOARDS_DIR
+# to its own copy of that folder.
+_DEFAULT_SCOREBOARDS_DIR = Path(__file__).resolve().parents[4] / "data" / "scoreboards"
 
 
 class Settings(BaseSettings):
@@ -28,6 +31,9 @@ class Settings(BaseSettings):
     port: Annotated[int, Field(ge=1, le=65535)] = 8000
     # Folder holding the built SPA (index.html and its assets).
     spa_dir: Path = _DEFAULT_SPA_DIR
+    # AD-17: the folder holding the scoreboard files the bake-off runner
+    # wrote (`retrieval.json`, `redaction.json`). `web` only reads them.
+    scoreboards_dir: Path = _DEFAULT_SCOREBOARDS_DIR
 
     # AD-3: the port of this service's own Dapr sidecar, on loopback. Dapr tells
     # the app its port in DAPR_HTTP_PORT, so that name is read as well.

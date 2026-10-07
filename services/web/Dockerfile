@@ -33,12 +33,16 @@ RUN groupadd --gid 10001 web \
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=spa /spa/dist /app/spa
+# AD-17: the published scoreboard files, which this service only reads. It is
+# the one folder of `data/` the build context holds (see .dockerignore).
+COPY data/scoreboards/ /app/data/scoreboards/
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     WEB_HOST=0.0.0.0 \
     WEB_PORT=8000 \
-    WEB_SPA_DIR=/app/spa
+    WEB_SPA_DIR=/app/spa \
+    WEB_SCOREBOARDS_DIR=/app/data/scoreboards
 # Numeric, so the platform can verify the process is not root.
 USER 10001:10001
 EXPOSE 8000

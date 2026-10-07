@@ -65,13 +65,14 @@ export const strings = {
     triage: "Triage queue",
     cases: "Cases",
     audit: "Audit trail",
+    scoreboard: "Scoreboard",
   },
   home: {
     customerHeading: "Customer home",
     customerIntro: "Use “Upload a document” to send us a PDF.",
     underwriterHeading: "Underwriter home",
     underwriterIntro:
-      "Use “Triage queue” to accept or deny the pages that are waiting, “Cases” to find a case and open its result, and “Audit trail” to read what was done to it.",
+      "Use “Triage queue” to accept or deny the pages that are waiting, “Cases” to find a case and open its result, “Audit trail” to read what was done to it, and “Scoreboard” to see how the retrieval rows scored.",
     checking: "Checking with the server…",
     confirmed: (role: string) => `The server sees you as: ${role}.`,
   },
@@ -537,6 +538,75 @@ export const strings = {
     moreFault: "More steps could not be read.",
     readAgain: "Read the steps again",
     close: "Close the steps",
+  },
+  // The retrieval scoreboard (story 3.5, AD-17). Every figure, count and the
+  // winner are the bake-off runner's, read from its file; these are only the
+  // words for them.
+  scoreboard: {
+    heading: "Retrieval scoreboard",
+    intro: (topK: number) =>
+      `Every retrieval row, scored by the bake-off on the same cases. Rule recall is the share of searches whose top ${topK} results held an expected rule. Verdict accuracy is the share of cases for which the AI's suggestion with that row was the expected verdict. The winner is the row with the highest verdict accuracy, then the highest rule recall, then the lowest latency.`,
+    reading: "Reading the scoreboard…",
+    notRun: "The bake-off has not been run yet.",
+    unreadable: "The scoreboard could not be shown.",
+    readAgain: "Read again",
+    // `at` is the time the run ended, shown in the viewer's own time.
+    runBefore: "Run that ended ",
+    runAgainst: (address: string) => ` against ${address}.`,
+    runId: (evalRunId: string) => `Bake-off run ${evalRunId}.`,
+    standIns:
+      "These are stand-in figures, not results. Local stand-ins stood where the AI services would be, so the figures show that the bake-off works and say nothing about the retrieval rows.",
+    tableLabel: "Retrieval rows, in ladder order",
+    rowColumn: "Row",
+    storeColumn: "Store",
+    chunkSetColumn: "Chunk set",
+    methodColumn: "Method",
+    recallColumn: "Rule recall",
+    accuracyColumn: "Verdict accuracy",
+    failedRunsColumn: "Runs failed or missing",
+    latencyColumn: "Latency",
+    costColumn: "Cost",
+    effortColumn: "Effort",
+    winner: "Winner",
+    notMeasured: "Not measured",
+    // A share with the two counts behind it: "97.44% (38 of 39)".
+    shareOf: (share: string, part: number, whole: number) =>
+      `${share} (${part} of ${whole})`,
+    noSearches: "No searches made",
+    noCases: "No cases run",
+    failedRuns: (failed: number, cases: number) => `${failed} of ${cases}`,
+    latency: (median: number, p95: number, searches: number) =>
+      `${median} ms median, ${p95} ms 95th percentile (${searches} ${searches === 1 ? "search" : "searches"})`,
+    // Shown under the table when a row has such runs.
+    failedRunsMeaning:
+      "A run that failed or is missing is a failure of the system, not a wrong verdict. It still counts as wrong in the verdict accuracy beside it, so it can decide the winner.",
+    noLatency: "No search timed",
+    stated: (amount: string, unit: string) => `${amount} ${unit}`,
+    notStated: "Not stated",
+    source: "Source",
+    unscoredCases: (count: number) =>
+      count === 1
+        ? "1 case was not scored. It counts as wrong for every row."
+        : `${count} cases were not scored. They count as wrong for every row.`,
+    failedSearches: (count: number) =>
+      count === 1
+        ? "1 search failed. It counts as a miss for its row."
+        : `${count} searches failed. Each counts as a miss for its row.`,
+    redactionHeading: "Redaction check",
+    redactionClean: "Clean: no planted identifier was found in a page text.",
+    redactionNotClean: "Not clean.",
+    redactionChecked: (pages: number, cases: number) =>
+      `${pages} ${pages === 1 ? "page" : "pages"} of ${cases} ${cases === 1 ? "case" : "cases"} checked.`,
+    redactionLeaks: (count: number) =>
+      count === 1 ? "1 leak found." : `${count} leaks found.`,
+    redactionNotChecked: (count: number) =>
+      count === 1
+        ? "1 case was not checked."
+        : `${count} cases were not checked.`,
+    redactionMissing: "Not available.",
+    redactionOtherRun: (evalRunId: string) =>
+      `Not available for this run. The redaction report on file is of another bake-off run (${evalRunId}) and says nothing about the figures above.`,
+    redactionUnreadable: "The redaction check could not be shown.",
   },
   notFound: {
     heading: "Page not found",

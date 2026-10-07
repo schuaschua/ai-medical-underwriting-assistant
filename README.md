@@ -846,6 +846,25 @@ routes for the underwriter that no screen uses yet: `POST /api/searches` (the se
 `retrieval`, passed through) and `GET /api/pages/<page_id>/text` (the redacted page's stored text).
 Cases the runner starts are in neither the triage queue nor the case list.
 
+The underwriter's **Scoreboard** screen shows the result: one line per row `r1` to `r6` with its
+store, chunk set and method, rule recall and verdict accuracy as a percentage with the counts
+behind them (`38 of 39`), the verdict runs that failed or are missing (counted apart, so that a
+failure of the system is not read as a wrong verdict), latency (median and 95th percentile), and
+the stated cost and effort with their source. The winner is the row the file names, marked with
+the word "Winner". A row that was not measured says so and shows no number. Above the table the
+screen says when and against which address the run was made and, for a run with stand-ins, that
+the figures are not results; below it, how many cases were not scored, how many searches failed,
+and one line of the redaction check. The scores are files: `web` reads `retrieval.json` and
+`redaction.json` from one folder (`WEB_SCOREBOARDS_DIR`), checks each against its contract model
+and answers it as it is on `GET /api/scoreboards/retrieval` and `GET /api/scoreboards/redaction`,
+for the underwriter only. Until the file is there the screen says that the bake-off has not been
+run (404 `not_found`); a file that does not fit its model is an error (500), never half a table.
+No route takes a score. The folder is `data/scoreboards/` in a checkout and the image's own copy
+of it in Azure (the only folder of `data/` in any image); `dapr.yaml` points the local `web` at
+`.work/scoreboards/`, so after `./tools/dev.sh` and a local `uv run python -m bakeoff` the screen
+shows the local stand-in figures. The screen reads the files once: use "Read again" after a new
+run. A file written before story 3.5 has no `failed_runs` and is refused: run the bake-off again.
+
 ### Contract types
 
 The SPA's TypeScript types for API payloads are generated from `packages/contracts`, never written by

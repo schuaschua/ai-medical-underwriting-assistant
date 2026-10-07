@@ -20,6 +20,8 @@ import type {
   PageBoxes,
   PageDecisionRequest,
   PageList,
+  RedactionScoreboard,
+  RetrievalScoreboard,
   RuleText,
   ToolName,
   TriageQueue,
@@ -865,4 +867,124 @@ export async function getDocumentFile(documentId: string): Promise<Blob> {
     throw new ApiError(200, null, "That was not a document's id.", null);
   }
   return file(`/documents/${documentId}/file`, PDF, DOCUMENT_TIMEOUT_MS);
+}
+
+// --- The scoreboard files (story 3.5) ------------------------------------------
+//
+// AD-17: the scores are files the bake-off runner wrote, and the server has
+// checked each against its model. An answer is checked here for what the
+// screen shows from it, so that one of another shape is a fault and never a
+// half-drawn table. Nothing here works a figure out.
+
+/** The rows of the ladder, in its order: a scoreboard lists exactly these. */
+const LADDER = ["r1", "r2", "r3", "r4", "r5", "r6"];
+
+function isNullOr(
+  is: (value: unknown) => boolean,
+): (value: unknown) => boolean {
+  return (value) => value === null || is(value);
+}
+
+/** Whether a value says when and against which address a bake-off run was made. */
+function isScoreboardRun(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isText(value.eval_run_id) &&
+    isText(value.started_at) &&
+    isText(value.finished_at) &&
+    isText(value.web_address) &&
+    typeof value.stand_ins === "boolean"
+  );
+}
+
+/** Whether a value is a figure somebody stated: an amount as text, its unit and its source. */
+function isStatedFigure(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isText(value.amount) &&
+    isText(value.unit) &&
+    isText(value.source)
+  );
+}
+
+/** Whether a value has what a line of the scoreboard is shown with, as that row of the ladder. */
+function isRowScore(value: unknown, place: number): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const figures = [value.rule_recall, value.verdict_accuracy];
+  const counts = [
+    value.recall_hits,
+    value.recall_searches,
+    value.right_runs,
+    value.cases,
+    value.failed_runs,
+    value.latency_searches,
+  ];
+  const latencies = [value.latency_ms_median, value.latency_ms_p95];
+  return (
+    value.retriever_config === LADDER[place] &&
+    isText(value.store) &&
+    isText(value.chunk_set) &&
+    isText(value.method) &&
+    typeof value.measured === "boolean" &&
+    isNullOr(isStatedFigure)(value.cost) &&
+    isNullOr(isStatedFigure)(value.effort) &&
+    figures.every(isNullOr(isUnitNumber)) &&
+    latencies.every(isNullOr(isAmount)) &&
+    // A measured row has the counts behind its figures; a row that is not
+    // measured has none.
+    (value.measured
+      ? counts.every(isCount)
+      : counts.every((count) => count === null))
+  );
+}
+
+/**
+ * Read the retrieval scoreboard: every row of the ladder as the bake-off
+ * runner scored it, and the winner it names. Only the underwriter role may.
+ * 404 `not_found` until the bake-off has been run.
+ */
+export async function getRetrievalScoreboard(): Promise<RetrievalScoreboard> {
+  const board = await request<unknown>("GET", "/scoreboards/retrieval");
+  if (
+    !isRecord(board) ||
+    !isScoreboardRun(board.run) ||
+    !isPageNumber(board.top_k) ||
+    !Array.isArray(board.rows) ||
+    board.rows.length !== LADDER.length ||
+    !board.rows.every(isRowScore) ||
+    !(board.winner === null || LADDER.some((row) => row === board.winner)) ||
+    !Array.isArray(board.failed_searches) ||
+    !Array.isArray(board.unscored_cases)
+  ) {
+    throw new ApiError(200, null, "The answer was not a scoreboard.", null);
+  }
+  return board as unknown as RetrievalScoreboard;
+}
+
+/**
+ * Read the redaction report of the same bake-off run: whether a planted
+ * identifier was left in a stored page text. Only the underwriter role may.
+ * 404 `not_found` until there is one.
+ */
+export async function getRedactionScoreboard(): Promise<RedactionScoreboard> {
+  const report = await request<unknown>("GET", "/scoreboards/redaction");
+  if (
+    !isRecord(report) ||
+    !isScoreboardRun(report.run) ||
+    typeof report.clean !== "boolean" ||
+    !isCount(report.cases_checked) ||
+    !isCount(report.pages_checked) ||
+    !Array.isArray(report.leaks) ||
+    !Array.isArray(report.cases_not_checked)
+  ) {
+    throw new ApiError(
+      200,
+      null,
+      "The answer was not a redaction report.",
+      null,
+    );
+  }
+  return report as unknown as RedactionScoreboard;
 }

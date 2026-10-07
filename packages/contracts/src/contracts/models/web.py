@@ -166,6 +166,10 @@ class RetrievalRowScore(ContractModel):
     verdict_accuracy: UnitFloat | None
     right_runs: Count | None
     cases: Count | None
+    # Runs that failed, or that a case that was scored does not hold: a
+    # failure of the system, counted apart so that it is not read as a wrong
+    # verdict. Such a run is not right, and it is not among `right_runs`.
+    failed_runs: Count | None
     # `retrieval`'s own time for a search, over the searches it answered.
     latency_ms_median: Milliseconds | None
     latency_ms_p95: Milliseconds | None
@@ -182,6 +186,7 @@ class RetrievalRowScore(ContractModel):
             self.right_runs,
             self.cases,
             self.latency_searches,
+            self.failed_runs,
         )
         figures = (
             self.rule_recall,
@@ -199,6 +204,8 @@ class RetrievalRowScore(ContractModel):
         self._check_share(
             "verdict_accuracy", self.verdict_accuracy, counts[2], counts[3]
         )
+        if (self.right_runs or 0) + (self.failed_runs or 0) > (self.cases or 0):
+            raise ValueError("more runs are right or failed than cases were run")
         timed = bool(self.latency_searches)
         if (self.latency_ms_median is not None) != timed or (
             self.latency_ms_p95 is not None

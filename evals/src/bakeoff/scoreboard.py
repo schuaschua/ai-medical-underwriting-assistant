@@ -78,6 +78,11 @@ def retrieval_scoreboard(
         measured = recall is not None and recall.available
         if recall is not None and measured:
             right = right_runs(config, entries, outcomes)
+            failed = sum(
+                outcomes[entry.case_key].run_failed(config)
+                for entry in entries
+                if entry.case_key in outcomes
+            )
             numbers = {
                 "rule_recall": share(recall.hits, recall.searches)
                 if recall.searches
@@ -88,6 +93,7 @@ def retrieval_scoreboard(
                 "verdict_accuracy": share(right, len(entries)) if entries else None,
                 "right_runs": right,
                 "cases": len(entries),
+                "failed_runs": failed,
                 "latency_ms_median": percentile(recall.latencies, MEDIAN),
                 "latency_ms_p95": percentile(recall.latencies, NINETY_FIFTH),
                 "latency_searches": len(recall.latencies),
@@ -132,6 +138,7 @@ _NUMBERS = (
     "verdict_accuracy",
     "right_runs",
     "cases",
+    "failed_runs",
     "latency_ms_median",
     "latency_ms_p95",
     "latency_searches",

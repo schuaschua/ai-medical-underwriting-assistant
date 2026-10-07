@@ -163,6 +163,7 @@ ROW_SCORE = {
     "verdict_accuracy": 0.5,
     "right_runs": 1,
     "cases": 2,
+    "failed_runs": 0,
     "latency_ms_median": 21,
     "latency_ms_p95": 40,
     "latency_searches": 3,

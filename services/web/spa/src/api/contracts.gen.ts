@@ -684,6 +684,7 @@ export interface RetrievalRowScore {
   chunk_set: ChunkSet;
   cost: StatedFigure | null;
   effort: StatedFigure | null;
+  failed_runs: number | null;
   latency_ms_median: number | null;
   latency_ms_p95: number | null;
   latency_searches: number | null;

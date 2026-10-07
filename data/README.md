@@ -14,6 +14,7 @@ thresholds follow public guidelines, and the public bodies that issued them are 
 | `answer-key/rule-table.json` | Every rule of the manual as data: the known right rules. |
 | `classifier-training/` | One-page PDFs a classifier is trained on, in a folder per page type. No page of it is scored. |
 | `manual/` | The synthetic underwriting manual, `underwriting-manual.pdf`. This is what retrieval indexes. |
+| `scoreboards/` | The published scoreboard files of the bake-off, written by a run against the deployed environment and served read-only by `web`. The only folder here that reaches an image. See its `README.md`. |
 
 ## The cases
 

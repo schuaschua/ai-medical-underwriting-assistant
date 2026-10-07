@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-06-2026 14:30
-last_updated: 10-08-2026 03:00
+last_updated: 10-08-2026 03:33
 project: ai-medical-underwriting-assistant
 project_key: NOKEY
 tracking_system: file-system
@@ -67,7 +67,7 @@ development_status:
   3-2-baseline-rows-r1-and-r2: review
   3-3-row-r5-on-azure-ai-search: review
   3-4-bake-off-runner-scores-the-rows: review
-  3-5-retrieval-scoreboard: backlog
+  3-5-retrieval-scoreboard: review
   3-6-compare-two-rows-on-one-case: backlog
   3-7-row-r4-with-a-reranker: backlog
   3-8-row-r6-with-agentic-retrieval: backlog

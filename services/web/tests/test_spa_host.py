@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from contracts.errors import ErrorBody
 
 
-def test_story_1_3_deep_link_serves_the_spa_html(
+def test_story_1_3_a_deep_link_serves_the_spa_html_and_a_path_outside_the_spa_folder_is_never_served(
     client: TestClient, index_html: str
 ) -> None:
     for path in ["/triage", "/cases/123/audit", "/index.html"]:
@@ -14,10 +14,7 @@ def test_story_1_3_deep_link_serves_the_spa_html(
         assert response.status_code == 200
         assert response.text == index_html
 
-
-def test_story_1_3_a_path_outside_the_spa_folder_is_never_served(
-    client: TestClient, index_html: str
-) -> None:
+    # A path outside the SPA folder is never served.
     for path in [
         "/..%2foutside.txt",
         "/assets/..%2f..%2foutside.txt",

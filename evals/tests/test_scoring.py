@@ -162,6 +162,7 @@ def scored(
             "verdict_accuracy": right / 4,
             "right_runs": right,
             "cases": 4,
+            "failed_runs": 0,
             "latency_ms_median": latency,
             "latency_ms_p95": latency,
             "latency_searches": 4 if latency is not None else 0,

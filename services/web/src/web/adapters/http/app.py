@@ -1,5 +1,6 @@
 """The app factory: one FastAPI app serving `/api/*` and the SPA from one origin."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -7,17 +8,20 @@ import httpx
 from fastapi import FastAPI
 
 from web.adapters.dapr import ServiceClient, build_http_client
-from web.adapters.http.api import SERVICES_STATE, TRIAGE_STATE
+from web.adapters.http.api import SCOREBOARDS_STATE, SERVICES_STATE, TRIAGE_STATE
 from web.adapters.http.api import router as api_router
 from web.adapters.http.errors import API_ROUTES_STATE, install_error_handlers
 from web.adapters.http.middleware import (
     SecurityHeadersMiddleware,
     UnhandledErrorMiddleware,
 )
+from web.adapters.http.scoreboards import ScoreboardReader
 from web.adapters.http.spa import build_spa_router
 from web.adapters.http.triage import TriageReader
 from web.adapters.telemetry import configure_telemetry, instrument_app
 from web.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -56,6 +60,16 @@ def create_app(
             # to another service, so the browser hears the server's answer.
             deadline_seconds=settings.lifecycle_timeout_seconds,
         ),
+    )
+    setattr(app.state, SCOREBOARDS_STATE, ScoreboardReader(settings.scoreboards_dir))
+    # Said once: a folder that is wrong or missing answers 404 like a
+    # bake-off that has not been run, and nothing else tells them apart.
+    scoreboards_dir = settings.scoreboards_dir.resolve()
+    logger.log(
+        logging.INFO if scoreboards_dir.is_dir() else logging.WARNING,
+        "scoreboards are read from: folder=%s exists=%s",
+        scoreboards_dir,
+        scoreboards_dir.is_dir(),
     )
     install_error_handlers(app)
     # The middleware added last runs first: headers wrap the error fallback.

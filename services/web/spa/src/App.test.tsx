@@ -59,6 +59,7 @@ describe("1.3 role switcher", () => {
       "/underwriter/triage",
       "/underwriter/cases",
       "/underwriter/audit",
+      "/underwriter/scoreboard",
     ]);
     expect(server.calls.length).toBeGreaterThan(0);
     expect(server.calls.every((call) => call.role === "underwriter")).toBe(
@@ -87,6 +88,7 @@ describe("1.3 role switcher", () => {
       "/underwriter/triage",
       "/underwriter/cases",
       "/underwriter/audit",
+      "/underwriter/scoreboard",
     ]);
     expect(
       screen.queryByRole("heading", { name: "Customer home" }),
@@ -200,6 +202,7 @@ describe("1.3 role switcher", () => {
       "/underwriter/triage",
       "/underwriter/cases",
       "/underwriter/audit",
+      "/underwriter/scoreboard",
     ]);
     await screen.findByText("The server sees you as: Underwriter.");
     expect(

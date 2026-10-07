@@ -30,6 +30,7 @@ def row(config: str, measured: bool = True, **changes: Any) -> dict[str, Any]:
         "verdict_accuracy": 0.5,
         "right_runs": 1,
         "cases": 2,
+        "failed_runs": 0,
         "latency_ms_median": 20,
         "latency_ms_p95": 35,
         "latency_searches": 3,
@@ -74,6 +75,7 @@ def test_story_3_4_a_scoreboard_row_has_numbers_only_when_measured_and_the_winne
         False,
     ]
     assert share(2, 3) == scoreboard.rows[2].rule_recall
+    assert RetrievalRowScore.model_validate(row("r1", failed_runs=1)).failed_runs == 1
     # A row that is not measured shows no number at all; a measured one the
     # counts behind each figure, and figures that are those counts' shares.
     # A search that never answered leaves the row without a latency.
@@ -90,6 +92,9 @@ def test_story_3_4_a_scoreboard_row_has_numbers_only_when_measured_and_the_winne
         row("r1", rule_recall=0.9),
         row("r1", verdict_accuracy=None),
         row("r1", recall_hits=4),
+        # Story 3.5: a run that failed is counted apart, and is not a right run.
+        row("r1", failed_runs=None),
+        row("r1", failed_runs=2),
         row("r1", latency_ms_median=None),
         row("r1", latency_ms_median=50),
         row("r1", cost={"amount": "-1", "unit": "USD", "source": "price list"}),
