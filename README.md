@@ -69,15 +69,32 @@ One command starts everything:
 ```
 
 It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Task Scheduler emulator in
-containers (`compose.yaml`), applies the database migrations, builds the SPA, and runs the `web`,
-`intake` and `workflow` services, each with its Dapr sidecar (`dapr.yaml`; each later service is added
-to that file).
+containers (`compose.yaml`), applies the database migrations, builds the SPA, starts a stand-in for
+Azure AI Language (see below), and runs the `web`, `intake` and `workflow` services, each with its
+Dapr sidecar (`dapr.yaml`; each later service is added to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
 its API share that one address: `/api/health` answers without a role, and every other `/api` route
 needs the `X-Demo-Role` header the role switcher sends. As the customer, "Upload a document" takes a
 PDF of up to 10 MB (try one from `data/cases/`), starts its case and lists it with its status, which
 the screen reads again every few seconds. If the case cannot be started, it is listed as received but
 not started, with a button to try again; the document is not sent a second time.
+
+A started case is redacted first: `workflow` commands `intake`, which has Azure AI Language mask
+person names, addresses, phone numbers, email addresses, and identity and policy numbers with tokens
+such as `[Person]` (dates, ages and medical terms are kept), stores the redacted PDF as the document
+of record and splits it into pages, each with its text, a box per word and a thumbnail. From then on
+only the redacted PDF is read; no route serves the original. If redaction fails or takes longer than
+180 seconds the case is shown as failed, with a message asking for the document to be uploaded again.
+
+The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
+`uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
+the service's REST job routes, reads the original from the blob emulator and writes the redacted PDF
+and a result file back. It finds email addresses, phone numbers, identity numbers and policy numbers
+by their shape, and the names and addresses of the synthetic cases; it is not a recogniser. It is part
+of the dev-only `synthdata` package, so no service image holds it, and `intake` refuses a plain-HTTP
+Language endpoint that is not on this machine. Start it with `--mode fail` or `--mode hang` to see a
+failed case. What the real service does is checked in the final Azure test session
+(`_bmad-output/implementation-artifacts/deferred-work.md`).
 
 The services never run migrations when they start, here or in Azure, and `intake` and `workflow` each
 report "not ready" (`/ready`) until their schema is at the newest migration they ship with. Locally, one script stands in
@@ -103,7 +120,8 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | --- | --- |
 | The app and its API (`web`) | <http://localhost:8000/> |
 | `web`'s Dapr sidecar | `http://localhost:3500` |
-| `intake` (`/health`, `/ready`, `POST /cases`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
+| `intake` (`/health`, `/ready`, `POST /cases`, `POST /cases/<case_id>/redaction`, `GET /cases/<case_id>/pages`, `GET /pages/<page_id>/text`, `/boxes` and `/thumbnail`, `GET /documents/<document_id>/file`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
+| Stand-in for Azure AI Language (this machine only) | `http://localhost:5100` |
 | `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
 | PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
@@ -113,7 +131,11 @@ Stop with Ctrl+C, then `docker compose down` (add `-v` to delete the local datab
 
 Locally `intake` reaches the emulator with `INTAKE_BLOB_CONNECTION_STRING=UseDevelopmentStorage=true`
 (set in `dapr.yaml`), which names the emulator's built-in account and holds no secret. In Azure that
-variable is never set: the service signs in to Blob Storage and PostgreSQL with its managed identity.
+variable is never set: the service signs in to Blob Storage and PostgreSQL with its managed identity,
+and to Azure AI Language as well (`INTAKE_LANGUAGE_ENDPOINT` is the account's endpoint there, with
+`INTAKE_LANGUAGE_ENTRA_AUTH=true`; there is no key). Language reads the original and writes the
+redacted PDF with its own identity. `workflow` commands `intake` through its own Dapr sidecar
+(`WORKFLOW_DAPR_HTTP_PORT`).
 `workflow` reaches the scheduler emulator without a credential; in Azure it signs in to the Durable Task
 Scheduler and PostgreSQL with its managed identity. The emulator keeps its state in memory, so
 orchestrations are gone after `docker compose stop`, while case status and the audit trail stay in
@@ -151,7 +173,9 @@ and `npm --prefix services/web/spa run contracts:check` compares the TypeScript 
 The demo environment is two Terraform stacks, applied in order: `infra/demo/foundation` (see
 `infra/bootstrap/README.md`) and `infra/demo/app`, which so far holds three Container Apps: `web`, the
 only one reachable from the internet, and `intake` and `workflow`, with internal ingress only.
-`workflow` is held at one replica and holds Durable Task Data Contributor on the task hub.
+`workflow` is held at one replica and holds Durable Task Data Contributor on the task hub. For
+redaction `intake` holds Cognitive Services User on Azure AI Language, and Language's own identity may
+read the `originals` container and write the `cases` container.
 
 The `deploy` workflow (`.github/workflows/deploy.yml`) is started by hand on `main` and deploys only
 the commit `main` is at. It builds the `web`, `intake` and `workflow` images in the registry, plans

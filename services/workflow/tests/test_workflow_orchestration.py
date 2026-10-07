@@ -16,7 +16,12 @@ from azure.identity import ManagedIdentityCredential
 from durabletask import task
 from durabletask.client import OrchestrationStatus
 from pydantic import ValidationError
-from workflow_fakes import MemoryCaseStore, redaction_done, redaction_failed
+from workflow_fakes import (
+    FakeStages,
+    MemoryCaseStore,
+    redaction_done,
+    redaction_failed,
+)
 
 from contracts.enums import ClassifierContender, RetrieverConfig
 from contracts.ids import new_id
@@ -73,6 +78,8 @@ class RecordingContext:
 
 
 CONFIRMED = {"outcome": "ok", "case_status": "running"}
+# Story 1.7: redaction, the first stage, is done and its result recorded.
+REDACTED = {"outcome": "ok", "case_status": "running"}
 
 
 def run_lifecycle(
@@ -101,21 +108,26 @@ def run_lifecycle(
     raise AssertionError("the orchestrator asked for more activities than expected")
 
 
-def test_story_1_6_the_orchestration_confirms_the_case_and_stops_before_the_first_stage(
+def test_story_1_6_the_orchestration_confirms_the_case_before_the_first_stage(
     case_id: str,
 ) -> None:
-    asked, result = run_lifecycle(case_id, [CONFIRMED])
+    asked, result = run_lifecycle(case_id, [CONFIRMED, REDACTED])
 
-    # One activity, retried on failure (AD-6); ids only go in and out.
-    assert asked == [
-        {"activity": CONFIRM_CASE_STARTED, "input": case_id, "retry_policy": RETRY}
-    ]
+    # The first activity, retried on failure (AD-6); ids only go in and out.
+    # What follows it is redaction, the first stage (story 1.7).
+    assert asked[0] == {
+        "activity": CONFIRM_CASE_STARTED,
+        "input": case_id,
+        "retry_policy": RETRY,
+    }
     assert result == {"case_id": case_id, "case_status": "running"}
 
 
 def test_story_1_6_the_orchestrator_is_deterministic(case_id: str) -> None:
     # Replayed from history, the same answers must lead to the same requests.
-    assert run_lifecycle(case_id, [CONFIRMED]) == run_lifecycle(case_id, [CONFIRMED])
+    assert run_lifecycle(case_id, [CONFIRMED, REDACTED]) == run_lifecycle(
+        case_id, [CONFIRMED, REDACTED]
+    )
     failed = task.TaskFailedError("failed", RuntimeError("x"))
     assert run_lifecycle(case_id, [failed, {}]) == run_lifecycle(case_id, [failed, {}])
 
@@ -136,7 +148,7 @@ def test_story_1_6_the_orchestrator_is_deterministic(case_id: str) -> None:
 def test_story_1_6_the_names_the_engine_keeps_are_the_registered_ones(
     store: MemoryCaseStore,
 ) -> None:
-    activities = Activities(store, asyncio.new_event_loop(), 1.0)
+    activities = Activities(store, asyncio.new_event_loop(), 1.0, FakeStages())
 
     assert (
         task.get_name(build_case_lifecycle(RETRY)) == CASE_LIFECYCLE == "case_lifecycle"
@@ -228,7 +240,7 @@ def test_story_1_6_the_first_activity_reports_the_started_case_as_running(
     start(store, case_id)
 
     with service_loop() as loop:
-        activities = Activities(store, loop, 5.0)
+        activities = Activities(store, loop, 5.0, FakeStages())
         answer = activities.confirm_case_started(
             task.ActivityContext(case_id, 1), case_id
         )
@@ -240,7 +252,7 @@ def test_story_1_6_an_error_no_retry_can_mend_is_answered_not_raised(
     store: MemoryCaseStore, case_id: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     with service_loop() as loop, caplog.at_level(logging.ERROR):
-        activities = Activities(store, loop, 5.0)
+        activities = Activities(store, loop, 5.0, FakeStages())
         # An unknown case: raising would make the engine try again, in vain.
         answer = activities.confirm_case_started(
             task.ActivityContext(case_id, 1), case_id
@@ -265,7 +277,7 @@ def test_story_1_6_the_failure_activity_marks_the_case_failed_with_one_event(
     failed: dict[str, str | None] = {"case_id": case_id, "eval_run_id": eval_run_id}
 
     with service_loop() as loop:
-        activities = Activities(store, loop, 5.0)
+        activities = Activities(store, loop, 5.0, FakeStages())
         first = activities.mark_case_failed(task.ActivityContext(case_id, 2), failed)
         again = activities.mark_case_failed(task.ActivityContext(case_id, 2), failed)
         unknown = activities.mark_case_failed(
@@ -292,7 +304,7 @@ def test_story_1_6_a_closed_service_loop_is_an_activity_failure_the_engine_can_r
 ) -> None:
     loop = asyncio.new_event_loop()
     loop.close()
-    activities = Activities(store, loop, 5.0)
+    activities = Activities(store, loop, 5.0, FakeStages())
 
     with pytest.raises(ActivityFailed) as raised:
         activities.confirm_case_started(task.ActivityContext(case_id, 1), case_id)
@@ -307,7 +319,7 @@ def test_story_1_6_work_cancelled_under_an_activity_is_an_activity_failure(
     raised: list[BaseException] = []
 
     with service_loop() as loop:
-        activities = Activities(store, loop, 30.0)
+        activities = Activities(store, loop, 30.0, FakeStages())
 
         def run() -> None:
             try:
@@ -341,7 +353,7 @@ def test_story_1_6_a_failing_activity_tells_the_engine_no_detail(
     store.fail = True
 
     with service_loop() as loop, caplog.at_level(logging.ERROR):
-        activities = Activities(store, loop, 5.0)
+        activities = Activities(store, loop, 5.0, FakeStages())
         with pytest.raises(ActivityFailed) as raised:
             activities.confirm_case_started(task.ActivityContext(case_id, 1), case_id)
 
@@ -369,7 +381,7 @@ def test_story_1_6_an_activity_whose_database_work_hangs_is_given_up(
     case_id: str,
 ) -> None:
     with service_loop() as loop:
-        activities = Activities(HangingStore(), loop, 0.05)
+        activities = Activities(HangingStore(), loop, 0.05, FakeStages())
         with pytest.raises(ActivityFailed) as raised:
             activities.confirm_case_started(task.ActivityContext(case_id, 1), case_id)
 
@@ -383,7 +395,7 @@ def test_story_1_6_stage_activities_record_their_result_through_one_path(
     result = redaction_done(case_id, [new_id()])
 
     with service_loop() as loop:
-        activities = Activities(store, loop, 5.0)
+        activities = Activities(store, loop, 5.0, FakeStages())
         first = activities.record("redact_document", result)
         # The engine ran the activity again: nothing new is written.
         second = activities.record("redact_document", result)
@@ -400,7 +412,7 @@ def test_story_1_6_a_result_that_cannot_be_recorded_fails_the_activity_for_a_ret
     store.fail_audit_insert = True
 
     with service_loop() as loop:
-        activities = Activities(store, loop, 5.0)
+        activities = Activities(store, loop, 5.0, FakeStages())
         with pytest.raises(ActivityFailed) as raised:
             activities.record("redact_document", result)
         assert store.events == []
@@ -623,7 +635,7 @@ def test_story_1_6_building_the_client_and_the_worker_opens_no_connection(
     loop = asyncio.new_event_loop()
     try:
         client = build_client(settings)
-        worker = build_worker(settings, Activities(store, loop, 1.0))
+        worker = build_worker(settings, Activities(store, loop, 1.0, FakeStages()))
     finally:
         loop.close()
 
@@ -637,7 +649,7 @@ def test_story_1_6_the_worker_runs_no_more_activities_at_once_than_the_pool_has_
     settings = Settings(database_pool_size=3, worker_max_concurrent_activities=3)
     loop = asyncio.new_event_loop()
     try:
-        worker = build_worker(settings, Activities(store, loop, 1.0))
+        worker = build_worker(settings, Activities(store, loop, 1.0, FakeStages()))
     finally:
         loop.close()
 

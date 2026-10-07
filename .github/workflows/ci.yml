@@ -49,7 +49,11 @@ jobs:
         # `workflow`, the Durable Task Scheduler emulator. These are the
         # containers of compose.yaml, the same ones a developer runs; each
         # test makes a database of its own and applies the migrations to it,
-        # and the scheduler tests use a task hub of their own. No test calls Azure.
+        # and the scheduler tests use a task hub of their own. No test calls
+        # Azure: where `intake` would call Azure AI Language, the tests run
+        # its stand-in (packages/synthdata, a dev dependency that `uv sync`
+        # installed) over the blob emulator, in the test process and once as
+        # a process of its own.
         run: docker compose up --detach --wait postgres azurite scheduler
 
       - name: Test with coverage
@@ -142,11 +146,13 @@ jobs:
         run: docker run --detach --publish 127.0.0.1:18080:8000 --name "$WEB_CONTAINER" "$WEB_IMAGE"
 
       - name: Run intake
-        # No database is given to it. The value names the blob emulator's
-        # built-in account; nothing is listening there and nothing is called.
+        # No database is given to it. The first value names the blob
+        # emulator's built-in account and the second the place of the Language
+        # stand-in; nothing is listening at either and nothing is called.
         run: |
           docker run --detach --publish 127.0.0.1:18081:8001 \
             --env INTAKE_BLOB_CONNECTION_STRING=UseDevelopmentStorage=true \
+            --env INTAKE_LANGUAGE_ENDPOINT=http://127.0.0.1:5100 \
             --name "$INTAKE_CONTAINER" "$INTAKE_IMAGE"
 
       - name: Run workflow
@@ -199,6 +205,13 @@ jobs:
           fi
           if [[ "$(docker exec "$INTAKE_CONTAINER" id -u)" == "0" ]]; then
             echo "::error::The intake container runs as root."
+            exit 1
+          fi
+          # The image reads PDFs (story 1.7), and it never holds the Language
+          # stand-in, which is a dev tool.
+          docker exec "$INTAKE_CONTAINER" python -c "import pymupdf"
+          if docker exec "$INTAKE_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The intake image holds the Language stand-in."
             exit 1
           fi
 

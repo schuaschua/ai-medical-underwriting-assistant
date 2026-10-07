@@ -16,7 +16,9 @@ from sqlalchemy import (
     Column,
     DateTime,
     Engine,
+    Float,
     ForeignKey,
+    Integer,
     MetaData,
     String,
     Table,
@@ -80,6 +82,95 @@ document_table = Table(
     UniqueConstraint("idempotency_key", name=IDEMPOTENCY_KEY_UNIQUE),
 )
 
+# AD-6: the key row of a case's redaction. Inserted as `running` before any
+# work; `result` is the stored stage result (ids and counts only), as JSON.
+redaction_table = Table(
+    "redaction",
+    metadata,
+    Column(
+        "case_id",
+        Uuid(as_uuid=False),
+        ForeignKey(case_table.c.case_id),
+        primary_key=True,
+    ),
+    Column(
+        "document_id",
+        Uuid(as_uuid=False),
+        ForeignKey(document_table.c.document_id),
+        nullable=False,
+    ),
+    Column("status", String(16), nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True), nullable=True),
+    # The Language job, so a redaction left behind can still be cancelled.
+    Column("job_id", Text, nullable=True),
+    Column("result", Text, nullable=True),
+    # Where the redacted PDF sits in the `cases` container, once there is one (AD-21).
+    Column("redacted_blob_name", Text, nullable=True),
+)
+
+# AD-14: one row per page of the redacted PDF, with the one reading of it
+# beside it in `page_text` and `word_box`.
+page_table = Table(
+    "page",
+    metadata,
+    Column("page_id", Uuid(as_uuid=False), primary_key=True),
+    Column(
+        "case_id",
+        Uuid(as_uuid=False),
+        ForeignKey(case_table.c.case_id),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "document_id",
+        Uuid(as_uuid=False),
+        ForeignKey(document_table.c.document_id),
+        nullable=False,
+    ),
+    # 1-based, in document order.
+    Column("page_number", Integer, nullable=False),
+    # Page size in PDF points, as the page is shown.
+    Column("page_width", Float, nullable=False),
+    Column("page_height", Float, nullable=False),
+    Column("thumbnail_blob_name", Text, nullable=False),
+    UniqueConstraint(
+        "document_id", "page_number", name="uq_intake_page_document_page_number"
+    ),
+)
+
+page_text_table = Table(
+    "page_text",
+    metadata,
+    Column(
+        "page_id",
+        Uuid(as_uuid=False),
+        ForeignKey(page_table.c.page_id),
+        primary_key=True,
+    ),
+    Column("text", Text, nullable=False),
+)
+
+word_box_table = Table(
+    "word_box",
+    metadata,
+    Column(
+        "page_id",
+        Uuid(as_uuid=False),
+        ForeignKey(page_table.c.page_id),
+        primary_key=True,
+    ),
+    # The word's place in reading order.
+    Column("word_number", Integer, primary_key=True),
+    # Offsets into the page's text.
+    Column("char_start", Integer, nullable=False),
+    Column("char_end", Integer, nullable=False),
+    Column("x0", Float, nullable=False),
+    Column("y0", Float, nullable=False),
+    Column("x1", Float, nullable=False),
+    Column("y1", Float, nullable=False),
+)
+
 # Alembic's own table, in the service's schema (Conventions, Database).
 _version_table = Table(
     VERSION_TABLE,
@@ -105,19 +196,24 @@ def database_url(settings: Settings) -> URL:
 
 
 class EntraToken:
-    """The Entra token that is the database password in Azure (security rule 9).
+    """An Entra token for one scope, kept fresh in memory (security rule 9).
 
-    Fetching a token is a blocking network call. The service fetches it on a
+    By default the token that is the database password in Azure; Azure AI
+    Language is signed in to with one for its own scope. Fetching a token is a blocking network call. The service fetches it on a
     worker thread with `refresh` before it opens a connection, and does so
     well ahead of the token's end, so the connection hook (`value`) always
     finds a valid one in memory and the event loop is never held up.
     """
 
     def __init__(
-        self, credential: "TokenCredential", clock: Callable[[], float] = time.time
+        self,
+        credential: "TokenCredential",
+        clock: Callable[[], float] = time.time,
+        scope: str = POSTGRESQL_TOKEN_SCOPE,
     ) -> None:
         self._credential = credential
         self._clock = clock
+        self._scope = scope
         self._token: str | None = None
         self._expires_on = 0.0
         # One fetch at a time: callers that arrive together share its result.
@@ -136,7 +232,7 @@ class EntraToken:
     def _refresh_if_stale(self) -> str:
         with self._fetching:
             if not self._is_fresh() or self._token is None:
-                token = self._credential.get_token(POSTGRESQL_TOKEN_SCOPE)
+                token = self._credential.get_token(self._scope)
                 self._token, self._expires_on = token.token, float(token.expires_on)
             return self._token
 

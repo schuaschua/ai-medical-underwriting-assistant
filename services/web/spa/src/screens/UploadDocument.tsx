@@ -16,6 +16,15 @@ type State =
   | { status: "uploaded"; caseId: string }
   | { status: "failed"; error: unknown };
 
+/** Whether the server reported the case as failed at redaction (AD-21). */
+function redactionFailed(state: CaseState): boolean {
+  return (
+    state.kind === "started" &&
+    state.status === "failed" &&
+    state.redactionFailed === true
+  );
+}
+
 /** What the list says about one case. A status always comes from the server. */
 function caseText(state: CaseState): string {
   switch (state.kind) {
@@ -24,7 +33,11 @@ function caseText(state: CaseState): string {
     case "starting":
       return strings.upload.caseStarting;
     case "started":
-      return strings.caseStatus[state.status];
+      // The server said the redaction failed: what to do about it is said
+      // with the status. A case that failed otherwise shows its status alone.
+      return redactionFailed(state)
+        ? strings.upload.caseFailed
+        : strings.caseStatus[state.status];
     case "not_started":
       return strings.upload.caseNotStarted;
     case "unreadable":
@@ -45,6 +58,16 @@ export function UploadDocument() {
   const uploading = state.status === "uploading";
   const uploadedCase =
     state.status === "uploaded" ? stateOf(states, state.caseId) : null;
+  // What the server says of the case just uploaded: not started, or failed
+  // at redaction.
+  const uploadedCaseAlert =
+    uploadedCase === null
+      ? null
+      : uploadedCase.kind === "not_started"
+        ? strings.upload.notStarted
+        : redactionFailed(uploadedCase)
+          ? strings.upload.failed
+          : null;
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -108,8 +131,8 @@ export function UploadDocument() {
         </p>
       )}
       {uploadedCase !== null &&
-        (uploadedCase.kind === "not_started" ? (
-          <p role="alert">{strings.upload.notStarted}</p>
+        (uploadedCaseAlert !== null ? (
+          <p role="alert">{uploadedCaseAlert}</p>
         ) : (
           <p role="status">
             {uploadedCase.kind === "started"

@@ -14,7 +14,8 @@ export type CaseState =
   | { kind: "checking" }
   /** The server has been asked to start the case. */
   | { kind: "starting" }
-  | { kind: "started"; status: CaseStatus }
+  /** `redactionFailed`: the server said the redaction stage failed. */
+  | { kind: "started"; status: CaseStatus; redactionFailed?: boolean }
   /** The document was received, but its case is not started. */
   | { kind: "not_started"; error: unknown }
   /** No read has succeeded yet, and the last one failed. */
@@ -143,7 +144,11 @@ export function useCaseProgress(caseIds: readonly string[]): {
             mine.notBefore = 0;
             if (upToDate()) {
               mine.applied = number;
-              set(caseId, { kind: "started", status: progress.case_status });
+              set(caseId, {
+                kind: "started",
+                status: progress.case_status,
+                redactionFailed: progress.redaction_status === "failed",
+              });
             }
           },
           (error: unknown) => {

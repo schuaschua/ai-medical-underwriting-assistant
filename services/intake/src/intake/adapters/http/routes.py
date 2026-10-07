@@ -1,5 +1,7 @@
 """The routes of `intake`: the probes and `POST /cases` (spine, Operations).
 
+The redaction command and the page reads are in `page_routes.py`.
+
 `POST /cases` takes an optional `Idempotency-Key` header: a repeat with the
 same key is answered with the case the first call created.
 
@@ -8,7 +10,7 @@ No route here, or anywhere in the service, returns an uploaded original (AD-21).
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
@@ -30,9 +32,10 @@ from contracts.upload import (
     parse_idempotency_key,
 )
 from intake.adapters.http.errors import UNSUPPORTED_MEDIA_TYPE_MESSAGE
-from intake.domain.ports import CaseRepository, OriginalStore
+from intake.domain.ports import CaseRepository, OriginalStore, PageRepository
+from intake.domain.redaction import RedactionPorts
 from intake.domain.upload import NOT_STORED_MESSAGE, create_case, utc_now
-from intake.settings import HEALTH_PATH, READY_PATH
+from intake.settings import DEFAULT_REDACTION_CATEGORIES, HEALTH_PATH, READY_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +58,18 @@ class Dependencies:
     schema_revision: SchemaRevision
     # The newest migration bundled with this build.
     head_revision: str
+    # AD-21: what redaction works with, and the reads of what it stored.
+    redaction: RedactionPorts
+    pages: PageRepository
     now: Callable[[], datetime] = field(default=utc_now)
     # INTAKE_UPLOAD_DEADLINE_SECONDS: see the settings for the three upload
     # deadlines and their order.
     upload_deadline_seconds: float = 90.0
+    # INTAKE_REDACTION_*: see the settings.
+    redaction_categories: Sequence[str] = DEFAULT_REDACTION_CATEGORIES
+    redaction_deadline_seconds: float = 180.0
+    redaction_stale_margin_seconds: float = 60.0
+    redaction_cancel_seconds: float = 10.0
 
 
 async def read_upload(request: Request) -> bytes:

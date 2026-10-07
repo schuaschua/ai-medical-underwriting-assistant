@@ -103,3 +103,23 @@ variable "dapr_http_max_request_size_mb" {
     error_message = "dapr_http_max_request_size_mb must be a whole number of at least 10: an upload is up to 10 MB."
   }
 }
+
+variable "dapr_http_port" {
+  description = "Port of the Dapr sidecar's HTTP API beside each container, on loopback. Container Apps uses 3500."
+  type        = number
+}
+
+variable "language_api_version" {
+  description = "API version of Azure AI Language's document PII redaction that intake calls (spine AD-21)."
+  type        = string
+}
+
+variable "redaction_categories" {
+  description = "The PII categories redaction removes, by Azure AI Language's category names (spine AD-21). Dates, ages and medical terms are kept by not being listed."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.redaction_categories) > 0 && alltrue([for name in var.redaction_categories : can(regex("^[A-Za-z0-9]+$", name))])
+    error_message = "redaction_categories must name at least one category, each of letters and digits only."
+  }
+}

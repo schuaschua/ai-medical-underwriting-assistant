@@ -32,8 +32,7 @@ resource "time_sleep" "web_acr_pull_propagation" {
 
 # The intake identity holds these roles and no others (azure.md, "Runtime
 # roles"). Its PostgreSQL role is not an Azure role: the database bootstrap
-# creates it (infra/bootstrap/README.md). Cognitive Services User on Azure AI
-# Language arrives with redaction (story 1.7).
+# creates it (infra/bootstrap/README.md).
 resource "azurerm_role_assignment" "intake_acr_pull" {
   scope                = local.foundation.container_registry_id
   role_definition_name = "AcrPull"
@@ -58,16 +57,47 @@ resource "azurerm_role_assignment" "intake_blob_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
+# Redaction (spine AD-21): intake submits the job to Azure AI Language with its
+# own identity. There is no key.
+resource "azurerm_role_assignment" "intake_language_user" {
+  scope                = local.foundation.language_id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = local.intake_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Azure AI Language reads the original and writes the redacted PDF and its
+# result file itself, with its own identity: it may read `originals` and write
+# `cases`, each scoped to the one container (azure.md rule 9). It is the only
+# reader of `originals`.
+resource "azurerm_role_assignment" "language_originals_reader" {
+  scope                = local.foundation.storage_container_ids["originals"]
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = local.foundation.language_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "language_cases_contributor" {
+  scope                = local.foundation.storage_container_ids["cases"]
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = local.foundation.language_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # As for web: a new role assignment is not honoured at once. intake waits for
-# all of its own, so its first revision can pull its image, write blobs and
-# send telemetry. The wait runs again only when one of them is made again.
+# all of its own and for Language's two, so its first revision can pull its
+# image, write blobs, send telemetry and have a document redacted. The wait
+# runs again only when one of them is made again.
 resource "time_sleep" "intake_role_propagation" {
   create_duration = var.role_propagation_wait
 
   triggers = {
-    acr_pull_id          = azurerm_role_assignment.intake_acr_pull.id
-    metrics_publisher_id = azurerm_role_assignment.intake_metrics_publisher.id
-    blob_contributor_ids = join(",", [for name in sort(tolist(local.intake_blob_containers)) : azurerm_role_assignment.intake_blob_contributor[name].id])
+    acr_pull_id                   = azurerm_role_assignment.intake_acr_pull.id
+    metrics_publisher_id          = azurerm_role_assignment.intake_metrics_publisher.id
+    blob_contributor_ids          = join(",", [for name in sort(tolist(local.intake_blob_containers)) : azurerm_role_assignment.intake_blob_contributor[name].id])
+    language_user_id              = azurerm_role_assignment.intake_language_user.id
+    language_originals_reader_id  = azurerm_role_assignment.language_originals_reader.id
+    language_cases_contributor_id = azurerm_role_assignment.language_cases_contributor.id
   }
 }
 
@@ -287,8 +317,10 @@ module "intake" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      # No password and no storage key: the database and Blob Storage are
-      # reached with the service identity (azure.md rule 7).
+      # No password, no storage key and no Language key: the database, Blob
+      # Storage and Azure AI Language are reached with the service identity
+      # (azure.md rule 7). The Language endpoint is the real account's; the
+      # local stand-in exists only on a developer machine.
       env = [
         { name = "INTAKE_HOST", value = "0.0.0.0" },
         { name = "INTAKE_PORT", value = tostring(var.intake_port) },
@@ -300,6 +332,10 @@ module "intake" {
         { name = "INTAKE_DATABASE_NAME", value = local.foundation.postgresql_database_name },
         { name = "INTAKE_DATABASE_USER", value = local.intake_identity.name },
         { name = "INTAKE_DATABASE_ENTRA_AUTH", value = "true" },
+        { name = "INTAKE_LANGUAGE_ENDPOINT", value = local.foundation.language_endpoint },
+        { name = "INTAKE_LANGUAGE_ENTRA_AUTH", value = "true" },
+        { name = "INTAKE_LANGUAGE_API_VERSION", value = var.language_api_version },
+        { name = "INTAKE_REDACTION_CATEGORIES", value = jsonencode(var.redaction_categories) },
       ]
 
       # azure.md rule 22. Startup and liveness ask the process; readiness
@@ -346,8 +382,10 @@ module "intake" {
 # --- workflow ----------------------------------------------------------------
 
 # Internal ingress only (spine AD-18): reachable from inside the environment,
-# and called only by web through Dapr service invocation (AD-3). It is the one
-# service that is never scaled to zero.
+# and called only by web through Dapr service invocation (AD-3). It is held at
+# exactly one replica, whatever min_replicas says for the others. It commands
+# the stage services through its own sidecar (AD-3), redaction on intake
+# first (AD-21).
 module "workflow" {
   source  = "Azure/avm-res-app-containerapp/azurerm"
   version = "0.9.0"
@@ -421,6 +459,7 @@ module "workflow" {
         { name = "WORKFLOW_SCHEDULER_ENDPOINT", value = local.foundation.durable_task_scheduler_endpoint },
         { name = "WORKFLOW_SCHEDULER_TASK_HUB", value = local.foundation.durable_task_hub_name },
         { name = "WORKFLOW_SCHEDULER_ENTRA_AUTH", value = "true" },
+        { name = "WORKFLOW_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
       ]
 
       # azure.md rule 22. Startup and liveness ask the process; readiness

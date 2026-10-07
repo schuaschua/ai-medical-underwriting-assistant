@@ -3,7 +3,13 @@
 from functools import lru_cache
 from typing import Annotated, Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from contracts.enums import ClassifierContender, RetrieverConfig
@@ -74,6 +80,31 @@ class Settings(BaseSettings):
     worker_start_check_seconds: Annotated[float, Field(gt=0)] = 5.0
     # How long shutdown waits for the worker, then for the scheduler client.
     shutdown_timeout_seconds: Annotated[float, Field(gt=0)] = 40.0
+
+    # AD-3: the port of this service's own Dapr sidecar, on loopback. Dapr tells
+    # the app its port in DAPR_HTTP_PORT, so that name is read as well.
+    dapr_http_port: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=65535,
+            validation_alias=AliasChoices("WORKFLOW_DAPR_HTTP_PORT", "DAPR_HTTP_PORT"),
+        ),
+    ] = 3500
+    # AD-6: how long a stage command may take. A stage ends its own work after
+    # 180 s (for redaction, INTAKE_REDACTION_DEADLINE_SECONDS); this is longer,
+    # so the stage's answer is heard.
+    stage_timeout_seconds: Annotated[float, Field(gt=0)] = 200.0
+    # A stage command that fails, or is answered `in_progress`, is sent again:
+    # the waits grow from `activity_first_retry_seconds` to at most this long.
+    # The attempts together must outlast a stage's deadline plus the margin
+    # after which the stage settles a command left `running` (for redaction
+    # 180 s + INTAKE_REDACTION_STALE_MARGIN_SECONDS 60 s = 240 s): a command
+    # repeated while the stage still works on it, or after the stage died,
+    # then gets a result in the end. The defaults wait
+    # 2 + 4 + 8 + 16 + 30 x 9 = 300 s.
+    stage_max_retry_seconds: Annotated[float, Field(gt=0)] = 30.0
+    stage_max_attempts: Annotated[int, Field(ge=1)] = 14
 
     # What a case is started with when the start request leaves a field out
     # (spine, Operations: every field of the start request is optional).

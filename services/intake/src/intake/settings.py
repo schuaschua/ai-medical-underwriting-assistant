@@ -1,7 +1,9 @@
 """The one settings object of the `intake` service (coding-style rule 12)."""
 
+import re
 from functools import lru_cache
 from typing import Annotated, Self
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +16,23 @@ SCHEMA = APP_ID
 HEALTH_PATH = "/health"
 # Readiness: the database is at the migration head bundled with the service.
 READY_PATH = "/ready"
+
+# AD-21: what redaction removes unless a setting says otherwise, by the names
+# Azure AI Language reports them under: person names, addresses, phone
+# numbers, email addresses, identity numbers and policy numbers. Dates, ages
+# and medical terms are not in the list, so they are kept. `PolicyNumber` is
+# this project's name for a category the service may not know: see the Azure
+# checks in `_bmad-output/implementation-artifacts/deferred-work.md`.
+DEFAULT_REDACTION_CATEGORIES = (
+    "Person",
+    "Address",
+    "PhoneNumber",
+    "Email",
+    "USSocialSecurityNumber",
+    "PolicyNumber",
+)
+# The hosts a plain-HTTP Language endpoint may have: the local stand-in only.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 class Settings(BaseSettings):
@@ -55,6 +74,37 @@ class Settings(BaseSettings):
     # AD-21: redacted PDFs and thumbnails, under the prefix `<case_id>/` (story 1.7).
     cases_container: str = "cases"
 
+    # AD-21: Azure AI Language, reached over REST. No default: in Azure the
+    # `app` stack sets the account's endpoint, and on a developer machine
+    # dapr.yaml names the local stand-in, a dev tool outside the services.
+    language_endpoint: str | None = None
+    # Spine, open question: 2026-05-01 or a preview version; confirmed in Azure.
+    language_api_version: str = "2026-05-01"
+    # In Azure: sign in to Language with the service identity. There is no key.
+    language_entra_auth: bool = False
+    # How long one HTTP call to Language may take, and the wait between two
+    # looks at a running job.
+    language_timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
+    language_poll_seconds: Annotated[float, Field(gt=0)] = 1.0
+    redaction_categories: Annotated[list[str], Field(min_length=1)] = list(
+        DEFAULT_REDACTION_CATEGORIES
+    )
+    # AD-6: the stage ends its own work after this long, as failed
+    # (`stage_timeout`). `workflow` waits 200 s (WORKFLOW_STAGE_TIMEOUT_SECONDS).
+    redaction_deadline_seconds: Annotated[float, Field(gt=0)] = 180.0
+    # A redaction still `running` this long after its deadline was left behind
+    # by a process that died: the next command for the case settles it as failed.
+    redaction_stale_margin_seconds: Annotated[float, Field(ge=0)] = 60.0
+    # After the deadline, how long the failure path waits for the job's
+    # cancel: deadline plus this stays under `workflow`'s 200 s.
+    redaction_cancel_seconds: Annotated[float, Field(gt=0, le=15)] = 10.0
+    # Width of a page thumbnail, in pixels, and the most it may be high: a
+    # very long page is made narrower instead.
+    thumbnail_width_px: Annotated[int, Field(ge=16, le=2000)] = 320
+    thumbnail_max_height_px: Annotated[int, Field(ge=16, le=4000)] = 1280
+    # A redacted document of more pages is not split: the redaction fails.
+    max_pages: Annotated[int, Field(ge=1)] = 200
+
     # Telemetry is exported only when a connection string is set. It is an address,
     # not a credential, but it is still kept out of logs and reprs.
     applicationinsights_connection_string: SecretStr | None = None
@@ -68,6 +118,7 @@ class Settings(BaseSettings):
         "azure_client_id",
         "blob_account_url",
         "blob_connection_string",
+        "language_endpoint",
         mode="before",
     )
     @classmethod
@@ -88,6 +139,44 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "Set INTAKE_BLOB_ACCOUNT_URL or INTAKE_BLOB_CONNECTION_STRING, not both."
+            )
+        return self
+
+    @field_validator("redaction_categories")
+    @classmethod
+    def _categories_are_names(cls, value: list[str]) -> list[str]:
+        # ASCII only: `str.isalnum` would let letters of any script through.
+        if any(re.fullmatch(r"[A-Za-z0-9]+", name) is None for name in value) or len(
+            set(value)
+        ) != len(value):
+            raise ValueError(
+                "redaction_categories must be distinct category names of "
+                "letters and digits"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _language_is_reached_safely(self) -> Self:
+        if self.language_endpoint is None:
+            return self
+        endpoint = urlsplit(self.language_endpoint)
+        if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
+            raise ValueError(
+                "INTAKE_LANGUAGE_ENDPOINT must start with http:// or https://"
+            )
+        if endpoint.scheme == "http":
+            # Plain HTTP is the local stand-in. It never stands in for the
+            # service in Azure, and a token is never sent to it.
+            if endpoint.hostname not in _LOOPBACK_HOSTS or self.language_entra_auth:
+                raise ValueError(
+                    "A plain-HTTP INTAKE_LANGUAGE_ENDPOINT is the local stand-in: "
+                    "it must be on loopback, without INTAKE_LANGUAGE_ENTRA_AUTH"
+                )
+        elif not self.language_entra_auth:
+            # Security rule 9: the real service is reached with the identity.
+            raise ValueError(
+                "An https:// INTAKE_LANGUAGE_ENDPOINT needs "
+                "INTAKE_LANGUAGE_ENTRA_AUTH=true"
             )
         return self
 

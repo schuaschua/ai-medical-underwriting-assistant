@@ -24,7 +24,7 @@ from alembic.migration import MigrationContext
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import ContainerClient
 from fastapi.testclient import TestClient
-from intake_fakes import MemoryOriginalStore
+from intake_fakes import MemoryOriginalStore, memory_redaction
 from psycopg import sql
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import OperationalError
@@ -181,6 +181,7 @@ def test_story_1_5_when_storage_fails_no_row_remains(
             repository=SqlCaseRepository(database),
             schema_revision=SqlSchemaRevision(database),
             head_revision=bundled_head(),
+            **memory_redaction(),
         ),
     )
 
@@ -228,6 +229,7 @@ def test_story_1_5_a_failed_insert_leaves_neither_row(
             repository=SameBlobName(SqlCaseRepository(database)),
             schema_revision=SqlSchemaRevision(database),
             head_revision=bundled_head(),
+            **memory_redaction(),
         ),
     )
 
@@ -304,6 +306,11 @@ def test_story_1_5_migration_keeps_everything_in_schema_intake(
         ("intake", "alembic_version"),
         ("intake", "case"),
         ("intake", "document"),
+        # Story 1.7.
+        ("intake", "page"),
+        ("intake", "page_text"),
+        ("intake", "redaction"),
+        ("intake", "word_box"),
     ]
     assert version == [(bundled_head(),)]
 

@@ -43,6 +43,10 @@ export const strings = {
     uploaded: "Your document was uploaded and its case has started.",
     notStarted:
       "Your document was received, but its case has not started. Use “Start it again” in the list below.",
+    // A document that could not be redacted is never used unredacted
+    // (AD-21): the customer uploads it again.
+    failed:
+      "Your document could not be processed. Please upload the document again.",
     casesHeading: "Cases uploaded in this session",
     noCases: "No documents uploaded yet.",
     caseColumn: "Case",
@@ -51,6 +55,7 @@ export const strings = {
     caseStarting: "Starting…",
     caseNotStarted: "Received, not started",
     caseUnreadable: "Its status could not be read",
+    caseFailed: "Failed. Please upload the document again.",
     checkAgain: "Check again",
     checkAgainFor: (caseId: string) => `Check case ${caseId} again`,
     startAgain: "Start it again",

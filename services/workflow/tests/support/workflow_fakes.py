@@ -5,12 +5,19 @@ Unit tests use them in place of PostgreSQL and the Durable Task Scheduler
 so the service package and its image hold no test code.
 """
 
+import json
+import re
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
+
 from contracts.audit import AuditRecord
 from contracts.enums import CaseStatus, PageStatus
+from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.classification import ClassificationResult
 from contracts.models.extraction import FactSetResult
@@ -357,3 +364,101 @@ def verdict_done(case_id: str) -> VerdictRunResult:
             "verdict": "standard",
         }
     )
+
+
+# --- The stage services ----------------------------------------------------------
+
+
+@dataclass
+class FakeStages:
+    """Stands in for the stage services: `intake` answers a redaction as it would.
+
+    A case is redacted once; every repeat gets the stored result (AD-6).
+    """
+
+    # What the stage does with a case it has no result for: "done" or "failed".
+    redaction: str = "done"
+    error_code: str = "redaction_failed"
+    pages: int = 2
+    # What the next calls do instead, first to last: "in_progress" (the stage
+    # still works on it), "down" (no answer), "not_found" (no such case) or
+    # "invalid" (the stage refuses the command itself).
+    script: list[str] = field(default_factory=list)
+    results: dict[str, RedactionResult] = field(default_factory=dict)
+    calls: list[tuple[str, str | None, dict[str, str]]] = field(default_factory=list)
+
+    async def redact_document(
+        self,
+        case_id: str,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> RedactionResult:
+        self.calls.append((case_id, eval_run_id, dict(trace_context)))
+        step = self.script.pop(0) if self.script else "answer"
+        if step == "in_progress":
+            raise DomainError(ErrorCode.IN_PROGRESS, "Still being redacted.")
+        if step == "down":
+            raise DomainError(ErrorCode.UPSTREAM_UNAVAILABLE, "Not available.")
+        if step == "invalid":
+            raise DomainError(ErrorCode.VALIDATION_FAILED, "The request is not valid.")
+        if step == "not_found":
+            raise DomainError(ErrorCode.NOT_FOUND, "That case could not be found.")
+        if case_id not in self.results:
+            self.results[case_id] = (
+                redaction_done(
+                    case_id,
+                    [new_id() for _ in range(self.pages)],
+                    eval_run_id=eval_run_id,
+                )
+                if self.redaction == "done"
+                else redaction_failed(case_id, self.error_code, eval_run_id=eval_run_id)
+            )
+        return self.results[case_id]
+
+
+_REDACTION_PATH = re.compile(
+    r"/v1\.0/invoke/intake/method/cases/(?P<case_id>[0-9a-f-]{36})/redaction"
+)
+
+
+@dataclass
+class SidecarStandIn:
+    """Stands in for `workflow`'s Dapr sidecar, with `intake` behind it.
+
+    An `httpx` transport handler: `httpx.MockTransport(stand_in.handle)`. It
+    answers the redaction command as `intake` does, over HTTP and in the
+    contracts' shapes, so the real client module is what the test runs.
+    """
+
+    stages: FakeStages = field(default_factory=FakeStages)
+    requests: list[httpx.Request] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handle)
+
+    def redactions(self, case_id: str) -> int:
+        """How often redaction was commanded for one case."""
+        return sum(case_id in request.url.path for request in self.requests)
+
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        with self._lock:
+            self.requests.append(request)
+        match = _REDACTION_PATH.fullmatch(request.url.path)
+        if match is None or request.method != "POST":
+            # As the sidecar answers for an app or a method it cannot reach.
+            return httpx.Response(500, json={"errorCode": "ERR_DIRECT_INVOKE"})
+        command = json.loads(request.content)
+        try:
+            result = await self.stages.redact_document(
+                match["case_id"],
+                eval_run_id=command.get("eval_run_id"),
+                trace_context=dict(request.headers),
+            )
+        except DomainError as error:
+            return httpx.Response(
+                error.http_status,
+                json=error.to_body(None).model_dump(mode="json"),
+            )
+        return httpx.Response(200, json=result.model_dump(mode="json"))

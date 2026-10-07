@@ -14,6 +14,8 @@ dev = [
     "pytest-cov==7.1.0",
     "ruff==0.16.10",
     # The synthetic data generator is a dev tool: `uv run python -m synthdata`.
+    # It also holds the local stand-in for Azure AI Language (story 1.7),
+    # `uv run python -m synthdata.language_standin`; no service depends on it.
     "synthdata",
 ]
 
@@ -80,7 +82,9 @@ addopts = "--import-mode=importlib --strict-markers"
 pythonpath = ["services/intake/tests/support", "services/workflow/tests/support"]
 markers = [
     # Needs the containers of compose.yaml: `docker compose up --detach --wait`.
-    "integration: uses the local PostgreSQL, blob emulator or scheduler emulator",
+    # Where a test needs Azure AI Language it runs the stand-in of
+    # packages/synthdata, a dev dependency of this workspace (story 1.7).
+    "integration: uses the local PostgreSQL, blob emulator, scheduler emulator or Language stand-in",
 ]
 
 [tool.coverage.run]

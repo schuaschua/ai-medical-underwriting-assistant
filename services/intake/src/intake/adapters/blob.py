@@ -1,4 +1,4 @@
-"""Blob Storage adapter: the `originals` container (AD-21)."""
+"""Blob Storage adapter: the `originals` and `cases` containers (AD-21)."""
 
 import asyncio
 
@@ -97,3 +97,56 @@ def ensure_local_containers(settings: Settings) -> list[str]:
         except ResourceExistsError:
             continue
     return names
+
+
+class BlobCaseFiles:
+    """The `cases` container: redacted PDFs, result files and thumbnails (AD-21).
+
+    It is built for that one container and cannot name a blob in another, so
+    nothing that reads through it can reach an original.
+    """
+
+    def __init__(self, service: BlobServiceClient, container: str) -> None:
+        self._container = service.get_container_client(container)
+
+    async def read(self, blob_name: str) -> bytes:
+        with tracer.start_as_current_span("intake.blob.read_case_file"):
+            return await asyncio.to_thread(self._read, blob_name)
+
+    async def put(self, blob_name: str, content: bytes, content_type: str) -> None:
+        with tracer.start_as_current_span("intake.blob.put_case_file"):
+            await asyncio.to_thread(self._put, blob_name, content, content_type)
+
+    async def delete(self, blob_name: str) -> None:
+        with tracer.start_as_current_span("intake.blob.delete_case_file"):
+            await asyncio.to_thread(self._delete, blob_name)
+
+    async def delete_all(self, prefix: str) -> None:
+        with tracer.start_as_current_span("intake.blob.delete_case_files"):
+            await asyncio.to_thread(self._delete_all, prefix)
+
+    def _read(self, blob_name: str) -> bytes:
+        return bytes(self._container.download_blob(blob_name).readall())
+
+    def _put(self, blob_name: str, content: bytes, content_type: str) -> None:
+        self._container.upload_blob(
+            blob_name,
+            content,
+            overwrite=True,
+            content_settings=ContentSettings(content_type=content_type),
+        )
+
+    def _delete(self, blob_name: str) -> None:
+        try:
+            self._container.delete_blob(blob_name)
+        except ResourceNotFoundError:
+            return
+
+    def _delete_all(self, prefix: str) -> None:
+        for name in list(self._container.list_blob_names(name_starts_with=prefix)):
+            self._delete(name)
+
+
+def container_url(service: BlobServiceClient, container: str) -> str:
+    """The address of a container, as the redaction service is told it. It holds no token."""
+    return str(service.get_container_client(container).url)

@@ -6,8 +6,12 @@ requires-python = "==3.13.*"
 # A dev tool, not service code: no service depends on it or imports it.
 dependencies = [
     "contracts",
+    # The Language stand-in (story 1.7): an HTTP app over the blob emulator.
+    "azure-storage-blob==12.31.0",
+    "fastapi==0.142.2",
     "pydantic==2.13.5",
     "pymupdf==1.28.2",
+    "uvicorn==0.54.0",
 ]
 
 [tool.uv.sources]

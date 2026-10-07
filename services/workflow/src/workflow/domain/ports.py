@@ -1,10 +1,12 @@
 """What the lifecycle needs from the outside world; adapters provide it."""
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
 from contracts.enums import CaseStatus
+from contracts.models.intake import RedactionResult
 from contracts.models.workflow import AuditTrail, CaseProgress
 from workflow.domain.entities import CaseRecord
 from workflow.domain.recording import Recording, RecordOutcome
@@ -61,4 +63,24 @@ class LifecycleEngine(Protocol):
         Returns the state that orchestration is in. A case that already has
         one is left exactly as it is, whatever that state.
         """
+        ...
+
+
+class StageServices(Protocol):
+    """The stage commands `workflow` sends (AD-2, AD-6). Each is idempotent on its key.
+
+    A command answers with the stage's stored result, done or failed. It
+    raises `in_progress` while the stage still works on the same command,
+    `not_found` when the stage does not hold what the command names, and
+    `upstream_unavailable` when no answer could be had.
+    """
+
+    async def redact_document(
+        self,
+        case_id: str,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> RedactionResult:
+        """AD-21: have `intake` redact the case's document and split it into pages."""
         ...

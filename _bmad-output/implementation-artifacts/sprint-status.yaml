@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-06-2026 14:30
-last_updated: 10-06-2026 14:45
+last_updated: 10-07-2026 10:05
 project: ai-medical-underwriting-assistant
 project_key: NOKEY
 tracking_system: file-system
@@ -42,7 +42,7 @@ development_status:
   1-4-first-synthetic-case-documents: review
   1-5-upload-a-document-and-see-the-case: review
   1-6-case-lifecycle-and-audit-trail: review
-  1-7-pii-redaction-before-anything-else-reads-the-document: backlog
+  1-7-pii-redaction-before-anything-else-reads-the-document: review
   1-8-page-classification-with-a-confidence-and-a-reason: backlog
   1-9-gate-routing-and-per-page-progress: backlog
   1-10-customer-keeps-or-discards-a-non-medical-page: backlog

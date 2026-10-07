@@ -6,8 +6,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from typing import Protocol
 
+import httpx
 from fastapi import FastAPI
 
+from workflow.adapters.dapr import StageClient, build_http_client
 from workflow.adapters.db import (
     SqlCaseStore,
     SqlSchemaRevision,
@@ -119,14 +121,19 @@ async def running_worker(
 
 
 def create_app(
-    settings: Settings | None = None, *, dependencies: Dependencies | None = None
+    settings: Settings | None = None,
+    *,
+    dependencies: Dependencies | None = None,
+    sidecar: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build the app. The server uses the environment; unit tests pass fakes in.
 
     Without `dependencies` the real adapters are built: PostgreSQL and the
-    Durable Task Scheduler as the settings describe them, and the worker that
+    Durable Task Scheduler as the settings describe them, the client that
+    commands the stage services through the Dapr sidecar, and the worker that
     runs the case orchestration. Building them opens no connection; the
     worker starts once the schema is migrated and stops with the app.
+    `sidecar` stands in for the Dapr sidecar in tests.
     """
     if settings is None:
         settings = get_settings()
@@ -135,10 +142,12 @@ def create_app(
     database = None
     engine = None
     store = None
+    stages = None
     if dependencies is None:
         database = build_database(settings)
         store = SqlCaseStore(database)
         engine = SchedulerEngine(build_client(settings))
+        stages = StageClient(build_http_client(settings, sidecar), settings)
         dependencies = Dependencies(
             store=store,
             engine=engine,
@@ -155,15 +164,17 @@ def create_app(
         # Each resource is closed even if the one before it failed to close.
         try:
             try:
-                if store is None:
+                if store is None or stages is None:
                     yield
                 else:
                     # Activities run on the worker's threads and do their
-                    # database work on this loop.
+                    # database work and their stage calls on this loop.
                     activities = Activities(
                         store,
                         asyncio.get_running_loop(),
                         settings.activity_timeout_seconds,
+                        stages,
+                        settings.stage_timeout_seconds,
                     )
                     async with running_worker(
                         build_worker(settings, activities),
@@ -174,12 +185,20 @@ def create_app(
                     ):
                         yield
             finally:
-                if engine is not None:
-                    await _bounded(
-                        "scheduler_client",
-                        engine.aclose(),
-                        settings.shutdown_timeout_seconds,
-                    )
+                try:
+                    if engine is not None:
+                        await _bounded(
+                            "scheduler_client",
+                            engine.aclose(),
+                            settings.shutdown_timeout_seconds,
+                        )
+                finally:
+                    if stages is not None:
+                        await _bounded(
+                            "stage_client",
+                            stages.aclose(),
+                            settings.shutdown_timeout_seconds,
+                        )
         finally:
             if database is not None:
                 await _bounded(

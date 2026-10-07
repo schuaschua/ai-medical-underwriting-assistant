@@ -1178,3 +1178,127 @@ describe("1.6 upload, start and progress", () => {
     );
   });
 });
+
+describe("1.7 a case whose redaction failed", () => {
+  const PROGRESS_PATH = `/api/cases/${UPLOADED.case_id}/progress`;
+  const UPLOAD_AGAIN =
+    "Your document could not be processed. Please upload the document again.";
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("asks the customer to upload the document again, once the server says the case failed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Redaction is under way at first; then it fails and the case with it.
+    let failed = false;
+    const server = fakeServer((call) =>
+      call.path === PROGRESS_PATH && failed
+        ? json(200, caseProgress(UPLOADED.case_id, "failed", "failed"))
+        : undefined,
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    openUploadScreen();
+
+    await user.upload(fileInput(), casePdf());
+    await user.click(uploadButton());
+    expect(
+      await screen.findByText(
+        "Your document was uploaded and its case has started.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(UPLOAD_AGAIN)).toBeNull();
+
+    failed = true;
+    await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS));
+
+    // Without a reload: the message, as an alert, in the place of the success.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(UPLOAD_AGAIN);
+    expect(
+      screen.queryByText(
+        "Your document was uploaded and its case has started.",
+      ),
+    ).toBeNull();
+    expect(caseRows()).toEqual([
+      [UPLOADED.case_id, "Failed. Please upload the document again."],
+    ]);
+    // The text comes from the strings module, and the status from the server.
+    expect(strings.upload.failed).toBe(UPLOAD_AGAIN);
+    // A failed case will not change: it is not read again.
+    const reads = server.calls.filter(
+      (call) => call.path === PROGRESS_PATH,
+    ).length;
+    await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS * 2));
+    expect(
+      server.calls.filter((call) => call.path === PROGRESS_PATH),
+    ).toHaveLength(reads);
+  });
+
+  it("lets the customer upload again straight away", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeServer((call) =>
+      call.path === PROGRESS_PATH
+        ? json(200, caseProgress(UPLOADED.case_id, "failed", "failed"))
+        : undefined,
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    openUploadScreen();
+    await user.upload(fileInput(), casePdf());
+    await user.click(uploadButton());
+    // The next read of the case's progress brings the failure.
+    await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS));
+    expect(await screen.findByRole("alert")).toHaveTextContent(UPLOAD_AGAIN);
+
+    // The form is as it was before the upload: a file can be chosen again,
+    // and choosing one takes the message about the last file away.
+    expect(fileInput()).toBeEnabled();
+    await user.upload(fileInput(), casePdf());
+
+    expect(uploadButton()).toBeEnabled();
+    expect(screen.queryByText(UPLOAD_AGAIN)).toBeNull();
+  });
+
+  it("shows the same for a failed case found in the session after a reload", async () => {
+    window.sessionStorage.setItem(
+      CASES_STORAGE_KEY,
+      JSON.stringify([UPLOADED]),
+    );
+    fakeServer((call) =>
+      call.path === PROGRESS_PATH
+        ? json(200, caseProgress(UPLOADED.case_id, "failed", "failed"))
+        : undefined,
+    );
+
+    openUploadScreen();
+
+    await waitFor(() =>
+      expect(caseRows()).toEqual([
+        [UPLOADED.case_id, "Failed. Please upload the document again."],
+      ]),
+    );
+    // No start-again button: a failed case is not started a second time.
+    expect(screen.queryByRole("button", { name: /Start case/ })).toBeNull();
+  });
+
+  it("shows the plain status for a case that failed for another reason", async () => {
+    window.sessionStorage.setItem(
+      CASES_STORAGE_KEY,
+      JSON.stringify([UPLOADED]),
+    );
+    // The case failed, but not at redaction, which was done.
+    fakeServer((call) =>
+      call.path === PROGRESS_PATH
+        ? json(200, caseProgress(UPLOADED.case_id, "failed", "done"))
+        : undefined,
+    );
+
+    openUploadScreen();
+
+    await waitFor(() =>
+      expect(caseRows()).toEqual([[UPLOADED.case_id, "Failed"]]),
+    );
+    expect(screen.queryByText(UPLOAD_AGAIN)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

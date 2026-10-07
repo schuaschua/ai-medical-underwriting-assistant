@@ -14,8 +14,12 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient, ContainerClient
 from fastapi.testclient import TestClient
 from intake_fakes import (
+    FakeLanguage,
+    FakeSplitter,
+    MemoryCaseFiles,
     MemoryCaseRepository,
     MemoryOriginalStore,
+    MemoryRedactionRepository,
     MemorySchemaRevision,
 )
 from psycopg import sql
@@ -25,12 +29,15 @@ from intake.adapters.blob import build_blob_service, ensure_local_containers
 from intake.adapters.http.app import create_app
 from intake.adapters.http.routes import Dependencies
 from intake.adapters.migrations import alembic_config, bundled_head
+from intake.domain.redaction import RedactionPorts
 from intake.settings import Settings
 
 CASES_DIR = Path(__file__).resolve().parents[3] / "data" / "cases"
 FIXED_NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 # The emulator's built-in account; the SDK knows its address and key.
 EMULATOR = "UseDevelopmentStorage=true"
+# Where the Language stand-in is said to be; loopback, as the settings demand.
+LANGUAGE_ENDPOINT = "http://127.0.0.1:5100"
 
 
 @pytest.fixture
@@ -65,16 +72,52 @@ def settings() -> Settings:
 
 
 @pytest.fixture
+def case_files() -> MemoryCaseFiles:
+    return MemoryCaseFiles()
+
+
+@pytest.fixture
+def language(case_files: MemoryCaseFiles) -> FakeLanguage:
+    return FakeLanguage(case_files)
+
+
+@pytest.fixture
+def splitter() -> FakeSplitter:
+    return FakeSplitter()
+
+
+@pytest.fixture
+def redactions(repository: MemoryCaseRepository) -> MemoryRedactionRepository:
+    return MemoryRedactionRepository(repository)
+
+
+@pytest.fixture
+def ports(
+    redactions: MemoryRedactionRepository,
+    language: FakeLanguage,
+    case_files: MemoryCaseFiles,
+    splitter: FakeSplitter,
+) -> RedactionPorts:
+    return RedactionPorts(
+        repository=redactions, language=language, files=case_files, splitter=splitter
+    )
+
+
+@pytest.fixture
 def dependencies(
     store: MemoryOriginalStore,
     repository: MemoryCaseRepository,
     schema_revision: MemorySchemaRevision,
+    ports: RedactionPorts,
+    redactions: MemoryRedactionRepository,
 ) -> Dependencies:
     return Dependencies(
         store=store,
         repository=repository,
         schema_revision=schema_revision,
         head_revision=bundled_head(),
+        redaction=ports,
+        pages=redactions,
         now=lambda: FIXED_NOW,
     )
 
@@ -110,6 +153,10 @@ def local_stack() -> Iterator[Settings]:
         blob_connection_string=SecretStr(EMULATOR),
         originals_container=f"originals-test-{suffix}",
         cases_container=f"cases-test-{suffix}",
+        # Named, never called over the network: tests that redact hand the
+        # app a transport that leads to the stand-in.
+        language_endpoint=LANGUAGE_ENDPOINT,
+        language_poll_seconds=0.02,
     )
     if not _listening(settings.database_host, settings.database_port) or not _listening(
         "127.0.0.1", 10000

@@ -31,11 +31,15 @@ export function startedCase(caseId: string, caseStatus = "running") {
 }
 
 /** The progress of a case with no pages yet. */
-export function caseProgress(caseId: string, caseStatus = "running") {
+export function caseProgress(
+  caseId: string,
+  caseStatus = "running",
+  redactionStatus = "running",
+) {
   return {
     case_id: caseId,
     case_status: caseStatus,
-    redaction_status: "running",
+    redaction_status: redactionStatus,
     pages: [],
   };
 }

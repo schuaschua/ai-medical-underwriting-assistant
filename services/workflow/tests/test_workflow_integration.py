@@ -37,6 +37,8 @@ from psycopg import sql
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import DBAPIError, OperationalError
 from workflow_fakes import (
+    FakeStages,
+    SidecarStandIn,
     classification_done,
     classification_failed,
     facts_done,
@@ -192,9 +194,14 @@ def completed(client: DurableTaskSchedulerClient, case_id: str) -> Orchestration
 def service(
     service_settings: Settings, local_scheduler: Settings
 ) -> Iterator[TestClient]:
-    """The service as it really runs: its own role, its worker, the emulator."""
+    """The service as it really runs: its own role, its worker, the emulator.
+
+    Its Dapr sidecar is a stand-in behind which `intake` redacts every case
+    (story 1.7): a started case runs on to a done redaction.
+    """
     with TestClient(
-        create_app(service_settings), raise_server_exceptions=False
+        create_app(service_settings, sidecar=SidecarStandIn().transport()),
+        raise_server_exceptions=False,
     ) as test_client:
         yield test_client
 
@@ -228,7 +235,8 @@ def test_story_1_6_a_started_case_has_exactly_one_orchestration_named_by_its_cas
     assert [item.instance_id for item in instances_of(scheduler_client, case_id)] == [
         case_id
     ]
-    assert case_row(service_settings, case_id) == ("running", "running")
+    # Story 1.7: the lifecycle now runs on through redaction, which is done.
+    assert case_row(service_settings, case_id) == ("running", "done")
 
 
 def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
@@ -261,7 +269,11 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
         == rows_before
     )
     assert len(rows_before) == 1
-    assert audit_rows(service_settings, case_id) == []
+    # Nothing was run a second time: the trail holds the one event of the
+    # one redaction (story 1.7), and no more.
+    assert [row[0] for row in audit_rows(service_settings, case_id)] == [
+        "document.redacted"
+    ]
 
 
 def test_story_1_6_starts_that_arrive_together_make_one_orchestration(
@@ -309,20 +321,28 @@ def test_story_1_6_start_options_are_stored_and_returned_by_the_real_service(
 
 
 def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
-    service: TestClient,
+    service: TestClient, scheduler_client: DurableTaskSchedulerClient
 ) -> None:
     case_id = new_id()
     assert service.get(f"/cases/{case_id}/progress").status_code == 404
     assert service.get(f"/cases/{case_id}/audit").status_code == 404
 
     service.post(f"/cases/{case_id}/start")
+    # Until the lifecycle has run as far as it goes, so the reads are of a
+    # settled case.
+    completed(scheduler_client, case_id)
 
     progress = CaseProgress.model_validate(
         service.get(f"/cases/{case_id}/progress").json()
     )
     trail = AuditTrail.model_validate(service.get(f"/cases/{case_id}/audit").json())
-    assert (progress.case_status, progress.pages) == (CaseStatus.RUNNING, [])
-    assert trail.events == []
+    assert progress.case_status is CaseStatus.RUNNING
+    # Story 1.7: redaction is done, and its pages and its event are there.
+    assert [page.page_status.value for page in progress.pages] == [
+        "uploaded",
+        "uploaded",
+    ]
+    assert [event.action.value for event in trail.events] == ["document.redacted"]
 
 
 @dataclass
@@ -362,7 +382,7 @@ def test_story_1_6_the_orchestration_retries_an_activity_that_failed(
 
     database = build_database(settings)
     store = FlakyStore(SqlCaseStore(database), failures_left=2)
-    worker = build_worker(settings, Activities(store, loop, 10.0))
+    worker = build_worker(settings, Activities(store, loop, 10.0, FakeStages()))
     case = new_case(new_id(), PARAMETERS, NOW)
     worker.start()  # type: ignore[no-untyped-call]  # the library's method has no return annotation
     try:
@@ -411,7 +431,8 @@ def test_story_1_6_a_start_while_the_scheduler_is_down_is_502_and_a_repeat_finis
     assert instances_of(scheduler_client, case_id) == []
 
     with TestClient(
-        create_app(service_settings), raise_server_exceptions=False
+        create_app(service_settings, sidecar=SidecarStandIn().transport()),
+        raise_server_exceptions=False,
     ) as client:
         assert client.post(f"/cases/{case_id}/start").status_code == 200
         # While the service is still up: its worker runs the orchestration.
@@ -1043,7 +1064,7 @@ def a_worker(settings: Settings, store: Any) -> Iterator[tuple[SchedulerEngine, 
         return asyncio.run_coroutine_threadsafe(work, loop).result(30)
 
     client = build_client(settings)
-    worker = build_worker(settings, Activities(store, loop, 10.0))
+    worker = build_worker(settings, Activities(store, loop, 10.0, FakeStages()))
     worker.start()  # type: ignore[no-untyped-call]  # the library's method has no return annotation
     try:
         yield SchedulerEngine(client), on_loop

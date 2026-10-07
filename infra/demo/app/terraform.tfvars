@@ -21,6 +21,21 @@ workflow_health_path          = "/health"
 workflow_ready_path           = "/ready"
 otel_sampling_ratio           = 1
 dapr_http_max_request_size_mb = 16
+dapr_http_port                = 3500
+
+# Redaction (spine AD-21). Both values wait for the final Azure test session
+# (deferred-work.md): the API version is the one the spine names as generally
+# available, and `PolicyNumber` is this project's own name for a category the
+# service may not know. If the service refuses it, take it out here.
+language_api_version = "2026-05-01"
+redaction_categories = [
+  "Person",
+  "Address",
+  "PhoneNumber",
+  "Email",
+  "USSocialSecurityNumber",
+  "PolicyNumber",
+]
 
 # A new role assignment takes a while to reach every Azure region and service.
 role_propagation_wait = "60s"

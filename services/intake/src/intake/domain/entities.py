@@ -56,3 +56,100 @@ def new_case_with_document(
         idempotency_key=idempotency_key,
     )
     return case, document
+
+
+# --- Redaction and pages (AD-21, AD-14) ----------------------------------------
+
+
+def redacted_blob_name(case_id: str, document_id: str) -> str:
+    """The blob name of the redacted PDF, the document of record (AD-21)."""
+    return f"{case_id}/{document_id}.redacted.pdf"
+
+
+def result_blob_name(case_id: str, document_id: str) -> str:
+    """The blob name of the redaction service's result file."""
+    return f"{case_id}/{document_id}.redaction-result.json"
+
+
+def thumbnail_blob_name(case_id: str, page_id: str) -> str:
+    """The blob name of a page's thumbnail."""
+    return f"{case_id}/pages/{page_id}.png"
+
+
+def case_prefix(case_id: str) -> str:
+    """Everything a case has in the `cases` container sits under this prefix."""
+    return f"{case_id}/"
+
+
+@dataclass(frozen=True, slots=True)
+class JobOutput:
+    """Where a finished redaction job left its files, as names in the `cases` container."""
+
+    redacted_blob_name: str
+    result_blob_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class Word:
+    """One word of a page's text and where it sits on the page (AD-14)."""
+
+    # Offsets into the page text: `text[char_start:char_end]` is the word.
+    char_start: int
+    char_end: int
+    # PDF points, origin at the top-left corner of the page as it is shown.
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+@dataclass(frozen=True, slots=True)
+class PageReading:
+    """One page as read from the redacted PDF: its text, its words and its picture."""
+
+    text: str
+    width: float
+    height: float
+    words: tuple[Word, ...]
+    # PNG.
+    thumbnail: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class PageRecord:
+    """A page as `intake` stores it; its text and words are kept beside it."""
+
+    page_id: str
+    case_id: str
+    document_id: str
+    # 1-based, in document order.
+    page_number: int
+    width: float
+    height: float
+    thumbnail_blob_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class NewPage:
+    """A page about to be stored, with the one reading of it."""
+
+    record: PageRecord
+    text: str
+    words: tuple[Word, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Redaction:
+    """The key row of a case's redaction (AD-6): one per case, whatever is repeated."""
+
+    case_id: str
+    document_id: str
+    started_at: datetime
+    # The stored result, as JSON, once the redaction has ended; None while it runs.
+    result_json: str | None
+    # The Language job, once it was submitted.
+    job_id: str | None = None
+
+    @property
+    def running(self) -> bool:
+        return self.result_json is None

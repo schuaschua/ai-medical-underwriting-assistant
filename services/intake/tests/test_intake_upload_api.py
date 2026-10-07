@@ -348,13 +348,21 @@ def test_story_1_5_no_route_returns_a_document_file(
 ) -> None:
     app = create_app(settings, dependencies=dependencies)
 
-    # The whole route table: two probes and the upload. Nothing reads a file.
+    # The whole route table: two probes, the upload, and (story 1.7) the
+    # redaction command with the reads of what it stores. The one file route
+    # answers with the redacted PDF; nothing reads an original (AD-21).
     assert routes_of(app) == {
         ("GET", "/health"),
         ("HEAD", "/health"),
         ("GET", "/ready"),
         ("HEAD", "/ready"),
         ("POST", "/cases"),
+        ("POST", "/cases/{case_id}/redaction"),
+        ("GET", "/cases/{case_id}/pages"),
+        ("GET", "/pages/{page_id}/text"),
+        ("GET", "/pages/{page_id}/boxes"),
+        ("GET", "/pages/{page_id}/thumbnail"),
+        ("GET", "/documents/{document_id}/file"),
     }
 
 
@@ -368,7 +376,6 @@ def test_story_1_5_asking_for_the_original_is_404(
         f"/cases/{case_id}",
         f"/cases/{case_id}/original",
         f"/documents/{document_id}",
-        f"/documents/{document_id}/file",
         f"/documents/{document_id}/original",
         f"/originals/{case_id}/{document_id}.pdf",
     ):
@@ -376,6 +383,13 @@ def test_story_1_5_asking_for_the_original_is_404(
         assert response.status_code == 404, path
         assert error_of(response.json())[0] == "not_found"
         assert b"%PDF" not in response.content
+
+    # Story 1.7: the file route exists, and before redaction it has no file
+    # to give. It never answers with the original instead.
+    response = client.get(f"/documents/{document_id}/file")
+    assert response.status_code == 409
+    assert error_of(response.json())[0] == "not_redacted"
+    assert b"%PDF" not in response.content
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT", "PATCH", "DELETE"])

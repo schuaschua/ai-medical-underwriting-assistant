@@ -539,8 +539,9 @@ def test_story_1_5_the_bundled_head_is_the_newest_migration_in_the_package() -> 
     assert versions == [
         "v0001_case_and_document.py",
         "v0002_document_idempotency_key.py",
+        "v0003_redaction_and_pages.py",
     ]
-    assert bundled_head() == "0002"
+    assert bundled_head() == "0003"
     # Inside the package, so the image carries it.
     assert MIGRATIONS_DIR.parent.name == "intake"
     assert (MIGRATIONS_DIR / "env.py").is_file()
@@ -597,6 +598,7 @@ def test_story_1_5_app_built_from_the_environment_uses_the_real_adapters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("INTAKE_BLOB_CONNECTION_STRING", "UseDevelopmentStorage=true")
+    monkeypatch.setenv("INTAKE_LANGUAGE_ENDPOINT", "http://127.0.0.1:5100")
     get_settings.cache_clear()
     try:
         # Building the app opens no connection, so no container is needed.

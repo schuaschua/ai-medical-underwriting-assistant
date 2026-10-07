@@ -19,24 +19,28 @@ from durabletask.client import OrchestrationState, OrchestrationStatus
 from durabletask.internal import orchestrator_service_pb2 as pb
 from durabletask.worker import ConcurrencyOptions
 
+from contracts.enums import CaseStatus, StageStatus
 from contracts.errors import DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from workflow.adapters.credential import azure_credential
+from workflow.adapters.dapr import trace_headers
 from workflow.adapters.orchestration import (
     CASE_LIFECYCLE,
     CONFIRM_CASE_STARTED,
     MARK_CASE_FAILED,
     OK,
     OUTCOME,
+    REDACT_DOCUMENT,
     REFUSED,
     activity_retry_policy,
     build_case_lifecycle,
+    stage_retry_policy,
 )
 from workflow.adapters.telemetry import current_trace_id
 from workflow.domain.cases import confirm_started, fail_case, record_stage_result
 from workflow.domain.entities import CaseRecord
 from workflow.domain.lifecycle import case_started
-from workflow.domain.ports import CaseStore, EngineState
+from workflow.domain.ports import CaseStore, EngineState, StageServices
 from workflow.domain.recording import RecordOutcome
 from workflow.settings import Settings
 
@@ -77,6 +81,11 @@ _sdk_logger.addFilter(SdkLogFilter())
 _DEAD = frozenset({OrchestrationStatus.FAILED, OrchestrationStatus.TERMINATED})
 # Errors that the same call would meet again, however often it is repeated.
 _PERMANENT = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
+# How a recorded stage result left the trail: written now, or there already.
+_IN_THE_TRAIL = frozenset({RecordOutcome.RECORDED, RecordOutcome.DUPLICATE})
+# What the wait for a stage call adds to the call's own deadline, so the
+# call's own error is what the activity reports.
+_STAGE_CALL_SLACK_SECONDS = 5.0
 
 
 def _engine_state(existing: OrchestrationState | None) -> EngineState:
@@ -228,10 +237,15 @@ class Activities:
         store: CaseStore,
         loop: asyncio.AbstractEventLoop,
         timeout_seconds: float,
+        stages: StageServices,
+        stage_timeout_seconds: float = 200.0,
     ) -> None:
         self._store = store
         self._loop = loop
         self._timeout_seconds = timeout_seconds
+        self._stages = stages
+        # AD-6: longer than a stage's own deadline of 180 s.
+        self._stage_timeout_seconds = stage_timeout_seconds
 
     def confirm_case_started(
         self, context: task.ActivityContext, case_id: str
@@ -246,6 +260,48 @@ class Activities:
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}
         return {OUTCOME: OK, "case_status": status.value}
+
+    def redact_document(
+        self, context: task.ActivityContext, command: dict[str, str | None]
+    ) -> dict[str, str]:
+        """AD-21: have `intake` redact the document, and record the result it stored.
+
+        One call to the stage, then the one recording path. `in_progress`, or
+        no answer, fails the activity and the engine sends the command again
+        (AD-6): `intake` answers a repeat with its stored result. A case
+        `intake` does not hold is answered as refused, not retried.
+        """
+        case_id = str(command["case_id"])
+        try:
+            result = self._run(
+                REDACT_DOCUMENT,
+                case_id,
+                self._stages.redact_document(
+                    case_id,
+                    eval_run_id=command.get("eval_run_id"),
+                    # Read here, on the activity's thread, where its trace is.
+                    trace_context=trace_headers(),
+                ),
+                self._stage_timeout_seconds + _STAGE_CALL_SLACK_SECONDS,
+            )
+            outcome = self.record(REDACT_DOCUMENT, result)
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        if outcome is RecordOutcome.CASE_FAILED or (
+            result.status is StageStatus.FAILED and outcome in _IN_THE_TRAIL
+        ):
+            # The failed result failed the case, with its `stage.failed` event.
+            return {OUTCOME: OK, "case_status": CaseStatus.FAILED.value}
+        if outcome in _IN_THE_TRAIL:
+            return {OUTCOME: OK, "case_status": CaseStatus.RUNNING.value}
+        # The result contradicts what is stored: the case cannot go on.
+        logger.error(
+            "stage result not recorded: activity=%s case_id=%s outcome=%s",
+            REDACT_DOCUMENT,
+            case_id,
+            outcome.value,
+        )
+        return {OUTCOME: REFUSED, "reason": outcome.value}
 
     def mark_case_failed(
         self, context: task.ActivityContext, failed: dict[str, str | None]
@@ -278,8 +334,16 @@ class Activities:
             activity, result.case_id, record_stage_result(result, store=self._store)
         )
 
-    def _run[T](self, activity: str, case_id: str, work: Coroutine[Any, Any, T]) -> T:
+    def _run[T](
+        self,
+        activity: str,
+        case_id: str,
+        work: Coroutine[Any, Any, T],
+        timeout_seconds: float | None = None,
+    ) -> T:
         refused: ErrorCode | None = None
+        if timeout_seconds is None:
+            timeout_seconds = self._timeout_seconds
         try:
             future = asyncio.run_coroutine_threadsafe(work, self._loop)
         except RuntimeError:
@@ -288,7 +352,7 @@ class Activities:
             reason = "LoopClosed"
         else:
             try:
-                return future.result(self._timeout_seconds)
+                return future.result(timeout_seconds)
             except concurrent.futures.CancelledError:
                 # The loop was stopped, or the work cancelled, under the
                 # activity. Not an `Exception`, so it is named here.
@@ -327,7 +391,12 @@ def build_worker(
             maximum_concurrent_activity_work_items=settings.worker_max_concurrent_activities
         ),
     )
-    worker.add_orchestrator(build_case_lifecycle(activity_retry_policy(settings)))
+    worker.add_orchestrator(
+        build_case_lifecycle(
+            activity_retry_policy(settings), stage_retry_policy(settings)
+        )
+    )
     worker.add_activity(activities.confirm_case_started)
+    worker.add_activity(activities.redact_document)
     worker.add_activity(activities.mark_case_failed)
     return worker
