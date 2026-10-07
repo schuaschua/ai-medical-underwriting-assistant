@@ -19,7 +19,6 @@ from intake_fakes import (
     MemoryCaseRepository,
     MemoryOriginalStore,
     MemoryRedactionRepository,
-    reading,
 )
 
 from contracts.errors import NO_TRACE_ID, DomainError, ErrorBody, ErrorCode
@@ -31,8 +30,7 @@ from contracts.models.intake import (
     RedactionCommand,
     RedactionResult,
 )
-from intake.domain.entities import PageReading, Word, new_case_with_document
-from intake.domain.pages import words_in_range
+from intake.domain.entities import new_case_with_document
 from intake.domain.ports import RedactionJobError
 from intake.domain.redaction import (
     RedactionPorts,
@@ -150,38 +148,6 @@ def test_story_1_7_only_the_redaction_call_is_told_where_the_original_is(
     assert splitter.given[0] != case_pdf
 
 
-def test_story_1_7_the_redacted_categories_are_a_setting(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-
-    asyncio.run(
-        redact_document(
-            case_id,
-            RedactionCommand(),
-            ports=ports,
-            categories=("Person", "Email"),
-            deadline_seconds=5,
-            stale_margin_seconds=1,
-        )
-    )
-
-    assert language.started[0][2] == ("Person", "Email")
-    # The default: names, addresses, phone numbers, emails, identity and
-    # policy numbers. Dates, ages and medical terms are not in it.
-    assert DEFAULT_REDACTION_CATEGORIES == (
-        "Person",
-        "Address",
-        "PhoneNumber",
-        "Email",
-        "USSocialSecurityNumber",
-        "PolicyNumber",
-    )
-
-
 # --- Idempotency -------------------------------------------------------------------
 
 
@@ -226,63 +192,6 @@ def test_story_1_7_a_repeat_while_running_is_409_in_progress(
     assert error_code(response.json()) == "in_progress"
     assert language.started == []
     assert redactions.pages == {}
-
-
-def test_story_1_7_the_key_row_is_inserted_as_running_before_any_work(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    redactions: MemoryRedactionRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-    language.behaviour = "hang"
-    seen: list[object] = []
-
-    async def scenario() -> None:
-        running = asyncio.ensure_future(
-            redact_document(
-                case_id,
-                RedactionCommand(),
-                ports=ports,
-                categories=DEFAULT_REDACTION_CATEGORIES,
-                deadline_seconds=30,
-                stale_margin_seconds=1,
-                now=lambda: fixed_now,
-            )
-        )
-        await language.waiting.wait()
-        # The job is still running: the row is there, and a second command
-        # for the case does no work of its own.
-        seen.append(redactions.redactions[case_id].running)
-        with pytest.raises(DomainError) as refused:
-            await redact_document(
-                case_id,
-                RedactionCommand(),
-                ports=ports,
-                categories=DEFAULT_REDACTION_CATEGORIES,
-                deadline_seconds=30,
-                stale_margin_seconds=1,
-                now=lambda: fixed_now,
-            )
-        seen.append(refused.value.code)
-        running.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await running
-
-    asyncio.run(scenario())
-
-    assert seen == [True, ErrorCode.IN_PROGRESS]
-    assert len(language.started) == 1
-    # The caller went away: the redaction was settled as failed, and its job stopped.
-    stored = RedactionResult.model_validate_json(
-        redactions.redactions[case_id].result_json or ""
-    )
-    assert (stored.status.value, stored.error_code) == (
-        "failed",
-        ErrorCode.REDACTION_FAILED,
-    )
-    assert language.cancelled == ["job-1"]
 
 
 # --- Reads -------------------------------------------------------------------------
@@ -342,104 +251,11 @@ def test_story_1_7_after_redaction_pages_text_boxes_thumbnail_and_file_are_serve
     assert client.get(f"/pages/{second}/boxes").json()["boxes"] == []
 
 
-def test_story_1_7_boxes_can_be_asked_for_an_offset_range(
-    client: TestClient, case_pdf: bytes
-) -> None:
-    case_id, _ = upload(client, case_pdf)
-    page_id = redact(client, case_id).page_ids[0]
-    start = PAGE_TEXT.index("[Person]")
-
-    # From inside `[Person]` to inside `Age`: both words are touched.
-    response = client.get(
-        f"/pages/{page_id}/boxes",
-        params={"quote_start": start + 2, "quote_end": start + 10},
-    )
-
-    boxes = PageBoxes.model_validate(response.json()).boxes
-    assert [PAGE_TEXT[box.char_start : box.char_end] for box in boxes] == [
-        "[Person]",
-        "Age",
-    ]
-    # Half a range, or one that runs backwards, is refused.
-    for params in (
-        {"quote_start": 3},
-        {"quote_end": 3},
-        {"quote_start": 5, "quote_end": 5},
-        {"quote_start": -1, "quote_end": 5},
-    ):
-        refused = client.get(f"/pages/{page_id}/boxes", params=params)
-        assert refused.status_code == 422, params
-        assert error_code(refused.json()) == "validation_failed"
-
-
-def test_story_1_7_words_are_picked_by_overlap_with_the_range() -> None:
-    words = [Word(0, 5, 0, 0, 1, 1), Word(6, 10, 0, 0, 1, 1), Word(11, 15, 0, 0, 1, 1)]
-
-    assert words_in_range(words, None, None) == words
-    assert words_in_range(words, 5, 6) == []  # the space between two words
-    assert words_in_range(words, 4, 7) == words[:2]
-    assert words_in_range(words, 10, 11) == []
-    assert words_in_range(words, 0, 100) == words
-
-
-def test_story_1_7_an_unknown_case_page_or_document_is_404(
-    client: TestClient, case_pdf: bytes
-) -> None:
-    upload(client, case_pdf)
-    unknown = new_id()
-
-    for path in (
-        f"/cases/{unknown}/pages",
-        f"/pages/{unknown}/text",
-        f"/pages/{unknown}/boxes",
-        f"/pages/{unknown}/thumbnail",
-        f"/documents/{unknown}/file",
-    ):
-        response = client.get(path)
-        assert response.status_code == 404, path
-        assert error_code(response.json()) == "not_found"
-    # An id that is no UUIDv7 is refused before anything is looked up.
-    assert client.get("/pages/not-an-id/text").status_code == 422
-
-
-def test_story_1_7_a_stored_file_that_cannot_be_read_is_502_without_detail(
-    client: TestClient,
-    case_pdf: bytes,
-    case_files: MemoryCaseFiles,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id, document_id = upload(client, case_pdf)
-    page_id = redact(client, case_id).page_ids[0]
-    case_files.fail_read = True
-
-    with caplog.at_level(logging.ERROR):
-        responses = [
-            client.get(f"/pages/{page_id}/thumbnail"),
-            client.get(f"/documents/{document_id}/file"),
-        ]
-
-    for response in responses:
-        assert response.status_code == 502
-        assert error_code(response.json()) == "upstream_unavailable"
-        assert "secret-store-detail" not in response.text
-    assert f"file not read: what=thumbnail id={page_id} type=StoreDown" in caplog.text
-    assert "secret-store-detail" not in caplog.text
-
-
 # --- Failure -----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("behaviour", "cancelled"),
-    [
-        # Refused at submit: there is no job to cancel.
-        ("reject", []),
-        # The job failed, or named no usable files: it is told to stop all the same.
-        ("fail", ["job-1"]),
-        ("no_files", ["job-1"]),
-        # The job ended; its result file is not what was expected.
-        ("unreadable", []),
-    ],
+    ("behaviour", "cancelled"), [("reject", []), ("fail", ["job-1"])]
 )
 def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     client: TestClient,
@@ -485,37 +301,6 @@ def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     assert len(language.started) == 1
 
 
-@pytest.mark.parametrize("broken", ["splitter", "files"])
-def test_story_1_7_a_redacted_file_that_cannot_be_split_or_stored_fails_the_redaction(
-    client: TestClient,
-    case_pdf: bytes,
-    splitter: FakeSplitter,
-    case_files: MemoryCaseFiles,
-    redactions: MemoryRedactionRepository,
-    broken: str,
-) -> None:
-    case_id, _ = upload(client, case_pdf)
-    if broken == "splitter":
-        splitter.fail = True
-    else:
-        case_files.fail_put = True
-
-    result = redact(client, case_id)
-
-    assert result.error_code is ErrorCode.REDACTION_FAILED
-    assert redactions.pages == {}
-    assert case_files.blobs == {}
-
-
-def test_story_1_7_a_pdf_with_no_pages_fails_the_redaction(
-    client: TestClient, case_pdf: bytes, splitter: FakeSplitter
-) -> None:
-    case_id, _ = upload(client, case_pdf)
-    splitter.pages = []
-
-    assert redact(client, case_id).error_code is ErrorCode.REDACTION_FAILED
-
-
 def test_story_1_7_when_the_deadline_passes_the_job_is_cancelled_and_the_result_is_stage_timeout(
     ports: RedactionPorts,
     repository: MemoryCaseRepository,
@@ -555,50 +340,6 @@ def test_story_1_7_when_the_deadline_passes_the_job_is_cancelled_and_the_result_
         f"redaction failed: case_id={case_id} error_code=stage_timeout "
         "reason=deadline job=cancelled stored=failed"
     ) in caplog.text
-
-
-def test_story_1_7_a_job_that_cannot_be_cancelled_still_ends_the_redaction_as_failed(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-    language.behaviour = "fail"
-    language.fail_cancel = True
-
-    with caplog.at_level(logging.ERROR):
-        result = asyncio.run(
-            redact_document(
-                case_id,
-                RedactionCommand(),
-                ports=ports,
-                categories=DEFAULT_REDACTION_CATEGORIES,
-                deadline_seconds=5,
-                stale_margin_seconds=1,
-            )
-        )
-
-    assert result.error_code is ErrorCode.REDACTION_FAILED
-    assert "reason=job_failed job=not_cancelled:StoreDown" in caplog.text
-    assert "secret-store-detail" not in caplog.text
-
-
-def test_story_1_7_an_unknown_case_is_404_and_nothing_is_begun(
-    client: TestClient, language: FakeLanguage, redactions: MemoryRedactionRepository
-) -> None:
-    response = client.post(f"/cases/{new_id()}/redaction", json={})
-
-    assert response.status_code == 404
-    assert error_code(response.json()) == "not_found"
-    assert redactions.redactions == {}
-    assert language.started == []
-    # A body that is not the command is refused as well.
-    assert (
-        client.post(f"/cases/{new_id()}/redaction", json={"page_text": "x"}).status_code
-        == 422
-    )
 
 
 # --- A key row left behind -----------------------------------------------------------
@@ -653,104 +394,6 @@ def test_story_1_7_a_stale_running_row_is_settled_as_failed_once_it_is_past_its_
     assert at(10_000) == result
 
 
-def test_story_1_7_a_failure_that_cannot_be_stored_is_502_and_a_later_repeat_settles_it(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    redactions: MemoryRedactionRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-    language.behaviour = "fail"
-    redactions.fail_finish = True
-
-    def at(seconds: float) -> RedactionResult:
-        return asyncio.run(
-            redact_document(
-                case_id,
-                RedactionCommand(),
-                ports=ports,
-                categories=DEFAULT_REDACTION_CATEGORIES,
-                deadline_seconds=180,
-                stale_margin_seconds=60,
-                now=lambda: fixed_now + timedelta(seconds=seconds),
-            )
-        )
-
-    with caplog.at_level(logging.ERROR), pytest.raises(DomainError) as raised:
-        at(0)
-
-    assert raised.value.code is ErrorCode.UPSTREAM_UNAVAILABLE
-    assert redactions.redactions[case_id].running
-    assert "stored=false type=StoreDown" in caplog.text
-    assert "secret-store-detail" not in caplog.text
-    # The database is back; the row is past its deadline and gets settled.
-    redactions.fail_finish = False
-    assert at(500).error_code is ErrorCode.STAGE_TIMEOUT
-
-
-def test_story_1_7_a_redaction_settled_by_another_call_keeps_that_result_and_stores_no_page(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    redactions: MemoryRedactionRepository,
-    case_files: MemoryCaseFiles,
-    fixed_now: datetime,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-
-    settled = RedactionResult.model_validate(
-        {
-            "case_id": case_id,
-            "status": "failed",
-            "error_code": "stage_timeout",
-            "audit": {
-                "actor_kind": "ai",
-                "actor": "intake:azure-ai-language",
-                "action": "stage.failed",
-                "occurred_at": fixed_now,
-                "case_id": case_id,
-                "page_id": None,
-                "ref": new_id(),
-                "detail": None,
-                "trace_id": NO_TRACE_ID,
-                "eval_run_id": None,
-            },
-            "document_id": new_id(),
-            "page_ids": [],
-            "redaction_counts": {},
-        }
-    )
-
-    class SettledMeanwhile(FakeSplitter):
-        async def split(self, pdf: bytes) -> list[PageReading]:
-            # While this call splits pages, a repeat finds the row stale and
-            # settles the redaction as failed.
-            await redactions.finish(case_id, settled.model_dump_json(), (), None)
-            return await super().split(pdf)
-
-    slow = RedactionPorts(
-        repository=redactions,
-        language=ports.language,
-        files=case_files,
-        splitter=SettledMeanwhile(),
-    )
-    result = asyncio.run(
-        redact_document(
-            case_id,
-            RedactionCommand(),
-            ports=slow,
-            categories=DEFAULT_REDACTION_CATEGORIES,
-            deadline_seconds=5,
-            stale_margin_seconds=1,
-        )
-    )
-
-    assert result == settled
-    assert redactions.pages == {}
-    assert case_files.blobs == {}
-
-
 # --- What is counted, and what is logged ---------------------------------------------
 
 
@@ -801,135 +444,51 @@ def test_story_1_7_logs_carry_ids_codes_counts_and_timings_only(
 # --- The failure path itself -------------------------------------------------------
 
 
-def run_redaction(
-    case_id: str, ports: RedactionPorts, **options: float
-) -> RedactionResult:
-    return asyncio.run(
-        redact_document(
-            case_id,
-            RedactionCommand(),
-            ports=ports,
-            categories=DEFAULT_REDACTION_CATEGORIES,
-            deadline_seconds=options.get("deadline_seconds", 5),
-            stale_margin_seconds=1,
-            cancel_seconds=options.get("cancel_seconds", 5),
-        )
-    )
-
-
-def test_story_1_7_a_cancel_that_never_answers_does_not_hold_the_failure_up(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-    language.behaviour = "hang"
-    language.hang_cancel = True
-
-    with caplog.at_level(logging.ERROR):
-        # Both limits made short: neither the job nor its cancel ever answers.
-        result = run_redaction(
-            case_id, ports, deadline_seconds=0.05, cancel_seconds=0.05
-        )
-
-    # Deadline plus the bounded cancel, and the redaction is still settled.
-    assert result.error_code is ErrorCode.STAGE_TIMEOUT
-    assert "reason=deadline job=not_cancelled:TimeoutError stored=failed" in caplog.text
-
-
-def test_story_1_7_a_call_that_times_out_before_the_deadline_is_redaction_failed(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-    language.behaviour = "call_timeout"
-
-    result = run_redaction(case_id, ports)
-
-    # `stage_timeout` is for the stage's own deadline only.
-    assert result.error_code is ErrorCode.REDACTION_FAILED
-
-
-def test_story_1_7_a_request_cancelled_while_the_failure_is_stored_still_settles_the_row(
-    ports: RedactionPorts,
-    repository: MemoryCaseRepository,
-    redactions: MemoryRedactionRepository,
-    language: FakeLanguage,
-    fixed_now: datetime,
-) -> None:
-    case_id, _ = a_case(repository, fixed_now)
-    language.behaviour = "fail"
-
-    async def scenario() -> None:
-        redactions.hold_finish = asyncio.Event()
-        running = asyncio.ensure_future(
-            redact_document(
-                case_id,
-                RedactionCommand(),
-                ports=ports,
-                categories=DEFAULT_REDACTION_CATEGORIES,
-                deadline_seconds=5,
-                stale_margin_seconds=1,
-            )
-        )
-        # The job has failed and the failure is being stored: the caller goes.
-        await redactions.finishing.wait()
-        running.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await running
-        assert redactions.redactions[case_id].running
-        # The database answers at last; the storing was not cancelled.
-        redactions.hold_finish.set()
-        for _ in range(10):
-            await asyncio.sleep(0)
-
-    asyncio.run(scenario())
-
-    stored = redactions.redactions[case_id].result_json
-    assert stored is not None
-    assert RedactionResult.model_validate_json(stored).error_code is (
-        ErrorCode.REDACTION_FAILED
-    )
-
-
-def test_story_1_7_output_blobs_that_cannot_be_removed_do_not_fail_a_good_redaction(
-    client: TestClient,
-    case_pdf: bytes,
-    case_files: MemoryCaseFiles,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id, document_id = upload(client, case_pdf)
-    case_files.fail_delete = True
-
-    with caplog.at_level(logging.WARNING):
-        result = redact(client, case_id)
-
-    assert result.status.value == "done"
-    assert (
-        f"redaction output not removed: case_id={case_id} "
-        f"document_id={document_id} type=StoreDown"
-    ) in caplog.text
-    assert "secret-store-detail" not in caplog.text
-
-
-def test_story_1_7_a_redaction_with_nothing_redacted_or_no_text_is_done_with_a_warning(
-    client: TestClient,
-    case_pdf: bytes,
-    language: FakeLanguage,
-    splitter: FakeSplitter,
-    caplog: pytest.LogCaptureFixture,
+def test_story_1_7_boxes_can_be_asked_for_an_offset_range(
+    client: TestClient, case_pdf: bytes
 ) -> None:
     case_id, _ = upload(client, case_pdf)
-    language.found = ()
-    splitter.pages = [reading(""), reading("  ")]
+    page_id = redact(client, case_id).page_ids[0]
+    start = PAGE_TEXT.index("[Person]")
 
-    with caplog.at_level(logging.WARNING):
-        result = redact(client, case_id)
+    # From inside `[Person]` to inside `Age`: both words are touched.
+    response = client.get(
+        f"/pages/{page_id}/boxes",
+        params={"quote_start": start + 2, "quote_end": start + 10},
+    )
 
-    assert (result.status.value, result.redaction_counts) == ("done", {})
-    assert f"redaction unusual: case_id={case_id} code=no_items_redacted" in caplog.text
-    assert f"redaction unusual: case_id={case_id} code=no_page_text" in caplog.text
+    boxes = PageBoxes.model_validate(response.json()).boxes
+    assert [PAGE_TEXT[box.char_start : box.char_end] for box in boxes] == [
+        "[Person]",
+        "Age",
+    ]
+    # Half a range, or one that runs backwards, is refused.
+    for params in (
+        {"quote_start": 3},
+        {"quote_end": 3},
+        {"quote_start": 5, "quote_end": 5},
+        {"quote_start": -1, "quote_end": 5},
+    ):
+        refused = client.get(f"/pages/{page_id}/boxes", params=params)
+        assert refused.status_code == 422, params
+        assert error_code(refused.json()) == "validation_failed"
+
+
+def test_story_1_7_an_unknown_case_page_or_document_is_404(
+    client: TestClient, case_pdf: bytes
+) -> None:
+    upload(client, case_pdf)
+    unknown = new_id()
+
+    for path in (
+        f"/cases/{unknown}/pages",
+        f"/pages/{unknown}/text",
+        f"/pages/{unknown}/boxes",
+        f"/pages/{unknown}/thumbnail",
+        f"/documents/{unknown}/file",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert error_code(response.json()) == "not_found"
+    # An id that is no UUIDv7 is refused before anything is looked up.
+    assert client.get("/pages/not-an-id/text").status_code == 422

@@ -151,3 +151,31 @@ apps:
       RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS: "3"
       RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES: "1"
       RETRIEVAL_SEARCH_DEADLINE_SECONDS: "8"
+  - appID: verdict
+    appDirPath: ./services/verdict
+    appProtocol: http
+    appPort: 8006
+    daprHTTPPort: 3506
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "verdict"]
+    env:
+      VERDICT_HOST: "127.0.0.1"
+      VERDICT_PORT: "8006"
+      # The PostgreSQL of compose.yaml. The service signs in as its own
+      # database role, which tools/migrate-local.sh creates and the migrations
+      # grant: it can add to the agent's step log and never change it (AD-15).
+      VERDICT_DATABASE_HOST: "127.0.0.1"
+      VERDICT_DATABASE_NAME: "aiuw"
+      VERDICT_DATABASE_USER: "verdict"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it reads the case's facts from extraction, and searches and reads the
+      # manual's rules at retrieval.
+      VERDICT_DAPR_HTTP_PORT: "3506"
+      # The chat deployment is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata), the one classification and extraction use: the
+      # Azure environment is down while coding. It takes no credential, and
+      # it exists only on a developer machine. The deployment name is what
+      # the audit trail then names as the model.
+      VERDICT_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      VERDICT_CHAT_DEPLOYMENT: "local-stand-in"

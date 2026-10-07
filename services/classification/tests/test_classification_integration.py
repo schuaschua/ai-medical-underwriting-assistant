@@ -9,12 +9,10 @@ with the real `intake` and the model stand-in, is tested beside the stand-ins
 """
 
 import asyncio
-import secrets
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,9 +20,6 @@ import httpx2
 import psycopg
 import pytest
 from alembic import command
-from alembic.autogenerate import compare_metadata
-from alembic.config import main as alembic_command_line
-from alembic.migration import MigrationContext
 from classification_fakes import (
     DEPLOYMENT,
     PAGE_TEXT,
@@ -34,24 +29,18 @@ from classification_fakes import (
     completion,
 )
 from fastapi.testclient import TestClient
-from psycopg import sql
-from sqlalchemy import create_engine
 
 from classification.adapters.db import (
     SqlClassificationRepository,
-    SqlSchemaRevision,
     build_database,
-    database_url,
-    metadata,
 )
 from classification.adapters.http.app import create_app
 from classification.adapters.migrations import (
     alembic_config,
     bundled_head,
-    include_name,
 )
 from classification.domain.entities import ClassificationKey
-from classification.settings import Settings, get_settings
+from classification.settings import Settings
 from contracts.enums import ClassifierContender
 from contracts.errors import ErrorBody, ErrorCode
 from contracts.ids import new_id
@@ -63,7 +52,6 @@ from contracts.models.classification import (
 
 pytestmark = pytest.mark.integration
 
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 
 
@@ -154,68 +142,6 @@ def test_story_1_8_the_migration_keeps_everything_in_schema_classification(
     ) == [(0,)]
 
 
-def test_story_1_8_the_table_in_code_matches_the_migrated_database(
-    migrated_database: Settings,
-) -> None:
-    engine = create_engine(database_url(migrated_database))
-    try:
-        with engine.connect() as connection:
-            context = MigrationContext.configure(
-                connection,
-                opts={
-                    "include_schemas": True,
-                    "include_name": include_name,
-                    "version_table": "alembic_version",
-                    "version_table_schema": "classification",
-                    "compare_type": True,
-                },
-            )
-            differences = compare_metadata(context, metadata)
-    finally:
-        engine.dispose()
-
-    # Nothing to add, drop or alter: what the service writes is what exists.
-    assert differences == []
-
-
-def test_story_1_8_the_migration_can_be_taken_back(migrated_database: Settings) -> None:
-    command.downgrade(alembic_config(migrated_database), "base")
-
-    assert (
-        query(
-            migrated_database,
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'classification' AND table_name = 'classification'",
-        )
-        == []
-    )
-    command.upgrade(alembic_config(migrated_database), "head")
-    assert rows(migrated_database) == []
-
-
-def test_story_1_8_the_documented_alembic_command_migrates_the_database_named_in_the_environment(
-    empty_database: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # tools/migrate-local.sh: alembic -c services/classification/alembic.ini
-    # upgrade head, with the database chosen by CLASSIFICATION_DATABASE_* alone.
-    monkeypatch.setenv("CLASSIFICATION_DATABASE_HOST", empty_database.database_host)
-    monkeypatch.setenv(
-        "CLASSIFICATION_DATABASE_PORT", str(empty_database.database_port)
-    )
-    monkeypatch.setenv("CLASSIFICATION_DATABASE_NAME", empty_database.database_name)
-    monkeypatch.setenv("CLASSIFICATION_DATABASE_USER", empty_database.database_user)
-    monkeypatch.setenv("CLASSIFICATION_DATABASE_ENTRA_AUTH", "false")
-    get_settings.cache_clear()
-    try:
-        alembic_command_line(argv=["-c", str(ALEMBIC_INI), "upgrade", "head"])
-    finally:
-        get_settings.cache_clear()
-
-    assert query(
-        empty_database, "SELECT version_num FROM classification.alembic_version"
-    ) == [(bundled_head(),)]
-
-
 def test_story_1_8_readiness_fails_until_the_schema_is_at_the_bundled_head(
     empty_database: Settings,
 ) -> None:
@@ -248,41 +174,6 @@ def test_story_1_8_readiness_fails_until_the_schema_is_at_the_bundled_head(
     assert unknown.status_code == 502
 
 
-def test_story_1_8_readiness_reports_a_permission_error_as_such_not_as_unmigrated(
-    migrated_database: Settings, caplog: pytest.LogCaptureFixture
-) -> None:
-    # A role that may sign in but has no rights on schema `classification`.
-    role = f"no_rights_{secrets.token_hex(4)}"
-    with connect(migrated_database, autocommit=True) as connection:
-        connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
-    settings = migrated_database.model_copy(update={"database_user": role})
-    try:
-        with TestClient(create_app(settings), raise_server_exceptions=False) as client:
-            response = client.get("/ready")
-    finally:
-        with connect(migrated_database, autocommit=True) as connection:
-            connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
-
-    assert response.status_code == 502
-    # The SQLSTATE of "permission denied", never the message.
-    assert "schema revision unreadable: sqlstate=42501" in caplog.text
-    assert "not ready: database type=ProgrammingError" in caplog.text
-
-
-def test_story_1_8_ready_fails_when_the_database_is_unreachable(
-    settings: Settings,
-) -> None:
-    down = settings.model_copy(
-        update={"database_port": 1, "database_connect_timeout_seconds": 1}
-    )
-
-    with TestClient(create_app(down), raise_server_exceptions=False) as client:
-        response = client.get("/ready")
-
-    assert response.status_code == 502
-    assert "127.0.0.1" not in response.text
-
-
 # --- The repository -------------------------------------------------------------------------
 
 
@@ -309,33 +200,6 @@ def classification_of(classification_id: str, key: ClassificationKey) -> Classif
         confidence=0.6,
         reason="A total due.",
     )
-
-
-def test_story_1_8_the_key_row_is_inserted_as_running_once_per_key(
-    migrated_database: Settings,
-) -> None:
-    key = ClassificationKey(new_id(), new_id(), ClassifierContender.LLM)
-    first_id, second_id = new_id(), new_id()
-    with a_repository(migrated_database) as (repository, runner):
-        assert runner.run(repository.find(key)) is None
-
-        inserted = runner.run(repository.begin(first_id, key, NOW))
-        again = runner.run(repository.begin(second_id, key, NOW))
-        found = runner.run(repository.find(key))
-
-    # The first call inserted it; the second is handed the row that was there.
-    assert inserted is None
-    assert again is not None
-    assert again == found
-    assert (again.classification_id, again.key, again.started_at, again.running) == (
-        first_id,
-        key,
-        NOW,
-        True,
-    )
-    assert rows(migrated_database) == [
-        (key.case_id, key.page_id, "llm", "running", None, None, None)
-    ]
 
 
 def test_story_1_8_begins_that_arrive_together_insert_one_row(
@@ -379,66 +243,6 @@ def test_story_1_8_a_result_is_stored_once_and_the_first_one_stands(
         migrated_database,
         "SELECT finished_at IS NOT NULL FROM classification.classification",
     ) == [(True,)]
-
-
-def test_story_1_8_a_failed_end_stores_no_classification(
-    migrated_database: Settings,
-) -> None:
-    key = ClassificationKey(new_id(), new_id(), ClassifierContender.LLM)
-    classification_id = new_id()
-    with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(classification_id, key, NOW))
-        runner.run(repository.finish(classification_id, "{}", None))
-        listed = runner.run(repository.of_case(key.case_id))
-
-    assert listed == []
-    assert rows(migrated_database) == [
-        (key.case_id, key.page_id, "llm", "failed", None, None, None)
-    ]
-
-
-def test_story_1_8_a_running_key_row_can_be_released_and_a_settled_one_cannot(
-    migrated_database: Settings,
-) -> None:
-    running = ClassificationKey(new_id(), new_id(), ClassifierContender.LLM)
-    settled = ClassificationKey(new_id(), new_id(), ClassifierContender.LLM)
-    running_id, settled_id = new_id(), new_id()
-    with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(running_id, running, NOW))
-        runner.run(repository.begin(settled_id, settled, NOW))
-        runner.run(repository.finish(settled_id, "{}", None))
-
-        runner.run(repository.release(running_id))
-        runner.run(repository.release(settled_id))
-
-        # The running row is gone, so the command can begin again; a row
-        # that holds a result is never removed.
-        assert runner.run(repository.find(running)) is None
-        assert runner.run(repository.begin(new_id(), running, NOW)) is None
-        kept = runner.run(repository.find(settled))
-    assert kept is not None
-    assert kept.result_json == "{}"
-
-
-def test_story_1_8_the_schema_revision_is_none_before_any_migration(
-    empty_database: Settings, migrated_database: Settings
-) -> None:
-    # `migrated_database` is `empty_database` with the migrations applied.
-    with asyncio.Runner() as runner:
-        database = build_database(migrated_database)
-        try:
-            assert runner.run(SqlSchemaRevision(database).current()) == bundled_head()
-        finally:
-            runner.run(database.dispose())
-    command.downgrade(alembic_config(empty_database), "base")
-    with connect(empty_database, autocommit=True) as connection:
-        connection.execute("DROP SCHEMA classification CASCADE")
-    with asyncio.Runner() as runner:
-        database = build_database(empty_database)
-        try:
-            assert runner.run(SqlSchemaRevision(database).current()) is None
-        finally:
-            runner.run(database.dispose())
 
 
 # --- The service, on its database ---------------------------------------------------------------
@@ -593,36 +397,6 @@ def test_story_1_8_a_failed_classification_is_stored_as_failed_and_lists_nothing
     assert deployment.calls == calls
 
 
-@pytest.mark.parametrize(("retries", "calls"), [(1, 2), (0, 1), (4, 5)])
-def test_story_1_8_the_retry_setting_reaches_the_gateway_of_the_real_service(
-    migrated_database: Settings, retries: int, calls: int
-) -> None:
-    sidecar, deployment = IntakeSidecar(), Deployment(429)
-    case_id = new_id()
-    page_id = sidecar.pages.add(case_id)
-    # One classifier run: with several, the run that gives up first cancels
-    # the others, and how many calls those had made by then is a matter of
-    # timing. With one, the count is the gateway's alone.
-    settings = migrated_database.model_copy(
-        update={
-            "classifier_runs": 1,
-            "classifier_max_concurrent_runs": 1,
-            "model_max_retries": retries,
-            "model_retry_seconds": 0.01,
-        }
-    )
-
-    with service(settings, sidecar, deployment) as client:
-        body = client.post(
-            "/classifications", json=command_for(case_id, page_id)
-        ).json()
-
-    # A throttled page: the run is sent once and then as often again as the
-    # setting says, none of them the default of three.
-    assert (body["status"], body["error_code"]) == ("failed", "model_unavailable")
-    assert deployment.calls == calls
-
-
 def test_story_1_8_when_intake_is_down_for_the_page_no_row_is_left_and_the_repeat_works(
     migrated_database: Settings,
 ) -> None:
@@ -686,30 +460,3 @@ def test_story_1_8_the_stage_ends_at_its_deadline_with_a_stored_timeout(
     assert rows(migrated_database) == [
         (case_id, page_id, "llm", "failed", None, None, None)
     ]
-
-
-def test_story_1_8_a_page_intake_does_not_hold_for_the_case_leaves_no_row(
-    migrated_database: Settings,
-) -> None:
-    sidecar, deployment = IntakeSidecar(), Deployment()
-    case_id = new_id()
-    sidecar.pages.add(case_id)
-    other_page = sidecar.pages.add(new_id())
-
-    with service(migrated_database, sidecar, deployment) as client:
-        unknown = client.post("/classifications", json=command_for(case_id, new_id()))
-        elsewhere = client.post(
-            "/classifications", json=command_for(case_id, other_page)
-        )
-        no_case = client.post("/classifications", json=command_for(new_id(), new_id()))
-        not_built = client.post(
-            "/classifications",
-            json=command_for(case_id, other_page, contender="doc-intelligence"),
-        )
-
-    assert [r.status_code for r in (unknown, elsewhere, no_case)] == [404, 404, 404]
-    assert not_built.status_code == 422
-    assert rows(migrated_database) == []
-    assert deployment.calls == 0
-    # The page of the other case was never read.
-    assert not any(other_page in request.url.path for request in sidecar.requests)

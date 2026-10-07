@@ -166,6 +166,18 @@ jobs:
             --file services/extraction/Dockerfile \
             .
 
+      - name: Build and push the verdict image
+        # The `app` stack runs this image too. As for workflow, its
+        # migrations are not run here yet: an operator runs them as described
+        # in infra/bootstrap/README.md, section 9, and verdict reports
+        # "not ready" until that is done.
+        run: |
+          az acr build \
+            --registry "$REGISTRY_NAME" \
+            --image "verdict:${GITHUB_SHA}" \
+            --file services/verdict/Dockerfile \
+            .
+
       - name: Init
         run: terraform -chdir="$APP_STACK" init -no-color -lockfile=readonly
 
@@ -336,6 +348,30 @@ jobs:
           echo "::error::extraction's latest revision does not run ${expected}."
           exit 1
 
+      - name: verdict runs this commit's image
+        # Read-only, and as for intake: the latest revision must be this
+        # commit's image, and is not required to be ready
+        # (infra/bootstrap/README.md, section 9).
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw verdict_container_app_id)"
+          expected="${REGISTRY_LOGIN_SERVER}/verdict:${GITHUB_SHA}"
+          for attempt in $(seq 1 30); do
+            latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+            image=""
+            if [[ -n "$latest" ]]; then
+              image="$(az resource show --ids "${app_id}/revisions/${latest}" \
+                --query 'properties.template.containers[0].image' --output tsv)"
+            fi
+            if [[ "$image" == "$expected" ]]; then
+              echo "verdict's latest revision ${latest} runs ${image}."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: latest=${latest} image=${image}"
+            sleep 10
+          done
+          echo "::error::verdict's latest revision does not run ${expected}."
+          exit 1
+
       - name: the ingestion job runs this commit's image
         # Read-only. The job is not a revision of an app: its template is
         # read directly. A job left on an older image would ingest the manual
@@ -427,6 +463,20 @@ jobs:
             echo "::notice::extraction is ready (revision ${latest})."
           else
             echo "::warning::extraction is NOT ready (latest=${latest}, ready=${ready}). A case will fail once a page reaches extraction, until the service's database role exists and its migrations have run: infra/bootstrap/README.md, section 8."
+          fi
+
+      - name: Say whether verdict is ready
+        # Read-only, and never fails the run: as for intake, a green deploy
+        # must not be read as "a verdict is suggested".
+        if: ${{ success() }}
+        run: |
+          app_id="$(terraform -chdir="$APP_STACK" output -raw verdict_container_app_id)"
+          latest="$(az resource show --ids "$app_id" --query properties.latestRevisionName --output tsv)"
+          ready="$(az resource show --ids "$app_id" --query properties.latestReadyRevisionName --output tsv)"
+          if [[ -n "$latest" && "$latest" == "$ready" ]]; then
+            echo "::notice::verdict is ready (revision ${latest})."
+          else
+            echo "::warning::verdict is NOT ready (latest=${latest}, ready=${ready}). A case will fail once every page is final and its verdict runs are commanded, until the service's database role exists and its migrations have run: infra/bootstrap/README.md, section 9."
           fi
 
       - name: Say whether retrieval is ready, and that the manual is ingested by hand

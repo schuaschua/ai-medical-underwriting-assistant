@@ -569,6 +569,7 @@ async def _follow_pages(
     at_the_gate: bool,
     eval_run_id: str | None,
     trace_id: str | None,
+    verdicts_recorded: bool = False,
 ) -> SettledCase:
     """Give a case the status its stored pages give it; return the case as it is afterwards.
 
@@ -576,7 +577,10 @@ async def _follow_pages(
     the status set here belong together. A status that may not follow the
     current one (domain/transitions.py) is not set. A case moved to
     `completed` gets its `case.completed` event here, with the status
-    (AD-8); nothing follows `completed`, so the case gets it once.
+    (AD-8); nothing follows `completed`, so the case gets it once. A case
+    whose pages are all final is completed only when `verdicts_recorded`
+    says its verdict runs are in the trail (AD-15), or at the gate when it
+    was told to stop there.
     """
     pages = await connection.execute(
         select(page_status_table.c.page_id, page_status_table.c.page_status).where(
@@ -587,7 +591,9 @@ async def _follow_pages(
     wanted = (
         case_status_after_gate(page_statuses.values(), stop_after)
         if at_the_gate
-        else case_status_following(page_statuses.values())
+        else case_status_following(
+            page_statuses.values(), verdicts_recorded=verdicts_recorded
+        )
     )
     if wanted is current:
         return SettledCase(current, page_statuses)
@@ -692,6 +698,70 @@ class SqlCaseStore:
                 value = result.scalar_one_or_none()
         return CaseStatus(value) if value is not None else None
 
+    async def case(self, case_id: str) -> CaseRecord | None:
+        """The case as it is stored, with what it was started with; None if it is unknown."""
+        with adapter_span(tracer, "workflow.db.read_case"):
+            async with self._database.connect() as connection:
+                result = await connection.execute(
+                    select(*_CASE_COLUMNS).where(case_status_table.c.case_id == case_id)
+                )
+                row = result.first()
+        return _case(row) if row is not None else None
+
+    async def complete_case(
+        self, case_id: str, completed_at: datetime, trace_id: str | None
+    ) -> SettledCase | None:
+        """Complete a case whose pages are final and whose verdict runs are recorded (AD-15)."""
+        with adapter_span(tracer, "workflow.db.complete_case"):
+            async with self._database.begin() as connection:
+                # Locked, as for every recording: a result recorded at the
+                # same moment is either seen here whole or written after.
+                locked = await connection.execute(
+                    select(
+                        case_status_table.c.case_status,
+                        case_status_table.c.stop_after,
+                        case_status_table.c.eval_run_id,
+                        case_status_table.c.retriever_configs,
+                    )
+                    .where(case_status_table.c.case_id == case_id)
+                    .with_for_update()
+                )
+                case = locked.first()
+                if case is None:
+                    return None
+                # AD-15: each `verdict.suggested` event names its retriever
+                # configuration in its detail. The case needs one for each
+                # configuration it was started with: another row's run, asked
+                # for or recorded twice, stands in for none of them.
+                recorded = await connection.execute(
+                    select(audit_event_table.c.detail["retriever_config"].astext)
+                    .where(
+                        audit_event_table.c.case_id == case_id,
+                        audit_event_table.c.action
+                        == AuditAction.VERDICT_SUGGESTED.value,
+                    )
+                    .distinct()
+                )
+                verdicts_recorded = set(case.retriever_configs) <= set(
+                    recorded.scalars()
+                )
+                if not verdicts_recorded:
+                    logger.warning(
+                        "case not completed: case_id=%s reason=verdict_runs_not_recorded",
+                        case_id,
+                    )
+                return await _follow_pages(
+                    connection,
+                    case_id,
+                    CaseStatus(case.case_status),
+                    StopAfter(case.stop_after) if case.stop_after is not None else None,
+                    completed_at,
+                    at_the_gate=False,
+                    eval_run_id=case.eval_run_id,
+                    trace_id=trace_id,
+                    verdicts_recorded=verdicts_recorded,
+                )
+
     async def record(
         self, recording: Recording, recorded_at: datetime
     ) -> RecordOutcome:
@@ -711,7 +781,7 @@ class SqlCaseStore:
         if recording.case_status is CaseStatus.COMPLETED:
             # A case is completed where its `case.completed` event is
             # written with the status (`_follow_pages`), and nowhere else:
-            # a recording asks for that with `follows_pages`.
+            # by `complete_case`, once its verdict runs are recorded.
             raise ValueError(
                 "a recording does not complete a case: the case status follows its pages"
             )
@@ -838,10 +908,8 @@ class SqlCaseStore:
         if recording.follows_pages:
             # A page stage result moved its page: the case status follows
             # the pages, here and not later (AD-5), by the rule every
-            # decision uses. After the result's own event, so that a result
-            # that completes the case leaves `case.completed` as the
-            # trail's last event; that event is written there and nowhere
-            # else.
+            # decision uses. It never completes the case: with its last
+            # page final the case is `running`, for its verdict runs.
             await _follow_pages(
                 connection,
                 audit.case_id,
@@ -940,9 +1008,9 @@ class SqlCaseStore:
                 **_audit_values(recording, recorded_at, case.eval_run_id)
             )
         )
-        # The case status follows the pages, here and not later (AD-5).
-        # After the decision's own event, so that a decision that completes
-        # the case leaves `case.completed` as the trail's last event.
+        # The case status follows the pages, here and not later (AD-5). A
+        # decision that makes the last page final leaves the case
+        # `running`, for its verdict runs: it does not complete it.
         await _follow_pages(
             connection,
             audit.case_id,
@@ -1069,7 +1137,10 @@ class SqlCaseStore:
                 )
                 # The failure reason is the code stored with a `stage.failed`
                 # event: the case's is that of its first one, a page's that
-                # of the event about that page.
+                # of the event about that page. Only a failed case has one:
+                # a verdict run asked for on a finished case that failed
+                # leaves its `stage.failed` event and the case as it was
+                # (AD-15), and that case has not failed.
                 failures = (
                     await connection.execute(
                         select(
@@ -1104,7 +1175,9 @@ class SqlCaseStore:
                         )
                         for page in pages
                     ],
-                    error_code=ErrorCode(failures[0].error_code) if failures else None,
+                    error_code=ErrorCode(failures[0].error_code)
+                    if failures and case.case_status == CaseStatus.FAILED.value
+                    else None,
                 )
 
     async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:

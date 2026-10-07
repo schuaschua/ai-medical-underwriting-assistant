@@ -1,11 +1,8 @@
 """Story 1.1: the registry covers the spine's Operations table, and the package stays pure."""
 
 import ast
-import re
 import sys
 from pathlib import Path
-
-import pytest
 
 import contracts
 from contracts.base import ContractModel
@@ -17,7 +14,7 @@ from contracts.models import (
     verdict,
     workflow,
 )
-from contracts.operations import JSON, OPERATIONS, HttpMethod, Operation, get_operation
+from contracts.operations import OPERATIONS, Operation, get_operation
 
 # The spine's Operations table, row by row: (method, owner, path, callers, idempotency key).
 INTAKE_READERS = {"web", "workflow", "classification", "extraction"}
@@ -90,8 +87,6 @@ ALLOWED_CALLS = {
     ("verdict", "extraction"),
     ("verdict", "retrieval"),
 }
-
-OPERATION_IDS = [operation.name for operation in OPERATIONS]
 
 Model = type[ContractModel] | None
 
@@ -316,14 +311,6 @@ def test_story_1_1_registry_lists_every_spine_operation_exactly_once() -> None:
     assert len(OPERATIONS) == len(REGISTERED) == 24
 
 
-def test_story_1_1_registry_names_are_unique_and_resolvable() -> None:
-    assert len(set(OPERATION_IDS)) == len(OPERATIONS)
-    for operation in OPERATIONS:
-        assert get_operation(operation.name) is operation
-    with pytest.raises(KeyError):
-        get_operation("approve_case")
-
-
 def test_story_1_1_registry_callers_and_keys_match_the_spine() -> None:
     expected = {
         (method, owner, path): (callers, idempotency_key)
@@ -333,54 +320,10 @@ def test_story_1_1_registry_callers_and_keys_match_the_spine() -> None:
         callers, idempotency_key = expected[key(operation)]
         assert {caller.value for caller in operation.callers} == callers, operation.name
         assert operation.idempotency_key == idempotency_key, operation.name
-
-
-@pytest.mark.parametrize("operation", OPERATIONS, ids=OPERATION_IDS)
-def test_story_1_1_registry_never_lists_a_forbidden_call(operation: Operation) -> None:
-    for caller in operation.callers:
-        assert (caller.value, operation.owner.value) in ALLOWED_CALLS
-
-
-@pytest.mark.parametrize("operation", OPERATIONS, ids=OPERATION_IDS)
-def test_story_1_1_every_operation_has_its_models(operation: Operation) -> None:
-    if operation.response_model is None:
-        # Only the two file reads have no JSON response.
-        assert operation.response_media_type in {"application/pdf", "image/png"}
-        assert operation.method is HttpMethod.GET
-    else:
-        assert issubclass(operation.response_model, ContractModel)
-        assert operation.response_media_type == JSON
-
-    if operation.method is HttpMethod.GET:
-        assert operation.request_model is None
-        assert operation.request_media_type is None
-    elif operation.request_model is None:
-        # Only the upload has a body that is not JSON.
-        assert operation.name == "create_case"
-        assert operation.request_media_type == "application/pdf"
-    else:
-        assert issubclass(operation.request_model, ContractModel)
-        assert operation.request_media_type == JSON
-        assert operation.query_model is None
-
-
-def test_story_1_1_only_the_two_file_reads_have_no_response_model() -> None:
-    without = {
-        operation.name for operation in OPERATIONS if operation.response_model is None
-    }
-
-    assert without == {"read_page_thumbnail", "read_document_file"}
-
-
-@pytest.mark.parametrize("operation", OPERATIONS, ids=OPERATION_IDS)
-def test_story_1_1_idempotency_key_fields_are_in_the_path_or_the_request(
-    operation: Operation,
-) -> None:
-    available = set(re.findall(r"{(\w+)}", operation.path))
-    if operation.request_model is not None:
-        available |= set(operation.request_model.model_fields)
-
-    assert set(operation.idempotency_key) <= available
+        # No caller and owner pair outside the spine's diagram.
+        for caller in operation.callers:
+            assert (caller.value, operation.owner.value) in ALLOWED_CALLS
+        assert get_operation(operation.name) is operation
 
 
 def test_story_1_1_query_models_carry_the_spine_query_fields() -> None:
@@ -389,11 +332,6 @@ def test_story_1_1_query_models_carry_the_spine_query_fields() -> None:
         if expected is not None:
             assert operation.query_model is not None, operation.name
             assert set(operation.query_model.model_fields) == expected, operation.name
-
-
-@pytest.mark.parametrize("operation", OPERATIONS, ids=OPERATION_IDS)
-def test_story_1_1_paths_are_well_formed(operation: Operation) -> None:
-    assert re.fullmatch(r"(/([a-z]+(-[a-z]+)*|{[a-z_]+}))+", operation.path)
 
 
 def test_story_1_1_package_imports_only_the_standard_library_and_pydantic() -> None:

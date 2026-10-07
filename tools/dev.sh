@@ -6,12 +6,13 @@
 #   3. the built SPA;
 #   4. the stand-ins for Azure AI Language, for the Foundry model deployments
 #      and for Document Intelligence's layout model (packages/synthdata),
-#      which redact documents, classify pages, read their facts and parse
-#      the manual while the Azure environment is down;
+#      which redact documents, classify pages, read their facts, run the
+#      verdict agent and parse the manual while the Azure environment is
+#      down;
 #   5. the ingestion of the underwriting manual into schema `retrieval`
 #      (tools/ingest-local.sh), which does nothing when it was done before;
 #   6. each service in dapr.yaml with its Dapr sidecar (so far: web, intake,
-#      workflow, classification, extraction, retrieval).
+#      workflow, classification, extraction, retrieval, verdict).
 # Stop with Ctrl+C, then `docker compose down` for the containers.
 set -euo pipefail
 
@@ -45,12 +46,14 @@ fi
 npm --prefix "$spa" run build
 
 # The stand-ins for Azure AI Language's document redaction, for the Foundry
-# model deployments (the chat model that classifies pages, reads their facts
-# and writes the manual's context lines, and the embedding model) and for Document
+# model deployments (the chat model that classifies pages, reads their facts,
+# runs the verdict agent and writes the manual's context lines, and the
+# embedding model) and for Document
 # Intelligence's layout model, on loopback. They are dev tools: no service
 # image holds them, and Azure uses the real services. Their ports are the ones
 # dapr.yaml gives intake (INTAKE_LANGUAGE_ENDPOINT), classification
-# (CLASSIFICATION_MODEL_ENDPOINT) and extraction (EXTRACTION_MODEL_ENDPOINT),
+# (CLASSIFICATION_MODEL_ENDPOINT), extraction (EXTRACTION_MODEL_ENDPOINT),
+# retrieval (RETRIEVAL_MODEL_ENDPOINT) and verdict (VERDICT_MODEL_ENDPOINT),
 # and the ones tools/ingest-local.sh gives the ingestion job.
 language_port=5100
 model_port=5101

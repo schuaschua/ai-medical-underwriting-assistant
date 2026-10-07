@@ -1,4 +1,4 @@
-"""A local stand-in for the Foundry model deployments (stories 1.8, 2.2 and 2.4).
+"""A local stand-in for the Foundry model deployments (stories 1.8, 2.2, 2.4, 2.5 and 2.6).
 
 The Azure environment is down while the stories are built, so the services'
 model gateways are proven against this: an HTTP app with the routes the
@@ -8,8 +8,10 @@ of a chat completion, what the request's structured output asks for: for
 in the request; for `retrieval`'s ingestion job the context line of one rule
 of the manual, built from the section and part the request names; for
 `extraction` the facts of one page, each a statement and a quote, read from
-the page text in the request. On `POST /openai/v1/embeddings` it answers with
-one vector per text.
+the page text in the request; for `verdict`'s agent the next turn of its
+conversation, a tool call or the final proposal, worked out from the messages
+in the request (`verdict_standin.py`). On `POST /openai/v1/embeddings` it
+answers with one vector per text.
 
 A dev tool only. It is part of `synthdata`, which no service depends on, so it
 is in no service image; and the services refuse a plain-HTTP model endpoint
@@ -47,6 +49,7 @@ from fastapi.responses import JSONResponse, Response
 
 from contracts.enums import PageType
 from contracts.text import has_mask_token, normalise
+from synthdata.verdict_standin import Flaw, is_verdict_request, next_message
 
 COMPLETIONS_PATH = "/openai/v1/chat/completions"
 EMBEDDINGS_PATH = "/openai/v1/embeddings"
@@ -167,6 +170,26 @@ class Mode(StrEnum):
     # Extraction: beside the facts of the page, a masked value proposed as a
     # fact. Pages are classified as in `ok`.
     MASKED_VALUE = "masked_value"
+    # The verdict agent (stories 2.5 and 2.6): one flaw in its conversation,
+    # as `verdict_standin.Flaw` describes each. Every other request is
+    # answered as in `ok`.
+    ENDLESS_LOOP = "endless_loop"
+    UNSEEN_RULE = "unseen_rule"
+    WRONG_EFFECT = "wrong_effect"
+    LOW_CONFIDENCE = "low_confidence"
+    INVALID_ANSWER = "invalid_answer"
+
+
+# The flaw of the verdict conversation in each mode that has one. In the
+# `invalid` mode its final answer is prose, as every other answer is.
+_VERDICT_FLAWS: dict[Mode, Flaw] = {
+    Mode.ENDLESS_LOOP: Flaw.ENDLESS_LOOP,
+    Mode.UNSEEN_RULE: Flaw.UNSEEN_RULE,
+    Mode.WRONG_EFFECT: Flaw.WRONG_EFFECT,
+    Mode.LOW_CONFIDENCE: Flaw.LOW_CONFIDENCE,
+    Mode.INVALID_ANSWER: Flaw.INVALID_ANSWER,
+    Mode.INVALID: Flaw.INVALID_ANSWER,
+}
 
 
 def classify_text(text: str) -> PageType:
@@ -372,6 +395,40 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
+def _words(value: object) -> int:
+    """A size for the usage of a verdict turn: the words of what was sent or answered.
+
+    Not a token count: the stand-in has no tokeniser. It is above zero, so
+    that what `verdict` adds up and logs for a run can be seen.
+    """
+    return len(json.dumps(value).split())
+
+
+def _completion(
+    model: str,
+    message: dict[str, Any],
+    finish_reason: str = "stop",
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+) -> JSONResponse:
+    return JSONResponse(
+        {
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [
+                {"index": 0, "finish_reason": finish_reason, "message": message}
+            ],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+    )
+
+
 class FoundryStandIn:
     """The stand-in's state and its HTTP app. Tests look at what it was asked."""
 
@@ -431,6 +488,22 @@ class FoundryStandIn:
         """How many extraction calls it has had, answered or not."""
         return sum(page_to_extract_of(body) is not None for body in self.requests)
 
+    @property
+    def verdict_calls(self) -> int:
+        """How many turns of the verdict agent it has had, answered or not."""
+        return sum(is_verdict_request(body) for body in self.requests)
+
+    def verdict_turn(self, body: dict[str, Any], model: str) -> Response:
+        """The next turn of the verdict agent's conversation (stories 2.5 and 2.6)."""
+        message = next_message(body, _VERDICT_FLAWS.get(self.mode))
+        return _completion(
+            model,
+            message,
+            "tool_calls" if message.get("tool_calls") else "stop",
+            prompt_tokens=_words(body.get("messages")),
+            completion_tokens=_words(message),
+        )
+
     def embed(self, body: dict[str, Any]) -> Response:
         """Answer one embedding request."""
         with self._lock:
@@ -486,6 +559,10 @@ class FoundryStandIn:
         if self.mode is Mode.THROTTLED:
             return self._throttled()
         model = body.get("model")
+        if is_verdict_request(body):
+            if not isinstance(model, str) or not model:
+                return _error(400, "invalid_request", "A chat request names its model.")
+            return self.verdict_turn(body, model)
         rule_place = rule_place_of(body)
         to_extract = page_to_extract_of(body) if rule_place is None else None
         text = page_text_of(body) if rule_place is None and to_extract is None else None
@@ -497,7 +574,8 @@ class FoundryStandIn:
             return _error(
                 400,
                 "invalid_request",
-                "Not a page classification, a context line or an extraction request.",
+                "Not a page classification, a context line, an extraction or a "
+                "verdict request.",
             )
         if to_extract is not None:
             content = self.extraction_answer(to_extract)
@@ -507,29 +585,7 @@ class FoundryStandIn:
                 if rule_place is not None
                 else self.answer(text or "")
             )
-        return JSONResponse(
-            {
-                "id": f"chatcmpl-{uuid.uuid4().hex}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {
-                            "role": "assistant",
-                            "content": content,
-                        },
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                },
-            }
-        )
+        return _completion(model, {"role": "assistant", "content": content})
 
     def app(self) -> FastAPI:
         """The HTTP app: the two routes the gateways call."""

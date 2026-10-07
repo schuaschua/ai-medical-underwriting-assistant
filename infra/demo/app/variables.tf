@@ -114,6 +114,21 @@ variable "extraction_ready_path" {
   type        = string
 }
 
+variable "verdict_port" {
+  description = "Port the verdict container listens on."
+  type        = number
+}
+
+variable "verdict_health_path" {
+  description = "Path of the verdict service's health route, the target of its startup and liveness probes."
+  type        = string
+}
+
+variable "verdict_ready_path" {
+  description = "Path of the verdict service's readiness route, which fails until the database schema is at the migration head bundled in the image."
+  type        = string
+}
+
 variable "retrieval_port" {
   description = "Port the retrieval container listens on."
   type        = number
@@ -256,6 +271,36 @@ variable "extraction_model_max_concurrent_calls" {
   validation {
     condition     = var.extraction_model_max_concurrent_calls == floor(var.extraction_model_max_concurrent_calls) && var.extraction_model_max_concurrent_calls >= 1 && var.extraction_model_max_concurrent_calls <= 100
     error_message = "extraction_model_max_concurrent_calls must be a whole number from 1 to 100."
+  }
+}
+
+variable "verdict_model_max_concurrent_calls" {
+  description = "The most calls to the chat deployment the verdict service has under way at once, however many runs of the agent are under way: each turn of a run is one call. Lower it if the deployment's token rate limit is hit."
+  type        = number
+
+  validation {
+    condition     = var.verdict_model_max_concurrent_calls == floor(var.verdict_model_max_concurrent_calls) && var.verdict_model_max_concurrent_calls >= 1 && var.verdict_model_max_concurrent_calls <= 100
+    error_message = "verdict_model_max_concurrent_calls must be a whole number from 1 to 100."
+  }
+}
+
+variable "verdict_step_limit" {
+  description = "The most tool calls one run of the verdict agent may make. A run that would make one more is stopped and its case referred (spine AD-15)."
+  type        = number
+
+  validation {
+    condition     = var.verdict_step_limit == floor(var.verdict_step_limit) && var.verdict_step_limit >= 1 && var.verdict_step_limit <= 200
+    error_message = "verdict_step_limit must be a whole number from 1 to 200."
+  }
+}
+
+variable "verdict_confidence_floor" {
+  description = "A verdict run whose agent is less confident than this refers its case; at the floor it is not low (spine AD-15)."
+  type        = number
+
+  validation {
+    condition     = var.verdict_confidence_floor >= 0 && var.verdict_confidence_floor <= 1
+    error_message = "verdict_confidence_floor must be between 0 and 1."
   }
 }
 

@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from contracts.decisions import human_role
-from contracts.enums import CaseStatus, DemoRole
+from contracts.enums import CaseStatus, DemoRole, RetrieverConfig
 from contracts.errors import DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from contracts.models.workflow import (
@@ -42,6 +42,12 @@ ACTOR_NOT_HUMAN_MESSAGE = "Only a person may start a case."
 DEFAULT_AUDIT_TRAIL_LIMIT = 500
 
 
+# AD-11: the ladder rows a case may run with unless the settings say otherwise
+# (WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS).
+DEFAULT_AVAILABLE_RETRIEVER_CONFIGS = frozenset({RetrieverConfig.R3})
+ROW_NOT_AVAILABLE_MESSAGE = "That retrieval row cannot be used yet."
+
+
 def utc_now() -> datetime:
     """The current time, in UTC."""
     return datetime.now(UTC)
@@ -67,6 +73,8 @@ async def start_case(
     store: CaseStore,
     engine: LifecycleEngine,
     defaults: StartParameters,
+    # AD-11: the ladder rows a case may run with in this build.
+    available: frozenset[RetrieverConfig] = DEFAULT_AVAILABLE_RETRIEVER_CONFIGS,
     # The trace of the request that asks, for the `case.started` event; None
     # when there is none. Not left out: the caller says which.
     trace_id: str | None,
@@ -82,7 +90,9 @@ async def start_case(
 
     The case is stored with its `case.started` event, whose actor is the
     demo role that asked first (AD-8). A start that names no demo role is
-    `actor_not_human`, and stores nothing.
+    `actor_not_human`, and stores nothing. Nor does a start with a retriever
+    row this build cannot run (`retriever_not_available`): such a case would
+    fail at its last step, after every stage and every decision.
     """
     started = time.monotonic()
     try:
@@ -94,7 +104,15 @@ async def start_case(
             "case start refused: case_id=%s code=%s", case_id, refusal.code.value
         )
         raise
-    wanted = new_case(case_id, resolve_start_parameters(request, defaults), now())
+    parameters = resolve_start_parameters(request, defaults)
+    if not set(parameters.retriever_configs) <= available:
+        logger.warning(
+            "case start refused: case_id=%s code=%s",
+            case_id,
+            ErrorCode.RETRIEVER_NOT_AVAILABLE.value,
+        )
+        raise DomainError(ErrorCode.RETRIEVER_NOT_AVAILABLE, ROW_NOT_AVAILABLE_MESSAGE)
+    wanted = new_case(case_id, parameters, now())
     case = await store.start(
         wanted,
         case_started_event(
@@ -172,6 +190,7 @@ async def record_stage_result(
     result: StageResult,
     *,
     store: CaseStore,
+    asked_afterwards: bool = False,
     now: Callable[[], datetime] = utc_now,
 ) -> RecordOutcome:
     """Record a stage result: its status changes and its audit event, together (AD-8).
@@ -180,8 +199,10 @@ async def record_stage_result(
     that ran again), or that came late or out of order, writes nothing and
     says so. An unknown case or page is `not_found`, which no retry can mend;
     any other failure is raised as it is, so the activity is tried again.
+    `asked_afterwards` is for a verdict run asked for on a finished case:
+    its result is recorded and changes no status.
     """
-    recording = plan_recording(result)
+    recording = plan_recording(result, asked_afterwards=asked_afterwards)
     audit = recording.audit
     outcome = await store.record(recording, now())
     logger.info(

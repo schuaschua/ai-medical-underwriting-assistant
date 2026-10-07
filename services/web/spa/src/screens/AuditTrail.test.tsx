@@ -647,6 +647,23 @@ describe("1.12 the audit trail of a case", () => {
     ]);
   });
 
+  it("2.5 says which retrieval row a suggested verdict was made with", async () => {
+    trailServer(
+      [
+        auditEvent("verdict.suggested", "verdict:chat-main", null, {
+          detail: { retriever_config: "r3" },
+        }),
+      ],
+      { pages: [pageProgress(1, "extracted")] },
+    );
+
+    openTrail();
+
+    expect((await rows()).map((cells) => cells[4])).toEqual([
+      "Made with retrieval row r3.",
+    ]);
+  });
+
   it("does not ask again after a refusal no repeat can mend, until the user does", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let refusing = true;

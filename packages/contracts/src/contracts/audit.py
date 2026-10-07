@@ -13,7 +13,7 @@ from contracts.base import (
     TraceId,
     UtcDatetime,
 )
-from contracts.enums import ActorKind, DemoRole, PageStatus, Service
+from contracts.enums import ActorKind, DemoRole, PageStatus, RetrieverConfig, Service
 from contracts.errors import ErrorCode
 from contracts.ids import CaseId, EvalRunId, PageId, Uuid7Str
 
@@ -89,6 +89,16 @@ class RouteDetail(ContractModel):
     threshold: Confidence
 
 
+class VerdictDetail(ContractModel):
+    """Detail of `verdict.suggested`: the retriever configuration the run was made with (AD-15).
+
+    A case gets one run per configuration it was started with, and each is
+    an event of its own: the detail says which.
+    """
+
+    retriever_config: RetrieverConfig
+
+
 class AuditRecord(ContractModel):
     """One row of the audit trail; `workflow` is the only writer."""
 
@@ -104,8 +114,9 @@ class AuditRecord(ContractModel):
     # decision; for `case.started` and `case.completed`, the case itself.
     ref: Uuid7Str
     # For `document.redacted`, category to count, never the values; for
-    # `page.routed`, the route and the threshold; otherwise null.
-    detail: dict[NonEmptyStr, Count] | RouteDetail | None
+    # `page.routed`, the route and the threshold; for `verdict.suggested`,
+    # the retriever configuration of the run; otherwise null.
+    detail: dict[NonEmptyStr, Count] | RouteDetail | VerdictDetail | None
     trace_id: TraceId
     eval_run_id: EvalRunId | None
     # For `stage.failed`: the code of the failure, from the error catalogue.
@@ -134,12 +145,15 @@ class AuditRecord(ContractModel):
             fits = isinstance(self.detail, dict)
         elif self.action is AuditAction.PAGE_ROUTED:
             fits = isinstance(self.detail, RouteDetail)
+        elif self.action is AuditAction.VERDICT_SUGGESTED:
+            fits = isinstance(self.detail, VerdictDetail)
         else:
             fits = self.detail is None
         if not fits:
             raise ValueError(
                 "detail is the redaction counts for document.redacted, "
-                "the route for page.routed, else null"
+                "the route for page.routed, the retriever configuration for "
+                "verdict.suggested, else null"
             )
         return self
 

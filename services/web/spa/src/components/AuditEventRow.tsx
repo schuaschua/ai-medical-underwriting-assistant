@@ -55,7 +55,7 @@ function isRouteDetail(detail: AuditRecord["detail"]): detail is RouteDetail {
 
 /**
  * What the event's detail says: the redaction counts, the gate's route and
- * threshold, or the reason a step failed. Nothing else of an event is shown.
+ * threshold, the retrieval row of a suggested verdict, or the reason a step failed. Nothing else of an event is shown.
  */
 function detailText(event: AuditRecord): string {
   if (event.action === "stage.failed") {
@@ -71,6 +71,11 @@ function detailText(event: AuditRecord): string {
       // As recorded, to the digit: the gate's own number, not a rounding of it.
       exactPercentage(event.detail.threshold),
     );
+  }
+  if (event.action === "verdict.suggested" && event.detail !== null) {
+    const row = (event.detail as Record<string, unknown>).retriever_config;
+    // The row as recorded: the browser names it and decides nothing by it.
+    return typeof row === "string" ? strings.audit.suggestedWith(row) : "";
   }
   if (event.action === "document.redacted" && event.detail !== null) {
     const counts = Object.entries(event.detail)

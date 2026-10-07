@@ -5,7 +5,7 @@ name = "aiunderwriter"
 version = "0.0.0"
 description = "AI Medical Underwriting Assistant POC: workspace root"
 requires-python = "==3.13.*"
-dependencies = ["classification", "contracts", "extraction", "intake", "retrieval", "web", "workflow"]
+dependencies = ["classification", "contracts", "extraction", "intake", "retrieval", "verdict", "web", "workflow"]
 
 [dependency-groups]
 dev = [
@@ -41,6 +41,7 @@ contracts = { workspace = true }
 extraction = { workspace = true }
 intake = { workspace = true }
 retrieval = { workspace = true }
+verdict = { workspace = true }
 web = { workspace = true }
 workflow = { workspace = true }
 synthdata = { workspace = true }
@@ -81,6 +82,8 @@ mypy_path = [
     "services/intake/tests/support",
     "services/retrieval/src",
     "services/retrieval/tests/support",
+    "services/verdict/src",
+    "services/verdict/tests/support",
     "services/web/src",
     "services/workflow/src",
     "services/workflow/tests/support",
@@ -106,6 +109,7 @@ pythonpath = [
     "services/extraction/tests/support",
     "services/intake/tests/support",
     "services/retrieval/tests/support",
+    "services/verdict/tests/support",
     "services/workflow/tests/support",
 ]
 markers = [
@@ -125,6 +129,7 @@ source_pkgs = [
     "intake",
     "retrieval",
     "synthdata",
+    "verdict",
     "web",
     "workflow",
 ]

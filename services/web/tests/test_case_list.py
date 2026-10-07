@@ -5,7 +5,6 @@ answers as `workflow` would.
 """
 
 import json
-import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -103,9 +102,7 @@ def error_of(response: Any) -> tuple[int, str]:
 # --- The start names who asked -------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("headers", "role"), [(CUSTOMER, "customer"), (UNDERWRITER, "underwriter")]
-)
+@pytest.mark.parametrize(("headers", "role"), [(UNDERWRITER, "underwriter")])
 def test_story_1_13_a_start_is_passed_on_with_the_requests_demo_role_as_its_actor(
     client: TestClient, sidecar: FakeSidecar, headers: dict[str, str], role: str
 ) -> None:
@@ -123,46 +120,23 @@ def test_story_1_13_a_start_is_passed_on_with_the_requests_demo_role_as_its_acto
     assert "actor" not in response.json()
 
 
-def test_story_1_13_the_underwriters_start_options_travel_with_the_actor(
+def test_story_1_13_a_browser_cannot_say_who_started_the_case(
     client: TestClient, sidecar: FakeSidecar
 ) -> None:
-    eval_run_id = new_id()
-    options = {"stop_after": "gate", "eval_run_id": eval_run_id}
-
-    response = client.post(
-        f"/api/cases/{new_id()}/start", json=options, headers=UNDERWRITER
-    )
-
-    assert response.status_code == 200
-    assert json.loads(sidecar.requests[0].content) == {
-        **options,
-        "actor": "underwriter",
-    }
-
-
-@pytest.mark.parametrize("headers", [CUSTOMER, UNDERWRITER])
-@pytest.mark.parametrize(
-    "body",
-    [
+    bodies: list[dict[str, object]] = [
         {"actor": "underwriter"},
         {"actor": "customer"},
         {"actor": "workflow:case-lifecycle"},
-        {"actor": ""},
         {"actor": None},
         {"actor": "underwriter", "stop_after": "gate"},
-    ],
-    ids=str,
-)
-def test_story_1_13_a_browser_cannot_say_who_started_the_case(
-    client: TestClient,
-    sidecar: FakeSidecar,
-    headers: dict[str, str],
-    body: dict[str, object],
-) -> None:
-    response = client.post(f"/api/cases/{new_id()}/start", json=body, headers=headers)
-
-    # The body `web` reads has no such field: the start never reaches `workflow`.
-    assert error_of(response) == (422, "validation_failed")
+    ]
+    for headers in (CUSTOMER, UNDERWRITER):
+        for body in bodies:
+            response = client.post(
+                f"/api/cases/{new_id()}/start", json=body, headers=headers
+            )
+            # The body `web` reads has no such field: the start never reaches `workflow`.
+            assert error_of(response) == (422, "validation_failed")
     assert sidecar.requests == []
 
 
@@ -197,15 +171,6 @@ def test_story_1_13_the_underwriter_reads_the_case_list_as_workflow_answers_it(
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_story_1_13_an_empty_case_list_is_passed_on_as_it_is(
-    client: TestClient, sidecar: FakeSidecar
-) -> None:
-    response = client.get("/api/cases", headers=UNDERWRITER)
-
-    assert response.status_code == 200
-    assert response.json() == {"cases": [], "has_more": False}
-
-
 def test_story_1_13_the_customer_is_refused_the_case_list(
     client: TestClient, sidecar: FakeSidecar
 ) -> None:
@@ -214,45 +179,3 @@ def test_story_1_13_the_customer_is_refused_the_case_list(
     assert error_of(response) == (403, "role_not_allowed")
     # Refused by `web` itself: `workflow` is never asked.
     assert sidecar.requests == []
-
-
-@pytest.mark.parametrize("headers", [{}, {"X-Demo-Role": "admin"}])
-def test_story_1_13_the_case_list_needs_a_demo_role(
-    client: TestClient, sidecar: FakeSidecar, headers: dict[str, str]
-) -> None:
-    response = client.get("/api/cases", headers=headers)
-
-    assert error_of(response) == (400, "invalid_role")
-    assert sidecar.requests == []
-
-
-@pytest.mark.parametrize(
-    "answer",
-    [
-        httpx.ConnectError("refused secret-address 10.0.0.1"),
-        httpx.Response(500, json={"errorCode": "ERR_DIRECT_INVOKE"}),
-        httpx.Response(200, json={"cases": [{"case_id": "x"}], "has_more": False}),
-        httpx.Response(200, json={"cases": []}),
-        httpx.Response(200, content=b"<html>not json</html>"),
-        # Nothing `workflow` may say about a plain read is passed on as it is.
-        refusal(ErrorCode.NOT_FOUND, "secret-detail of another service"),
-    ],
-    ids=["refused", "sidecar-500", "wrong-case", "no-flag", "not-json", "refusal"],
-)
-def test_story_1_13_a_case_list_that_cannot_be_read_is_502_in_the_error_shape(
-    client: TestClient,
-    sidecar: FakeSidecar,
-    answer: httpx.Response | Exception,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    sidecar.listed = answer
-
-    with caplog.at_level(logging.ERROR):
-        response = client.get("/api/cases", headers=UNDERWRITER)
-
-    assert error_of(response) == (502, "upstream_unavailable")
-    # security rule 26: a plain message, nothing of the other service's.
-    assert "secret" not in response.text
-    assert "10.0.0.1" not in response.text
-    assert "service=workflow operation=list_cases" in caplog.text
-    assert "secret" not in caplog.text

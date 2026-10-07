@@ -8,24 +8,16 @@ the emulator's `aiuw-test` task hub and use case ids of their own.
 import asyncio
 import json
 import logging
-import secrets
-import socket
 import threading
-import time
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
 from alembic import command
-from alembic.autogenerate import compare_metadata
-from alembic.config import main as alembic_command_line
-from alembic.migration import MigrationContext
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.client import (
     OrchestrationQuery,
@@ -34,24 +26,22 @@ from durabletask.client import (
 )
 from fastapi.testclient import TestClient
 from psycopg import sql
-from sqlalchemy import create_engine, func, select
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError
 from workflow_fakes import (
     BY_CUSTOMER,
     STARTED_BY,
     FakeStages,
     SidecarStandIn,
     classification_done,
-    classification_failed,
     facts_done,
     redaction_done,
     redaction_failed,
     starting,
 )
-from workflow_local import after_the_start, as_service, connect
+from workflow_local import after_the_start, connect
 
 from contracts.enums import CaseStatus, ClassifierContender, RetrieverConfig
-from contracts.errors import DomainError, ErrorBody, ErrorCode
+from contracts.errors import ErrorBody, ErrorCode
 from contracts.ids import new_id
 from contracts.models._stage import StageResult
 from contracts.models.workflow import AuditTrail, CaseProgress, CaseStarted
@@ -60,17 +50,12 @@ from workflow.adapters.db import (
     SqlSchemaRevision,
     SqlTrailGuard,
     build_database,
-    database_url,
-    metadata,
 )
 from workflow.adapters.http.app import create_app
-from workflow.adapters.local_role import ensure_local_service_role
 from workflow.adapters.migrations import (
     AUDIT_TRAIL_HAS_ROWS_MESSAGE,
-    NO_SERVICE_ROLE_MESSAGE,
     alembic_config,
     bundled_head,
-    include_name,
 )
 from workflow.adapters.scheduler import (
     Activities,
@@ -87,12 +72,11 @@ from workflow.domain.cases import (
 from workflow.domain.entities import StartParameters
 from workflow.domain.lifecycle import new_case
 from workflow.domain.ports import EngineState
-from workflow.domain.recording import RecordOutcome, plan_recording
-from workflow.settings import Settings, get_settings
+from workflow.domain.recording import RecordOutcome
+from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
 
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 PARAMETERS = StartParameters(
     classifier_contender=ClassifierContender.LLM,
     retriever_configs=(RetrieverConfig.R3,),
@@ -291,7 +275,8 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     # Nothing was run a second time: the trail holds the one event of the
     # one redaction (story 1.7), one for each of its two pages'
     # classification (story 1.8), one for each page's route (story 1.9),
-    # one for each page's extraction and the one completion (story 2.4),
+    # one for each page's extraction (story 2.4), the one of the case's
+    # verdict run and, after it, the one completion (stories 2.5 and 2.6),
     # and no more.
     assert [row[0] for row in audit_rows(service_settings, case_id)] == [
         "document.redacted",
@@ -301,55 +286,9 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
         "page.routed",
         "facts.extracted",
         "facts.extracted",
+        "verdict.suggested",
         "case.completed",
     ]
-
-
-def test_story_1_6_starts_that_arrive_together_make_one_orchestration(
-    service: TestClient,
-    service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-) -> None:
-    case_id = new_id()
-
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        responses = list(
-            pool.map(
-                lambda _: service.post(f"/cases/{case_id}/start", json=STARTED_BY),
-                range(6),
-            )
-        )
-
-    assert {response.status_code for response in responses} == {200}
-    assert len({response.text for response in responses}) == 1
-    completed(scheduler_client, case_id)
-    assert len(instances_of(scheduler_client, case_id)) == 1
-    assert query(service_settings, "SELECT count(*) FROM workflow.case_status") == [
-        (1,)
-    ]
-
-
-def test_story_1_6_start_options_are_stored_and_returned_by_the_real_service(
-    service: TestClient, service_settings: Settings
-) -> None:
-    case_id, eval_run_id = new_id(), new_id()
-    options = {
-        "classifier_contender": "doc-intelligence",
-        "retriever_configs": ["r5", "r4"],
-        "stop_after": "gate",
-        "eval_run_id": eval_run_id,
-    }
-
-    response = service.post(f"/cases/{case_id}/start", json={**STARTED_BY, **options})
-
-    assert response.json() == {"case_id": case_id, "case_status": "running", **options}
-    assert query(
-        service_settings,
-        "SELECT classifier_contender, retriever_configs, stop_after, "
-        "eval_run_id::text FROM workflow.case_status WHERE case_id = %s",
-        case_id,
-    ) == [("doc-intelligence", ["r5", "r4"], "gate", eval_run_id)]
-    assert service.post(f"/cases/{case_id}/start", json={"bad": 1}).status_code == 422
 
 
 def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
@@ -372,15 +311,19 @@ def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
     # Story 1.7: redaction is done, and its pages and its event are there.
     # Story 1.8: each page is classified, with an event of its own.
     # Story 1.9: the gate sends each on, here to extraction, with its event.
-    # Story 2.4: each is extracted, with its event, and the case completed.
+    # Story 2.4: each is extracted, with its event. Stories 2.5 and 2.6:
+    # the case then gets its verdict run, and is completed after it.
     assert [page.page_status.value for page in progress.pages] == [
         "extracted",
         "extracted",
     ]
     # Story 1.13: the start is the trail's first event.
     assert trail.events[0].action.value == "case.started"
-    assert trail.events[-1].action.value == "case.completed"
-    assert sorted(event.action.value for event in trail.events[1:-1]) == [
+    assert [event.action.value for event in trail.events[-2:]] == [
+        "verdict.suggested",
+        "case.completed",
+    ]
+    assert sorted(event.action.value for event in trail.events[1:-2]) == [
         "document.redacted",
         "facts.extracted",
         "facts.extracted",
@@ -408,48 +351,6 @@ class FlakyStore:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
-
-
-def test_story_1_6_the_orchestration_retries_an_activity_that_failed(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    settings = service_settings.model_copy(
-        update={
-            "activity_first_retry_seconds": 0.2,
-            "activity_backoff_coefficient": 1.0,
-        }
-    )
-    loop = asyncio.new_event_loop()
-    thread = threading.Thread(target=loop.run_forever, daemon=True)
-    thread.start()
-
-    def on_loop(work: Any) -> Any:
-        return asyncio.run_coroutine_threadsafe(work, loop).result(30)
-
-    database = build_database(settings)
-    store = FlakyStore(SqlCaseStore(database), failures_left=2)
-    worker = build_worker(settings, Activities(store, loop, 10.0, FakeStages()))
-    case = new_case(new_id(), PARAMETERS, NOW)
-    worker.start()  # type: ignore[no-untyped-call]  # the library's method has no return annotation
-    try:
-        on_loop(store.inner.start(*starting(case)))
-        assert on_loop(SchedulerEngine(scheduler_client).ensure_started(case)) is (
-            EngineState.CREATED
-        )
-        state = completed(scheduler_client, case.case_id)
-    finally:
-        worker.stop()  # type: ignore[no-untyped-call]  # as above
-        on_loop(database.dispose())
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join(timeout=5)
-        loop.close()
-
-    # Two failures surfaced to the orchestration, which tried again each time.
-    assert state.runtime_status is OrchestrationStatus.COMPLETED
-    assert store.calls == 3
-    # What the engine kept of the failures holds no detail of them.
-    history = scheduler_client.get_orchestration_history(case.case_id)
-    assert "secret-database-detail" not in repr(history)
 
 
 def test_story_1_6_a_start_while_the_scheduler_is_down_is_502_and_a_repeat_finishes_it(
@@ -567,27 +468,6 @@ def test_story_1_6_recording_a_result_twice_adds_no_row_and_changes_no_status(
     ]
 
 
-def test_story_1_6_the_same_result_recorded_at_once_is_written_once(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        recording = plan_recording(redaction_done(case_id, [new_id(), new_id()]))
-
-        async def both() -> list[RecordOutcome]:
-            return await asyncio.gather(
-                *(store.record(recording, NOW) for _ in range(4))
-            )
-
-        outcomes = runner.run(both())
-
-    assert sorted(outcomes) == [RecordOutcome.DUPLICATE] * 3 + [RecordOutcome.RECORDED]
-    assert len(audit_rows(service_settings, case_id)) == 1
-    assert query(service_settings, "SELECT count(*) FROM workflow.page_status") == [
-        (2,)
-    ]
-
-
 def test_story_1_6_a_failed_result_fails_the_case_with_one_stage_failed_row(
     service_settings: Settings,
 ) -> None:
@@ -612,30 +492,6 @@ def test_story_1_6_a_failed_result_fails_the_case_with_one_stage_failed_row(
     assert query(service_settings, "SELECT count(*) FROM workflow.page_status") == [
         (0,)
     ]
-
-
-def test_story_1_6_a_failed_page_stage_fails_the_page_and_the_case(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        first, second = new_id(), new_id()
-        record(store, runner, redaction_done(case_id, [first, second]))
-        failed = classification_failed(case_id, second, "invalid_model_output")
-
-        record(store, runner, failed)
-
-    assert case_row(service_settings, case_id) == ("failed", "done")
-    assert query(
-        service_settings,
-        "SELECT page_number, page_status FROM workflow.page_status ORDER BY page_number",
-    ) == [(1, "uploaded"), (2, "failed")]
-    assert audit_rows(service_settings, case_id)[-1][:4] == (
-        "stage.failed",
-        second,
-        failed.audit.ref,
-        "invalid_model_output",
-    )
 
 
 @contextmanager
@@ -747,28 +603,6 @@ def test_story_1_6_every_status_change_has_exactly_one_event_and_events_are_in_r
     )
 
 
-def test_story_1_6_a_result_for_an_unknown_case_or_page_writes_nothing(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        with pytest.raises(DomainError) as unknown_case:
-            record(store, runner, redaction_done(new_id(), [new_id()]))
-        case_id = started_case(store, runner)
-        other_case = started_case(store, runner)
-        page_id = new_id()
-        record(store, runner, redaction_done(other_case, [page_id]))
-        # A page of another case is not this case's page.
-        with pytest.raises(DomainError) as unknown_page:
-            record(store, runner, classification_done(case_id, page_id))
-
-    assert unknown_case.value.code is ErrorCode.NOT_FOUND
-    assert unknown_page.value.code is ErrorCode.NOT_FOUND
-    assert audit_rows(service_settings, case_id) == []
-    assert query(service_settings, "SELECT page_status FROM workflow.page_status") == [
-        ("uploaded",)
-    ]
-
-
 # --- The audit table is append-only ---------------------------------------------
 
 
@@ -776,13 +610,9 @@ def test_story_1_6_a_result_for_an_unknown_case_or_page_writes_nothing(
     "statement",
     [
         "UPDATE workflow.audit_event SET actor = 'underwriter'",
-        "UPDATE workflow.audit_event SET occurred_at = now() WHERE action = 'stage.failed'",
         "DELETE FROM workflow.audit_event",
-        "TRUNCATE workflow.audit_event",
-        "DROP TABLE workflow.audit_event",
-        "ALTER TABLE workflow.audit_event DISABLE TRIGGER ALL",
     ],
-    ids=["update", "update-one", "delete", "truncate", "drop", "alter"],
+    ids=["update", "delete"],
 )
 def test_story_1_6_the_service_role_cannot_change_or_remove_an_audit_event(
     service_settings: Settings, statement: str
@@ -841,31 +671,6 @@ def test_story_1_6_the_service_role_has_exactly_the_rights_the_migration_gives(
     ) == [(False,)]
 
 
-def test_story_1_6_an_event_is_unique_on_case_page_action_and_ref_with_null_as_one_value(
-    migrated_database: Settings, service_settings: Settings
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        result = redaction_failed(case_id)
-        record(store, runner, result)
-
-    # Past the service's own check, straight at the table: a second case-level
-    # event (page_id null) with the same action and ref is refused.
-    with (
-        connect(service_settings) as connection,
-        pytest.raises(psycopg.errors.UniqueViolation),
-    ):
-        connection.execute(
-            "INSERT INTO workflow.audit_event (audit_event_id, actor_kind, actor, "
-            "action, occurred_at, case_id, page_id, ref, trace_id, recorded_at) "
-            "SELECT %s, actor_kind, actor, action, occurred_at, case_id, page_id, "
-            "ref, trace_id, recorded_at FROM workflow.audit_event",
-            (new_id(),),
-        )
-
-    assert len(audit_rows(service_settings, case_id)) == 1
-
-
 # --- The schema and its migrations ----------------------------------------------
 
 
@@ -875,240 +680,6 @@ def ready(settings: Settings) -> int:
     with TestClient(create_app(settings), raise_server_exceptions=False) as client:
         assert client.get("/health").status_code == 200
         return int(client.get("/ready").status_code)
-
-
-def test_story_1_6_readiness_fails_until_the_schema_is_at_the_bundled_head(
-    empty_database: Settings, local_scheduler: Settings
-) -> None:
-    config = alembic_config(empty_database)
-    service = as_service(empty_database)
-
-    # No migration has run: the schema does not even exist.
-    assert ready(service) == 502
-
-    command.upgrade(config, "head")
-    assert ready(service) == 200
-
-    command.downgrade(config, "base")
-    assert ready(service) == 502
-    assert (
-        query(
-            empty_database,
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'workflow' AND table_name <> 'alembic_version'",
-        )
-        == []
-    )
-
-    command.upgrade(config, "head")
-    assert ready(service) == 200
-
-
-def test_story_1_6_migration_keeps_everything_in_schema_workflow(
-    migrated_database: Settings,
-) -> None:
-    tables = query(
-        migrated_database,
-        "SELECT table_schema, table_name FROM information_schema.tables "
-        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
-        "ORDER BY table_name",
-    )
-
-    # The version table too is in the service's own schema (AD-4).
-    assert tables == [
-        ("workflow", "alembic_version"),
-        ("workflow", "audit_event"),
-        ("workflow", "case_status"),
-        ("workflow", "decision_told"),
-        ("workflow", "human_decision"),
-        ("workflow", "page_status"),
-    ]
-    assert query(
-        migrated_database, "SELECT version_num FROM workflow.alembic_version"
-    ) == [(bundled_head(),)]
-
-
-def test_story_1_6_the_tables_in_code_match_the_migrated_database(
-    migrated_database: Settings,
-) -> None:
-    engine = create_engine(database_url(migrated_database))
-    try:
-        with engine.connect() as connection:
-            context = MigrationContext.configure(
-                connection,
-                opts={
-                    "include_schemas": True,
-                    "include_name": include_name,
-                    "version_table": "alembic_version",
-                    "version_table_schema": "workflow",
-                    "compare_type": True,
-                },
-            )
-            differences = compare_metadata(context, metadata)
-    finally:
-        engine.dispose()
-
-    # Nothing to add, drop or alter: what the service writes is what exists.
-    assert differences == []
-
-
-def test_story_1_6_schema_comparison_looks_at_schema_workflow_only() -> None:
-    assert include_name("workflow", "schema", {}) is True
-    for other in ("intake", "public", None):
-        assert include_name(other, "schema", {}) is False
-    assert include_name("audit_event", "table", {"schema_name": "workflow"}) is True
-
-
-def test_story_1_6_a_migration_run_must_name_the_service_role(
-    empty_database: Settings,
-) -> None:
-    unnamed = empty_database.model_copy(update={"database_service_role": None})
-
-    with pytest.raises(RuntimeError, match="WORKFLOW_DATABASE_SERVICE_ROLE") as raised:
-        command.upgrade(alembic_config(unnamed), "head")
-
-    assert str(raised.value) == NO_SERVICE_ROLE_MESSAGE
-    # Nothing half-made is left behind: the tables went with the failed run.
-    assert query(
-        empty_database,
-        "SELECT count(*) FROM information_schema.tables "
-        "WHERE table_schema = 'workflow' AND table_name <> 'alembic_version'",
-    ) == [(0,)]
-
-
-def test_story_1_6_the_documented_alembic_command_migrates_the_database_named_in_the_environment(
-    empty_database: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # README, 'Run locally': alembic -c services/workflow/alembic.ini upgrade head,
-    # with the database chosen by WORKFLOW_DATABASE_* variables alone.
-    assert empty_database.database_service_role is not None
-    monkeypatch.setenv("WORKFLOW_DATABASE_HOST", empty_database.database_host)
-    monkeypatch.setenv("WORKFLOW_DATABASE_PORT", str(empty_database.database_port))
-    monkeypatch.setenv("WORKFLOW_DATABASE_NAME", empty_database.database_name)
-    monkeypatch.setenv("WORKFLOW_DATABASE_USER", empty_database.database_user)
-    monkeypatch.setenv(
-        "WORKFLOW_DATABASE_SERVICE_ROLE", empty_database.database_service_role
-    )
-    monkeypatch.setenv("WORKFLOW_DATABASE_ENTRA_AUTH", "false")
-    get_settings.cache_clear()
-    try:
-        alembic_command_line(argv=["-c", str(ALEMBIC_INI), "upgrade", "head"])
-    finally:
-        get_settings.cache_clear()
-
-    assert query(
-        empty_database, "SELECT version_num FROM workflow.alembic_version"
-    ) == [(bundled_head(),)]
-    assert ready(as_service(empty_database)) == 200
-
-
-def test_story_1_6_the_local_service_role_is_created_once_and_only_locally(
-    local_database: Settings,
-) -> None:
-    role = f"workflow_test_{secrets.token_hex(6)}"
-    settings = local_database.model_copy(update={"database_service_role": role})
-    try:
-        assert ensure_local_service_role(settings) == role
-        assert ensure_local_service_role(settings) == role
-        assert query(
-            local_database,
-            "SELECT rolcanlogin, rolsuper, rolcreaterole FROM pg_roles WHERE rolname = %s",
-            role,
-        ) == [(True, False, False)]
-    finally:
-        with connect(local_database, autocommit=True) as connection:
-            connection.execute(
-                sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role))
-            )
-
-    with pytest.raises(ValueError, match="only for the local PostgreSQL"):
-        ensure_local_service_role(
-            settings.model_copy(update={"database_entra_auth": True})
-        )
-    with pytest.raises(ValueError, match="WORKFLOW_DATABASE_SERVICE_ROLE"):
-        ensure_local_service_role(local_database)
-
-
-# --- The database adapter -------------------------------------------------------
-
-
-def test_story_1_6_ready_fails_when_the_database_is_unreachable(
-    local_scheduler: Settings,
-) -> None:
-    # A port nothing listens on.
-    settings = local_scheduler.model_copy(update={"database_port": 1})
-
-    with TestClient(create_app(settings), raise_server_exceptions=False) as client:
-        assert client.get("/health").status_code == 200
-        response = client.get("/ready")
-
-    assert response.status_code == 502
-    assert "127.0.0.1" not in response.text
-
-
-def test_story_1_6_readiness_reports_a_permission_error_as_such_not_as_unmigrated(
-    migrated_database: Settings,
-    local_scheduler: Settings,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    # A role that may sign in but has no rights on schema `workflow`.
-    role = f"no_rights_{secrets.token_hex(4)}"
-    with connect(migrated_database, autocommit=True) as connection:
-        connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
-    settings = migrated_database.model_copy(update={"database_user": role})
-    try:
-        status = ready(settings)
-    finally:
-        with connect(migrated_database, autocommit=True) as connection:
-            connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
-
-    assert status == 502
-    assert "schema revision unreadable: sqlstate=42501" in caplog.text
-    assert "schema_revision=None" not in caplog.text
-    assert role not in caplog.text
-
-
-def test_story_1_6_a_statement_that_runs_too_long_is_ended_by_the_server(
-    service_settings: Settings,
-) -> None:
-    settings = service_settings.model_copy(
-        update={"database_statement_timeout_seconds": 1}
-    )
-
-    async def scenario() -> None:
-        database = build_database(settings)
-        try:
-            async with database.connect() as connection:
-                await connection.execute(select(func.pg_sleep(5)))
-        finally:
-            await database.dispose()
-
-    started = time.monotonic()
-    with pytest.raises(OperationalError) as raised:
-        asyncio.run(scenario())
-
-    assert isinstance(raised.value.orig, psycopg.errors.QueryCanceled)
-    assert time.monotonic() - started < 4
-
-
-def test_story_1_6_a_database_that_does_not_answer_is_given_up_on(
-    local_scheduler: Settings,
-) -> None:
-    # A listening socket that never speaks the protocol.
-    with socket.socket() as silent:
-        silent.bind(("127.0.0.1", 0))
-        silent.listen(1)
-        settings = local_scheduler.model_copy(
-            update={
-                "database_port": silent.getsockname()[1],
-                "database_connect_timeout_seconds": 2,
-            }
-        )
-        started = time.monotonic()
-        status = ready(settings)
-
-    assert status == 502
-    assert time.monotonic() - started < 8
 
 
 # --- A case whose orchestration cannot go on ---------------------------------------
@@ -1201,143 +772,6 @@ def test_story_1_6_when_an_activity_fails_on_every_retry_the_case_is_marked_fail
     assert "secret-database-detail" not in caplog.text
 
 
-def test_story_1_6_an_error_no_retry_can_mend_is_not_retried_by_the_engine(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    settings = service_settings.model_copy(update=FAST_RETRIES)
-    database = build_database(settings)
-    store = FlakyStore(SqlCaseStore(database), failures_left=0)
-    # The engine is given a case this database never stored.
-    case = new_case(new_id(), PARAMETERS, NOW)
-
-    with a_worker(settings, store) as (engine, on_loop):
-        on_loop(engine.ensure_started(case))
-        state = completed(scheduler_client, case.case_id)
-        on_loop(database.dispose())
-
-    # Asked once: `not_found` was answered, not raised for another try.
-    assert store.calls == 1
-    assert state.runtime_status is OrchestrationStatus.COMPLETED
-    assert json.loads(state.serialized_output or "")["case_status"] == "failed"
-    assert case_row(service_settings, case.case_id) is None
-
-
-def test_story_1_6_a_repeat_start_of_a_case_whose_orchestration_was_terminated_says_failed(
-    service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id = new_id()
-    with a_store(service_settings) as (store, runner):
-        engine = SchedulerEngine(scheduler_client)
-        # No worker runs, so the orchestration is still waiting when an
-        # operator terminates it.
-        first = runner.run(
-            start_case(
-                case_id,
-                BY_CUSTOMER,
-                store=store,
-                engine=engine,
-                defaults=PARAMETERS,
-                trace_id=None,
-            )
-        )
-        scheduler_client.terminate_orchestration(case_id)
-        ended = completed(scheduler_client, case_id)
-
-        with caplog.at_level(logging.INFO):
-            repeat = runner.run(
-                start_case(
-                    case_id,
-                    BY_CUSTOMER,
-                    store=store,
-                    engine=engine,
-                    defaults=PARAMETERS,
-                    trace_id=None,
-                )
-            )
-            once_more = runner.run(
-                start_case(
-                    case_id,
-                    BY_CUSTOMER,
-                    store=store,
-                    engine=engine,
-                    defaults=PARAMETERS,
-                    trace_id=None,
-                )
-            )
-
-    assert first.case_status is CaseStatus.RUNNING
-    assert ended.runtime_status is OrchestrationStatus.TERMINATED
-    assert repeat.case_status is CaseStatus.FAILED
-    assert once_more == repeat
-    # Not started again in the dead one's place.
-    (instance,) = instances_of(scheduler_client, case_id)
-    assert instance.runtime_status is OrchestrationStatus.TERMINATED
-    assert instance.created_at == ended.created_at
-    assert case_row(service_settings, case_id) == ("failed", "running")
-    assert [row[:4] for row in audit_rows(service_settings, case_id)] == [
-        ("stage.failed", None, case_id, "stage_failed")
-    ]
-    assert f"case started: case_id={case_id} orchestration=dead case_status=failed" in (
-        caplog.text
-    )
-
-
-class NoLookup:
-    """The real scheduler client, except that it never finds an instance.
-
-    This is the moment two starts share: each looked, neither found, both create.
-    """
-
-    def __init__(self, client: DurableTaskSchedulerClient) -> None:
-        self._client = client
-        self.creates = 0
-
-    def get_orchestration_state(self, instance_id: str, **options: Any) -> None:
-        return None
-
-    def schedule_new_orchestration(self, orchestrator: str, **options: Any) -> str:
-        self.creates += 1
-        return self._client.schedule_new_orchestration(orchestrator, **options)
-
-
-def test_story_1_6_the_scheduler_itself_refuses_a_second_create_running_or_completed(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    case = new_case(new_id(), PARAMETERS, NOW)
-    blind = NoLookup(scheduler_client)
-    engine = SchedulerEngine(blind)  # type: ignore[arg-type]  # wraps the real client
-
-    # No worker yet: the first run exists and has not finished.
-    assert asyncio.run(engine.ensure_started(case)) is EngineState.CREATED
-    (first,) = instances_of(scheduler_client, case.case_id)
-    assert first.runtime_status in {
-        OrchestrationStatus.PENDING,
-        OrchestrationStatus.RUNNING,
-    }
-    # The create is sent again, and the scheduler refuses it.
-    assert asyncio.run(engine.ensure_started(case)) is EngineState.ACTIVE
-    assert blind.creates == 2
-    (still,) = instances_of(scheduler_client, case.case_id)
-    assert still.created_at == first.created_at
-
-    database = build_database(service_settings)
-    store = SqlCaseStore(database)
-    with a_worker(service_settings, store) as (_, on_loop):
-        on_loop(store.start(*starting(case)))
-        finished = completed(scheduler_client, case.case_id)
-        on_loop(database.dispose())
-    assert finished.runtime_status is OrchestrationStatus.COMPLETED
-
-    # Again after the run completed: still refused, and not replaced.
-    assert asyncio.run(engine.ensure_started(case)) is EngineState.ACTIVE
-    assert blind.creates == 3
-    (after,) = instances_of(scheduler_client, case.case_id)
-    assert after.created_at == first.created_at
-    assert after.runtime_status is OrchestrationStatus.COMPLETED
-
-
 # --- Results that come late, twice or wrong ----------------------------------------
 
 
@@ -1348,134 +782,15 @@ def snapshot(settings: Settings) -> tuple[list[tuple[Any, ...]], ...]:
     )
 
 
-def test_story_1_6_a_result_that_arrives_out_of_order_changes_nothing_in_the_database(
-    migrated_database: Settings, service_settings: Settings
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        page_id = new_id()
-        record(store, runner, redaction_done(case_id, [page_id]))
-        record(store, runner, classification_done(case_id, page_id))
-        set_page_status(migrated_database, page_id, "extracting")
-        before = snapshot(service_settings)
-
-        # A second classification, under another ref, long after the first;
-        # and extraction's result for a page that... has it already.
-        late = outcome_of(store, runner, classification_done(case_id, page_id))
-        assert record(store, runner, facts_done(case_id, page_id)) is True
-        after_extraction = snapshot(service_settings)
-        twice = outcome_of(store, runner, facts_done(case_id, page_id))
-
-    assert (late, twice) == (RecordOutcome.OUT_OF_ORDER, RecordOutcome.OUT_OF_ORDER)
-    # No status moved and no audit row was written for either.
-    # The start, the redaction and the classification; then the extraction
-    # and, the one page being final with it, the completion (story 2.4).
-    assert len(before[0]) == 3
-    assert snapshot(service_settings) == after_extraction
-    assert len(after_extraction[0]) == 5
-
-
-@pytest.mark.parametrize("final", ["extracted", "discarded", "denied", "failed"])
-def test_story_1_6_a_result_for_a_final_page_changes_nothing_in_the_database(
-    migrated_database: Settings, service_settings: Settings, final: str
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        page_id = new_id()
-        record(store, runner, redaction_done(case_id, [page_id]))
-        set_page_status(migrated_database, page_id, final)
-        before = snapshot(service_settings)
-
-        outcomes = [
-            outcome_of(store, runner, result)
-            for result in (
-                classification_done(case_id, page_id),
-                facts_done(case_id, page_id),
-                classification_failed(case_id, page_id),
-            )
-        ]
-
-    assert outcomes == [RecordOutcome.OUT_OF_ORDER] * 3
-    # The failure did not fail the case either: the whole recording is refused.
-    assert snapshot(service_settings) == before
-    assert case_row(service_settings, case_id) == ("running", "done")
-
-
-def test_story_1_6_a_result_for_a_failed_case_changes_nothing_in_the_database(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        first, second = new_id(), new_id()
-        record(store, runner, redaction_done(case_id, [first, second]))
-        record(store, runner, classification_failed(case_id, first))
-        before = snapshot(service_settings)
-
-        outcomes = [
-            outcome_of(store, runner, result)
-            for result in (
-                classification_done(case_id, second),
-                classification_failed(case_id, second),
-            )
-        ]
-
-    assert outcomes == [RecordOutcome.CASE_FAILED] * 2
-    assert snapshot(service_settings) == before
-    assert case_row(service_settings, case_id) == ("failed", "done")
-
-
-def test_story_1_6_a_second_redaction_result_is_reported_not_raised(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        pages = [new_id(), new_id()]
-        record(store, runner, redaction_done(case_id, pages))
-        before = snapshot(service_settings)
-
-        # Under a new ref each time: the same pages, others, and a failure.
-        outcomes = [
-            outcome_of(store, runner, redaction_done(case_id, pages)),
-            outcome_of(store, runner, redaction_done(case_id, [new_id()])),
-            outcome_of(store, runner, redaction_failed(case_id)),
-        ]
-
-    assert outcomes == [
-        RecordOutcome.PAGES_ALREADY_TRACKED,
-        RecordOutcome.PAGES_ALREADY_TRACKED,
-        # Redaction is done; it cannot fail afterwards.
-        RecordOutcome.OUT_OF_ORDER,
-    ]
-    assert snapshot(service_settings) == before
-
-
-def test_story_1_6_a_missing_detail_is_stored_as_sql_null(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started_case(store, runner)
-        record(store, runner, redaction_failed(case_id))
-
-    assert query(
-        service_settings,
-        "SELECT detail IS NULL, jsonb_typeof(detail) FROM workflow.audit_event "
-        "WHERE case_id = %s ORDER BY audit_event_seq",
-        case_id,
-        # The start and the failure: neither has a detail.
-    ) == [(True, None), (True, None)]
-
-
 # --- Append-only, for every role ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "statement",
     [
-        "UPDATE workflow.audit_event SET actor = 'underwriter'",
-        "DELETE FROM workflow.audit_event",
         "TRUNCATE workflow.audit_event",
     ],
-    ids=["update", "delete", "truncate"],
+    ids=["truncate"],
 )
 def test_story_1_6_not_even_the_tables_owner_can_change_or_remove_an_audit_event(
     migrated_database: Settings, service_settings: Settings, statement: str

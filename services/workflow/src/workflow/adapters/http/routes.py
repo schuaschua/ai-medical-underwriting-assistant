@@ -1,9 +1,10 @@
-"""The routes of `workflow`: the probes, the start of a case, the case list, progress, audit trail, decisions and the queues.
+"""The routes of `workflow`: the probes, the start of a case, the case list, progress, audit trail, decisions, the queues and the request for a verdict run.
 
 Only `web` calls these, through Dapr (spine, Operations). Stage results are
 not posted here: the orchestration's activities record them (AD-2, AD-8).
 The decision route is the only way a page is kept, discarded, accepted or
-denied (AD-10).
+denied (AD-10). The verdict-run route asks for one more suggestion on a
+finished case; it decides nothing.
 """
 
 import logging
@@ -14,6 +15,7 @@ from typing import Annotated, Protocol
 
 from fastapi import APIRouter, Body, Path, Query, Request
 
+from contracts.enums import RetrieverConfig
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
 from contracts.models.web import Health
@@ -27,12 +29,15 @@ from contracts.models.workflow import (
     PageQueue,
     PageQueueQuery,
     StartCaseRequest,
+    VerdictRunRequest,
+    VerdictRunRequested,
 )
 from contracts.operations import get_operation
 from workflow.adapters.telemetry import current_trace_id
 from workflow.domain.case_list import DEFAULT_CASE_LIST_LIMIT, read_case_list
 from workflow.domain.cases import (
     DEFAULT_AUDIT_TRAIL_LIMIT,
+    DEFAULT_AVAILABLE_RETRIEVER_CONFIGS,
     read_audit_trail,
     read_progress,
     start_case,
@@ -42,6 +47,7 @@ from workflow.domain.decisions import record_decision
 from workflow.domain.entities import StartParameters
 from workflow.domain.ports import CaseStore, LifecycleEngine
 from workflow.domain.queue import DEFAULT_PAGE_QUEUE_LIMIT, read_page_queue
+from workflow.domain.verdicts import request_verdict_run
 from workflow.settings import HEALTH_PATH, READY_PATH
 
 logger = logging.getLogger(__name__)
@@ -77,6 +83,10 @@ class Dependencies:
     head_revision: str
     # What a case is started with when the request leaves a field out.
     defaults: StartParameters
+    # AD-11: the ladder rows a case may run with in this build.
+    available_retriever_configs: frozenset[RetrieverConfig] = (
+        DEFAULT_AVAILABLE_RETRIEVER_CONFIGS
+    )
     # How many pages one read of a queue lists at most.
     page_queue_limit: int = DEFAULT_PAGE_QUEUE_LIMIT
     # How many events one read of a case's audit trail lists at most.
@@ -141,6 +151,7 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             store=dependencies.store,
             engine=dependencies.engine,
             defaults=dependencies.defaults,
+            available=dependencies.available_retriever_configs,
             trace_id=current_trace_id(http_request.headers.get("traceparent")),
             now=dependencies.now,
         )
@@ -182,6 +193,22 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             engine=dependencies.engine,
             trace_id=current_trace_id(request.headers.get("traceparent")),
             now=dependencies.now,
+        )
+
+    # AD-15, AD-11: one more verdict run on a case whose pages are all
+    # final, as an orchestration of its own. 409 `pages_not_terminal` while
+    # a page is not final, 409 `retriever_not_available` for a row this
+    # build cannot run. The same request again starts nothing new.
+    @router.post(get_operation("request_verdict_run").path)
+    async def request_verdict_run_route(
+        case_id: CaseIdPath, request: VerdictRunRequest
+    ) -> VerdictRunRequested:
+        return await request_verdict_run(
+            case_id,
+            request,
+            store=dependencies.store,
+            engine=dependencies.engine,
+            available=dependencies.available_retriever_configs,
         )
 
     # The cross-case queue (spine, Operations): the pages that wait in the

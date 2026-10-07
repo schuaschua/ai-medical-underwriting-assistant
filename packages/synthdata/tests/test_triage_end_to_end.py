@@ -23,6 +23,7 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     RunningService,
     ServicesBehindSidecar,
     answer_key,
@@ -78,6 +79,7 @@ def test_story_1_11_the_underwriter_accepts_and_denies_the_pages_of_the_triage_q
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
     tmp_path: Path,
 ) -> None:
     # The stand-in's runs differ on laboratory reports and identity documents
@@ -96,6 +98,7 @@ def test_story_1_11_the_underwriter_accepts_and_denies_the_pages_of_the_triage_q
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
     eval_run_id = new_id()
     started: list[str] = []

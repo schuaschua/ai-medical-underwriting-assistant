@@ -7,6 +7,7 @@ over to that loop and waits for it.
 
 import asyncio
 import concurrent.futures
+import json
 import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, NamedTuple
@@ -24,6 +25,7 @@ from contracts.enums import (
     ClassifierContender,
     Decision,
     PageStatus,
+    RetrieverConfig,
     StageStatus,
 )
 from contracts.errors import DomainError, ErrorCode
@@ -31,10 +33,12 @@ from contracts.models._stage import StageResult
 from workflow.adapters.credential import azure_credential
 from workflow.adapters.dapr import trace_headers
 from workflow.adapters.orchestration import (
+    ASKED_AFTERWARDS,
     CASE_LIFECYCLE,
     CASE_STATUS,
     CLASSIFICATION_ID,
     CLASSIFY_PAGE,
+    COMPLETE_CASE,
     CONFIDENCE,
     CONFIRM_CASE_STARTED,
     EXTRACT_FACTS,
@@ -47,11 +51,18 @@ from workflow.adapters.orchestration import (
     PAGE_STATUSES,
     REDACT_DOCUMENT,
     REFUSED,
+    RETRIEVER_CONFIG,
     ROUTE,
     ROUTE_PAGE,
+    RUN_ERROR_CODE,
+    RUN_STATUS,
+    RUN_VERDICT,
     SETTLE_CASE_AFTER_GATE,
+    VERDICT_RUN,
+    VERDICT_RUN_ID,
     activity_retry_policy,
     build_case_lifecycle,
+    build_verdict_run,
     decision_event,
     stage_retry_policy,
 )
@@ -66,8 +77,15 @@ from workflow.domain.cases import (
 from workflow.domain.entities import CaseRecord
 from workflow.domain.gate import DEFAULT_GATE_THRESHOLD, Route, is_unit_number
 from workflow.domain.lifecycle import case_started
-from workflow.domain.ports import CaseStore, EngineState, StageServices, Told
+from workflow.domain.ports import (
+    CaseStore,
+    EngineState,
+    StageServices,
+    Told,
+    VerdictRunState,
+)
 from workflow.domain.recording import RecordOutcome
+from workflow.domain.verdicts import complete_case, verdict_run_instance_id
 from workflow.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -105,12 +123,26 @@ _sdk_logger.addFilter(SdkLogFilter())
 
 # Orchestrations in these states will never run again.
 _DEAD = frozenset({OrchestrationStatus.FAILED, OrchestrationStatus.TERMINATED})
+# The states of an instance that has ended, as the scheduler names them: what
+# a verdict run scheduled again may replace.
+_ENDED_STATUSES = (
+    pb.ORCHESTRATION_STATUS_COMPLETED,
+    pb.ORCHESTRATION_STATUS_FAILED,
+    pb.ORCHESTRATION_STATUS_TERMINATED,
+)
 # How the scheduler refuses an event for an instance that is gone or has ended.
 _NOTHING_TO_TELL = frozenset(
     {grpc.StatusCode.NOT_FOUND, grpc.StatusCode.FAILED_PRECONDITION}
 )
 # Errors that the same call would meet again, however often it is repeated.
-_PERMANENT = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
+_PERMANENT = frozenset(
+    {
+        ErrorCode.NOT_FOUND,
+        ErrorCode.VALIDATION_FAILED,
+        # AD-11: a ladder row `verdict` cannot run with in this build.
+        ErrorCode.RETRIEVER_NOT_AVAILABLE,
+    }
+)
 # How a recorded stage result left the trail: written now, or there already.
 _IN_THE_TRAIL = frozenset({RecordOutcome.RECORDED, RecordOutcome.DUPLICATE})
 # What the wait for a stage call adds to the call's own deadline, so the
@@ -126,6 +158,52 @@ def _engine_state(existing: OrchestrationState | None) -> EngineState:
     if existing.runtime_status is OrchestrationStatus.COMPLETED:
         return EngineState.COMPLETED
     return EngineState.DEAD
+
+
+def _verdict_run_state(existing: OrchestrationState) -> VerdictRunState:
+    """What an asked-for verdict run's orchestration says of the run."""
+    if existing.runtime_status in _DEAD:
+        # Nothing will run it any more: it ended without a result.
+        return VerdictRunState(StageStatus.FAILED, None, ErrorCode.STAGE_FAILED)
+    if existing.runtime_status is not OrchestrationStatus.COMPLETED:
+        return VerdictRunState(StageStatus.RUNNING)
+    # The orchestration's output: how the run ended, and its id (AD-6).
+    try:
+        output = json.loads(existing.serialized_output or "null")
+    except ValueError:
+        output = None
+    run_id = output.get(VERDICT_RUN_ID) if isinstance(output, dict) else None
+    if not isinstance(run_id, str):
+        run_id = None
+    done = (
+        isinstance(output, dict)
+        and output.get(RUN_STATUS) == StageStatus.DONE.value
+        and run_id is not None
+    )
+    if done:
+        return VerdictRunState(StageStatus.DONE, run_id)
+    try:
+        error_code = ErrorCode(output.get(RUN_ERROR_CODE)) if output else None
+    except (ValueError, AttributeError):
+        # No code of the catalogue: a recording outcome, or nothing.
+        error_code = None
+    return VerdictRunState(
+        StageStatus.FAILED, run_id, error_code or ErrorCode.STAGE_FAILED
+    )
+
+
+def _ended_without_a_run(state: VerdictRunState) -> bool:
+    """Whether an asked-for run's orchestration ended and `verdict` stored no run for it.
+
+    It died, or the stage gave no answer through every retry: a fault that
+    may have passed, so the run is worth scheduling again. A refusal no
+    repeat mends (a row that is not built) is left as it ended.
+    """
+    return (
+        state.status is StageStatus.FAILED
+        and state.verdict_run_id is None
+        and state.error_code not in _PERMANENT
+    )
 
 
 class _CallDetails(NamedTuple):
@@ -271,6 +349,56 @@ class SchedulerEngine:
             )
             return Told.ENDED
         return Told.TOLD
+
+    async def ensure_verdict_run(
+        self, case: CaseRecord, retriever_config: RetrieverConfig
+    ) -> VerdictRunState:
+        """Create the orchestration of an asked-for verdict run unless there is one; say what state it is in."""
+        return await asyncio.to_thread(self._ensure_verdict_run, case, retriever_config)
+
+    def _ensure_verdict_run(
+        self, case: CaseRecord, retriever_config: RetrieverConfig
+    ) -> VerdictRunState:
+        # AD-15: one orchestration per case and configuration.
+        instance_id = verdict_run_instance_id(case.case_id, retriever_config.value)
+        existing = self._client.get_orchestration_state(
+            instance_id, fetch_payloads=True
+        )
+        # One that ended without a stored run does not hold the pair for
+        # ever: it is replaced, and the run made again.
+        again = existing is not None and _ended_without_a_run(
+            _verdict_run_state(existing)
+        )
+        if existing is None or again:
+            try:
+                self._client.schedule_new_orchestration(
+                    VERDICT_RUN,
+                    # Ids only (AD-6).
+                    input={
+                        "case_id": case.case_id,
+                        RETRIEVER_CONFIG: retriever_config.value,
+                        "eval_run_id": case.parameters.eval_run_id,
+                    },
+                    instance_id=instance_id,
+                    # As for a case: no status may be replaced, and of two
+                    # requests that arrive together the second is refused.
+                    # Only an instance that has ended is replaced, and only
+                    # when it left no run behind.
+                    reuse_id_policy=pb.OrchestrationIdReusePolicy(
+                        replaceableStatus=_ENDED_STATUSES if again else []
+                    ),
+                )
+            except grpc.RpcError as error:
+                if error.code() is not grpc.StatusCode.ALREADY_EXISTS:
+                    raise
+                existing = self._client.get_orchestration_state(
+                    instance_id, fetch_payloads=True
+                )
+            else:
+                existing = None
+            if existing is None:
+                return VerdictRunState(StageStatus.RUNNING)
+        return _verdict_run_state(existing)
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self._client.close)
@@ -454,9 +582,9 @@ class Activities:
         sends the command again. A page that is not the case's is answered
         as refused, not retried. A done result moves its page from
         `extracting` to `extracted` with its `facts.extracted` event, and in
-        that same recording the case status follows the pages: the last page
-        to become final completes the case (AD-8). A failed result fails the
-        page and the case. The answer hands nothing of the facts on: ids
+        that same recording the case status follows the pages (AD-8): with
+        its last page final the case is `running`, for its verdict runs
+        (AD-15). A failed result fails the page and the case. The answer hands nothing of the facts on: ids
         and statuses only (AD-6).
         """
         case_id = str(command["case_id"])
@@ -478,6 +606,101 @@ class Activities:
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}
         return self._stage_answer(EXTRACT_FACTS, result, outcome)
+
+    def run_verdict(
+        self, context: task.ActivityContext, command: dict[str, Any]
+    ) -> dict[str, Any]:
+        """AD-15: have `verdict` suggest a verdict for the case with one retriever row, and record the result it stored.
+
+        As for the other stages: one call to the stage, then the one
+        recording path; `in_progress`, or no answer, fails the activity and
+        the engine sends the command again. A row that is not built is
+        answered as refused, not retried. A done result is its
+        `verdict.suggested` event and changes no status; a failed one fails
+        the case (AD-8). For a run asked for on a finished case
+        (`asked_afterwards`) the result is recorded and the case stays as it
+        is. The answer hands on the run's id and how it ended, and nothing
+        of what it suggests (AD-6).
+        """
+        case_id = str(command.get("case_id"))
+        try:
+            # The configuration as the start, or the request, stored it.
+            retriever_config = RetrieverConfig(str(command.get(RETRIEVER_CONFIG)))
+        except ValueError:
+            logger.error(
+                "activity failed: activity=%s case_id=%s reason=unknown_retriever_config "
+                "retry=False",
+                RUN_VERDICT,
+                case_id,
+            )
+            return {OUTCOME: REFUSED, "reason": ErrorCode.VALIDATION_FAILED.value}
+        asked_afterwards = command.get(ASKED_AFTERWARDS) is True
+        try:
+            result = self._run(
+                RUN_VERDICT,
+                case_id,
+                self._stages.run_verdict(
+                    case_id,
+                    retriever_config,
+                    eval_run_id=command.get("eval_run_id"),
+                    # Read here, on the activity's thread, where its trace is.
+                    trace_context=trace_headers(),
+                ),
+                self._stage_timeout_seconds + _STAGE_CALL_SLACK_SECONDS,
+            )
+            outcome = self._run(
+                RUN_VERDICT,
+                case_id,
+                record_stage_result(
+                    result, store=self._store, asked_afterwards=asked_afterwards
+                ),
+            )
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        run = {
+            VERDICT_RUN_ID: result.verdict_run_id,
+            RUN_STATUS: result.status.value,
+            RUN_ERROR_CODE: result.error_code.value
+            if result.error_code is not None
+            else None,
+        }
+        if asked_afterwards:
+            if outcome in _IN_THE_TRAIL:
+                # Recorded, whatever it suggests: the case is as it was.
+                return {OUTCOME: OK, **run}
+            logger.error(
+                "stage result not recorded: activity=%s case_id=%s outcome=%s",
+                RUN_VERDICT,
+                case_id,
+                outcome.value,
+            )
+            return {OUTCOME: REFUSED, "reason": outcome.value, **run}
+        return {**self._stage_answer(RUN_VERDICT, result, outcome), **run}
+
+    def complete_case(
+        self, context: task.ActivityContext, completed: dict[str, Any]
+    ) -> dict[str, Any]:
+        """AD-15: complete the case once its verdict runs are recorded; answer with the case as it is now.
+
+        The lifecycle's last step. The store completes the case, with its
+        `case.completed` event, only if every page is final and the trail
+        holds the runs. Run again, it finds the case completed and writes
+        nothing.
+        """
+        case_id = completed.get("case_id")
+        if not isinstance(case_id, str):
+            return {OUTCOME: REFUSED, "reason": ErrorCode.VALIDATION_FAILED.value}
+        try:
+            case = self._run(
+                COMPLETE_CASE,
+                case_id,
+                complete_case(
+                    case_id, store=self._store, trace_id=current_trace_id(None)
+                ),
+            )
+        except ActivityRefused as refused:
+            return {OUTCOME: REFUSED, "reason": refused.code.value}
+        return {OUTCOME: OK, CASE_STATUS: case.case_status.value}
 
     def route_page(
         self, context: task.ActivityContext, routed: dict[str, Any]
@@ -700,11 +923,14 @@ def build_worker(
             stage_retry_policy(settings),
         )
     )
+    worker.add_orchestrator(build_verdict_run(stage_retry_policy(settings)))
     worker.add_activity(activities.confirm_case_started)
     worker.add_activity(activities.redact_document)
     worker.add_activity(activities.classify_page)
     worker.add_activity(activities.route_page)
     worker.add_activity(activities.extract_facts)
+    worker.add_activity(activities.run_verdict)
+    worker.add_activity(activities.complete_case)
     worker.add_activity(activities.settle_case_after_gate)
     worker.add_activity(activities.mark_case_failed)
     return worker

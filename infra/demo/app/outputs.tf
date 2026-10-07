@@ -73,6 +73,21 @@ output "extraction_database_role" {
   value       = local.extraction_identity.name
 }
 
+output "verdict_container_app_name" {
+  description = "Name of the verdict Container App."
+  value       = module.verdict.name
+}
+
+output "verdict_container_app_id" {
+  description = "Resource id of the verdict Container App."
+  value       = module.verdict.resource_id
+}
+
+output "verdict_database_role" {
+  description = "Name of the PostgreSQL role the verdict service signs in as; the database bootstrap creates it (infra/bootstrap/README.md, section 9)."
+  value       = local.verdict_identity.name
+}
+
 output "retrieval_container_app_name" {
   description = "Name of the retrieval Container App."
   value       = module.retrieval.name

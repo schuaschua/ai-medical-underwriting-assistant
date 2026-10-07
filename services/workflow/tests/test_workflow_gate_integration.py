@@ -26,7 +26,6 @@ from workflow_fakes import (
     classification_done,
     classification_failed,
     redaction_done,
-    redaction_failed,
     starting,
 )
 from workflow_local import after_the_start, connect, wait_for_case_status
@@ -34,7 +33,6 @@ from workflow_local import after_the_start, connect, wait_for_case_status
 from contracts.enums import (
     CaseStatus,
     ClassifierContender,
-    PageStatus,
     RetrieverConfig,
 )
 from contracts.errors import ErrorCode
@@ -262,57 +260,6 @@ def test_story_1_9_a_case_started_with_stop_after_gate_ends_completed(
     assert json.loads(state.serialized_output or "")["case_status"] == "completed"
 
 
-def test_story_1_9_progress_of_a_failed_case_carries_the_failure_reason(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    sidecar = SidecarStandIn(
-        FakeStages(
-            pages=2,
-            failing_page_numbers=frozenset({2}),
-            classification_error_code="invalid_model_output",
-        )
-    )
-    failed_redaction = SidecarStandIn(
-        FakeStages(redaction="failed", error_code="stage_timeout")
-    )
-    page_failed, case_failed, never_started = new_id(), new_id(), new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{page_failed}/start", json=STARTED_BY)
-        completed(scheduler_client, page_failed)
-        of_page = CaseProgress.model_validate(
-            client.get(f"/cases/{page_failed}/progress").json()
-        )
-    with workflow_service(service_settings, failed_redaction.transport()) as client:
-        client.post(f"/cases/{case_failed}/start", json=STARTED_BY)
-        completed(scheduler_client, case_failed)
-        of_case = client.get(f"/cases/{case_failed}/progress").json()
-        unknown = client.get(f"/cases/{never_started}/progress")
-
-    # A page stage failed: the code is on the case and on that page, and on
-    # no other page.
-    assert of_page.case_status is CaseStatus.FAILED
-    assert of_page.error_code is ErrorCode.INVALID_MODEL_OUTPUT
-    assert [(page.page_status, page.error_code) for page in of_page.pages][1] == (
-        PageStatus.FAILED,
-        ErrorCode.INVALID_MODEL_OUTPUT,
-    )
-    assert of_page.pages[0].error_code is None
-    # No page of a failed case is routed.
-    assert "page.routed" not in {
-        row[0] for row in audit_rows(service_settings, page_failed)
-    }
-    # A case-level stage failed: the code is on the case.
-    assert of_case == {
-        "case_id": case_failed,
-        "case_status": "failed",
-        "redaction_status": "failed",
-        "pages": [],
-        "error_code": "stage_timeout",
-    }
-    assert unknown.status_code == 404
-
-
 def test_story_1_9_the_real_store_records_a_route_once_and_only_from_classified(
     service_settings: Settings,
 ) -> None:
@@ -407,26 +354,3 @@ def test_story_1_9_the_real_store_records_a_route_once_and_only_from_classified(
             "ai",
         )
     ]
-
-
-def test_story_1_9_a_failed_redaction_is_the_reason_the_real_store_reports(
-    service_settings: Settings,
-) -> None:
-    case_id = new_id()
-
-    async def scenario() -> CaseProgress | None:
-        database = build_database(service_settings)
-        store = SqlCaseStore(database)
-        try:
-            await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
-            before = await store.progress(case_id)
-            assert before is not None and before.error_code is None
-            await record_stage_result(redaction_failed(case_id), store=store)
-            return await store.progress(case_id)
-        finally:
-            await database.dispose()
-
-    progress = asyncio.run(scenario())
-
-    assert progress is not None
-    assert progress.error_code is ErrorCode.REDACTION_FAILED

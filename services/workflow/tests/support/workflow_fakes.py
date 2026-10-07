@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 from durabletask import task
 
-from contracts.audit import AuditAction, AuditRecord, RouteDetail
+from contracts.audit import AuditAction, AuditRecord, RouteDetail, VerdictDetail
 from contracts.decisions import STATUSES_AWAITING_A_DECISION
 from contracts.enums import (
     CaseStatus,
@@ -25,6 +25,8 @@ from contracts.enums import (
     Decision,
     DemoRole,
     PageStatus,
+    RetrieverConfig,
+    StageStatus,
 )
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
@@ -46,7 +48,7 @@ from workflow.domain.case_list import waiting_page_count
 from workflow.domain.case_status import case_status_after_gate, case_status_following
 from workflow.domain.decisions import case_takes_decisions
 from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
-from workflow.domain.ports import EngineState, Told
+from workflow.domain.ports import EngineState, Told, VerdictRunState
 from workflow.domain.queue import queued_by
 from workflow.domain.recording import (
     Decided,
@@ -153,6 +155,35 @@ class MemoryCaseStore:
         case = self.cases.get(case_id)
         return case.case_status if case is not None else None
 
+    async def case(self, case_id: str) -> CaseRecord | None:
+        if self.fail:
+            raise StoreDown
+        return self.cases.get(case_id)
+
+    async def complete_case(
+        self, case_id: str, completed_at: datetime, trace_id: str | None
+    ) -> SettledCase | None:
+        if self.fail:
+            raise StoreDown
+        case = self.cases.get(case_id)
+        if case is None:
+            return None
+        # As the real store: each `verdict.suggested` event names its
+        # configuration, and the case needs one for each of its own.
+        recorded = {
+            recording.audit.detail.retriever_config
+            for _, recording in self.events
+            if recording.audit.case_id == case_id
+            and isinstance(recording.audit.detail, VerdictDetail)
+        }
+        return self._follow_pages(
+            case_id,
+            completed_at,
+            at_the_gate=False,
+            trace_id=trace_id,
+            verdicts_recorded=set(case.parameters.retriever_configs) <= recorded,
+        )
+
     async def record(
         self, recording: Recording, recorded_at: datetime
     ) -> RecordOutcome:
@@ -212,8 +243,8 @@ class MemoryCaseStore:
         self.cases[audit.case_id] = case
         self.events.append((recorded_at, recording))
         if recording.follows_pages:
-            # As the real store: after the result's own event, so that a
-            # completion is the trail's last event.
+            # As the real store: after the result's own event. It never
+            # completes the case: the verdict runs come first.
             self._follow_pages(
                 audit.case_id, recorded_at, at_the_gate=False, trace_id=audit.trace_id
             )
@@ -242,6 +273,7 @@ class MemoryCaseStore:
         *,
         at_the_gate: bool,
         trace_id: str | None,
+        verdicts_recorded: bool = False,
     ) -> SettledCase:
         case = self.cases[case_id]
         statuses = {
@@ -252,7 +284,9 @@ class MemoryCaseStore:
         wanted = (
             case_status_after_gate(statuses.values(), case.parameters.stop_after)
             if at_the_gate
-            else case_status_following(statuses.values())
+            else case_status_following(
+                statuses.values(), verdicts_recorded=verdicts_recorded
+            )
         )
         if wanted in CASE_TRANSITIONS[case.case_status]:
             case = replace(case, case_status=wanted)
@@ -303,7 +337,7 @@ class MemoryCaseStore:
             update={"eval_run_id": case.parameters.eval_run_id}
         )
         self.events.append((recorded_at, replace(recording, audit=stored_audit)))
-        # After the decision's event: a completion is the trail's last event.
+        # After the decision's event. It never completes the case.
         self._follow_pages(
             audit.case_id, recorded_at, at_the_gate=False, trace_id=audit.trace_id
         )
@@ -378,7 +412,10 @@ class MemoryCaseStore:
                 )
                 for number, page_id, status in pages
             ],
-            error_code=failures[0][1] if failures else None,
+            # As the real store: only a failed case has a failure reason.
+            error_code=failures[0][1]
+            if failures and case.case_status is CaseStatus.FAILED
+            else None,
         )
 
     async def audit_trail(self, case_id: str, limit: int) -> AuditTrail | None:
@@ -497,6 +534,25 @@ class FakeEngine:
     orchestration: Told = Told.TOLD
     # How often it was asked to tell a decision, reached or not.
     tell_attempts: int = 0
+    # Stories 2.5 and 2.6: the verdict runs asked for on finished cases, by
+    # case and configuration, each with the state its orchestration is in;
+    # and every request made, in order.
+    verdict_runs: dict[tuple[str, RetrieverConfig], VerdictRunState] = field(
+        default_factory=dict
+    )
+    verdict_run_requests: list[tuple[str, RetrieverConfig]] = field(
+        default_factory=list
+    )
+
+    async def ensure_verdict_run(
+        self, case: CaseRecord, retriever_config: RetrieverConfig
+    ) -> VerdictRunState:
+        key = (case.case_id, retriever_config)
+        self.verdict_run_requests.append(key)
+        if self.fail:
+            raise StoreDown
+        # One orchestration per case and configuration: a repeat finds it.
+        return self.verdict_runs.setdefault(key, VerdictRunState(StageStatus.RUNNING))
 
     async def ensure_started(self, case: CaseRecord) -> EngineState:
         self.calls.append(case.case_id)
@@ -718,7 +774,9 @@ def facts_failed(
     )
 
 
-def verdict_done(case_id: str) -> VerdictRunResult:
+def verdict_done(
+    case_id: str, retriever_config: str = "r3", **audit_changes: Any
+) -> VerdictRunResult:
     verdict_run_id = new_id()
     return VerdictRunResult.model_validate(
         {
@@ -730,10 +788,38 @@ def verdict_done(case_id: str) -> VerdictRunResult:
                 "verdict.suggested",
                 actor="verdict:chat-main",
                 ref=verdict_run_id,
+                detail={"retriever_config": retriever_config},
+                **audit_changes,
             ),
             "verdict_run_id": verdict_run_id,
-            "retriever_config": "r3",
+            "retriever_config": retriever_config,
             "verdict": "standard",
+        }
+    )
+
+
+def verdict_failed(
+    case_id: str,
+    retriever_config: str = "r3",
+    error_code: str = "invalid_model_output",
+    **audit_changes: Any,
+) -> VerdictRunResult:
+    verdict_run_id = new_id()
+    return VerdictRunResult.model_validate(
+        {
+            "case_id": case_id,
+            "status": "failed",
+            "error_code": error_code,
+            "audit": audit_record(
+                case_id,
+                "stage.failed",
+                actor="verdict:chat-main",
+                ref=verdict_run_id,
+                **audit_changes,
+            ),
+            "verdict_run_id": verdict_run_id,
+            "retriever_config": retriever_config,
+            "verdict": None,
         }
     )
 
@@ -789,6 +875,63 @@ class FakeStages:
     extract_calls: list[tuple[str, str, str | None, dict[str, str]]] = field(
         default_factory=list
     )
+    # The verdict stage (stories 2.5 and 2.6). What it does with a case and
+    # a configuration it has no run for: "done" or "failed"; or, by
+    # configuration, for some only. A run is made once per case and
+    # configuration; every repeat gets the stored result (AD-6).
+    verdict: str = "done"
+    verdict_error_code: str = "invalid_model_output"
+    failing_verdict_configs: frozenset[RetrieverConfig] = frozenset()
+    # The ladder rows the stage can run with; any other is refused.
+    built_retriever_configs: frozenset[RetrieverConfig] = frozenset(
+        {RetrieverConfig.R3}
+    )
+    # As `script`, for the next verdict commands.
+    verdict_script: list[str] = field(default_factory=list)
+    verdict_results: dict[tuple[str, str], VerdictRunResult] = field(
+        default_factory=dict
+    )
+    verdict_calls: list[tuple[str, str, str | None, dict[str, str]]] = field(
+        default_factory=list
+    )
+
+    async def run_verdict(
+        self,
+        case_id: str,
+        retriever_config: RetrieverConfig,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> VerdictRunResult:
+        self.verdict_calls.append(
+            (case_id, retriever_config.value, eval_run_id, dict(trace_context))
+        )
+        self._follow(self.verdict_script, "That case could not be found.")
+        if retriever_config not in self.built_retriever_configs:
+            # As `verdict` refuses a ladder row that is not built.
+            raise DomainError(
+                ErrorCode.RETRIEVER_NOT_AVAILABLE, "That row is not available yet."
+            )
+        key = (case_id, retriever_config.value)
+        if key not in self.verdict_results:
+            failing = (
+                retriever_config in self.failing_verdict_configs
+                if self.failing_verdict_configs
+                else self.verdict != "done"
+            )
+            self.verdict_results[key] = (
+                verdict_failed(
+                    case_id,
+                    retriever_config.value,
+                    self.verdict_error_code,
+                    eval_run_id=eval_run_id,
+                )
+                if failing
+                else verdict_done(
+                    case_id, retriever_config.value, eval_run_id=eval_run_id
+                )
+            )
+        return self.verdict_results[key]
 
     async def redact_document(
         self,
@@ -916,6 +1059,10 @@ class FakeStages:
             raise DomainError(ErrorCode.VALIDATION_FAILED, "The request is not valid.")
         if step == "not_found":
             raise DomainError(ErrorCode.NOT_FOUND, not_found_message)
+        if step == "row_not_built":
+            raise DomainError(
+                ErrorCode.RETRIEVER_NOT_AVAILABLE, "That row is not available yet."
+            )
 
 
 _REDACTION_PATH = re.compile(
@@ -923,6 +1070,7 @@ _REDACTION_PATH = re.compile(
 )
 _CLASSIFICATION_PATH = "/v1.0/invoke/classification/method/classifications"
 _EXTRACTION_PATH = "/v1.0/invoke/extraction/method/fact-sets"
+_VERDICT_PATH = "/v1.0/invoke/verdict/method/verdict-runs"
 
 
 @dataclass
@@ -968,19 +1116,40 @@ class SidecarStandIn:
         ]
         return [command for command in commands if command["case_id"] == case_id]
 
+    def verdict_commands(self, case_id: str) -> list[dict[str, Any]]:
+        """The verdict run commands sent for one case, in the order they came."""
+        commands = [
+            json.loads(request.content)
+            for request in self.requests
+            if request.url.path == _VERDICT_PATH
+        ]
+        return [command for command in commands if command["case_id"] == case_id]
+
     async def handle(self, request: httpx.Request) -> httpx.Response:
         with self._lock:
             self.requests.append(request)
         match = _REDACTION_PATH.fullmatch(request.url.path)
         classify = request.url.path == _CLASSIFICATION_PATH
         extract = request.url.path == _EXTRACTION_PATH
-        if (match is None and not classify and not extract) or request.method != "POST":
+        suggest = request.url.path == _VERDICT_PATH
+        if (
+            match is None and not classify and not extract and not suggest
+        ) or request.method != "POST":
             # As the sidecar answers for an app or a method it cannot reach.
             return httpx.Response(500, json={"errorCode": "ERR_DIRECT_INVOKE"})
         command = json.loads(request.content)
-        result: RedactionResult | ClassificationResult | FactSetResult
+        result: (
+            RedactionResult | ClassificationResult | FactSetResult | VerdictRunResult
+        )
         try:
-            if match is not None:
+            if suggest:
+                result = await self.stages.run_verdict(
+                    command["case_id"],
+                    RetrieverConfig(command["retriever_config"]),
+                    eval_run_id=command.get("eval_run_id"),
+                    trace_context=dict(request.headers),
+                )
+            elif match is not None:
                 result = await self.stages.redact_document(
                     match["case_id"],
                     eval_run_id=command.get("eval_run_id"),
@@ -1013,7 +1182,6 @@ class SidecarStandIn:
 
 # Story 2.4: what a done extraction's activity answers the orchestrator with.
 EXTRACTED = {"outcome": "ok", "case_status": "running"}
-EXTRACTION_FAILED = {"outcome": "ok", "case_status": "failed"}
 _EXTRACT_FACTS = "extract_facts"
 
 
@@ -1054,7 +1222,8 @@ def finish_extractions(
     Each is answered as done, or with what `answers` names for its page id
     (an exception there fails the task, as when every retry failed). Goes on
     for as long as answers bring new extractions. Returns None if the
-    orchestrator then still waits for something else: a person's decision.
+    orchestrator then still waits for something else: a person's decision,
+    or, once every page is final, the verdict runs (`finish_verdicts`).
     """
     while True:
         pending = pending_extractions(context)
@@ -1071,3 +1240,109 @@ def finish_extractions(
                 steps.send(asked)
             except StopIteration as done:
                 return done.value
+
+
+# Stories 2.5 and 2.6: what the activities of the lifecycle's last steps
+# answer the orchestrator with.
+CASE_COMPLETED = {"outcome": "ok", "case_status": "completed"}
+MARKED_FAILED = {"outcome": "ok", "recorded": "recorded"}
+_RUN_VERDICT = "run_verdict"
+_COMPLETE_CASE = "complete_case"
+_MARK_CASE_FAILED = "mark_case_failed"
+
+
+def suggested(verdict_run_id: str | None = None) -> dict[str, str]:
+    """What the activity of a done, recorded verdict run answers the orchestrator with."""
+    return {
+        "outcome": "ok",
+        "case_status": "running",
+        "verdict_run_id": verdict_run_id or new_id(),
+        "status": "done",
+    }
+
+
+def pending_verdict_runs(
+    context: object,
+) -> list[tuple[str, task.CompletableTask[Any]]]:
+    """The verdict runs the orchestrator asked for and has no answer to yet, as (configuration, task)."""
+    return [
+        (given["retriever_config"], asked)
+        for activity, given, asked in context.__dict__.get("activity_tasks", [])
+        if activity == _RUN_VERDICT and not asked.is_complete
+    ]
+
+
+def _last_activity(context: object) -> str | None:
+    kept = context.__dict__.get("activity_tasks", [])
+    return kept[-1][0] if kept else None
+
+
+def _resume(steps: Any, answer: object) -> tuple[bool, Any]:
+    """Hand the orchestrator one answer; whether it ended, and its result if it did."""
+    try:
+        if isinstance(answer, Exception):
+            steps.throw(answer)
+        else:
+            steps.send(answer)
+    except StopIteration as done:
+        return True, done.value
+    return False, None
+
+
+def finish_verdicts(
+    steps: Any,
+    context: object,
+    answers: Mapping[str, object] | None = None,
+    completion: object = CASE_COMPLETED,
+) -> Any:
+    """Answer the lifecycle's last steps, as the engine would; return its result.
+
+    The orchestrator stands where every page is final and it waits for its
+    verdict runs, all at once. Each run is answered as done and recorded,
+    or with what `answers` names for its configuration (an exception there
+    fails the task, as when every retry failed, and with it the wait for
+    all of them). The `complete_case` activity that follows is answered
+    with `completion`, and a `mark_case_failed` activity as recorded.
+    Returns None if the orchestrator waits for no verdict run.
+    """
+    pending = pending_verdict_runs(context)
+    if not pending:
+        return None
+    failure: Exception | None = None
+    results: list[object] = []
+    for config, asked in pending:
+        answer = (answers or {}).get(config, suggested())
+        if isinstance(answer, Exception):
+            asked.fail("failed", answer)
+            failure = failure or answer
+        else:
+            asked.complete(answer)
+        results.append(answer)
+    # The engine resumes the orchestrator with every run's answer, in the
+    # order asked, or with the failure of the first that failed.
+    ended, result = _resume(steps, failure if failure is not None else results)
+    if not ended and _last_activity(context) == _COMPLETE_CASE:
+        ended, result = _resume(steps, completion)
+    if not ended and _last_activity(context) == _MARK_CASE_FAILED:
+        ended, result = _resume(steps, MARKED_FAILED)
+    if not ended:
+        raise AssertionError("the orchestrator waited for more than its last steps")
+    return result
+
+
+def finish_lifecycle(
+    steps: Any,
+    context: object,
+    extractions: Mapping[str, object] | None = None,
+    verdicts: Mapping[str, object] | None = None,
+    completion: object = CASE_COMPLETED,
+) -> Any:
+    """Answer the extractions the orchestrator waits for, then its verdict runs and its last step.
+
+    Returns the lifecycle's result, or None if it still waits for a
+    person's decision.
+    """
+    finished = finish_extractions(steps, context, extractions)
+    if finished is not None:
+        return finished
+    return finish_verdicts(steps, context, verdicts, completion)

@@ -117,6 +117,18 @@ class ToolName(StrEnum):
     READ_RULE = "read_rule"
 
 
+class StepOutcome(StrEnum):
+    """How one tool call of the verdict agent ended (AD-15)."""
+
+    DONE = "done"
+    # The tool did not do what was asked: a rule not seen in the run, or
+    # arguments that are not valid. The run goes on.
+    REFUSED = "refused"
+    # The tool could not do its work: the service behind it gave no answer.
+    # The run ends as failed.
+    FAILED = "failed"
+
+
 class ReasonEffect(StrEnum):
     NONE = "none"
     DEBIT = "debit"

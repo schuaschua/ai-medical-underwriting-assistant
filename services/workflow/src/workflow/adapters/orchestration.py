@@ -12,7 +12,10 @@ history against other code would not match.
 
 Versioning. Story 2.4 changed what this body yields: every page that reaches
 `extracting` now gets an extraction activity, the waits and the extractions
-run side by side, and the orchestration ends only when the case is final. It
+run side by side, and the orchestration ends only when the case is final.
+Stories 2.5 and 2.6 changed it again: once every page is final it commands
+one verdict run per retriever configuration, and then completes the case by
+an activity of its own. Both times it
 was changed in place, under the same name, because nothing is deployed (the
 Azure environment is torn down while the stories are built) and the local
 emulator keeps its state in memory: no case can be waiting on the old body.
@@ -31,11 +34,10 @@ from typing import Any
 from durabletask import task
 
 from contracts.decisions import STATUSES_AWAITING_A_DECISION
-from contracts.enums import CaseStatus, PageStatus, StopAfter
+from contracts.enums import CaseStatus, PageStatus, StageStatus, StopAfter
 from workflow.domain.case_status import (
     FINAL_PAGE_STATUSES,
     case_status_after_gate,
-    case_status_following,
 )
 from workflow.domain.decisions import status_a_decision_leaves
 from workflow.domain.gate import Route, is_unit_number, route_page
@@ -48,8 +50,13 @@ REDACT_DOCUMENT = "redact_document"
 CLASSIFY_PAGE = "classify_page"
 ROUTE_PAGE = "route_page"
 EXTRACT_FACTS = "extract_facts"
+RUN_VERDICT = "run_verdict"
+COMPLETE_CASE = "complete_case"
 SETTLE_CASE_AFTER_GATE = "settle_case_after_gate"
 MARK_CASE_FAILED = "mark_case_failed"
+# AD-15: the orchestration of a verdict run asked for on a finished case.
+# Its instance id is `<case_id>:verdict:<retriever_config>`.
+VERDICT_RUN = "verdict_run"
 
 # What an activity answers with. An error that no retry can mend is an
 # answer, not a raised failure: the engine retries every failure (AD-6).
@@ -72,6 +79,18 @@ GATE_THRESHOLD = "gate_threshold"
 ROUTE = "route"
 # The status of each page, by page id, as the settle after the gate read them.
 PAGE_STATUSES = "page_statuses"
+# What a verdict run's activity hands on: the run's id at `verdict` and how
+# the run ended, `done` or `failed`. Ids and codes only (AD-6): nothing of
+# what the run suggests.
+VERDICT_RUN_ID = "verdict_run_id"
+RUN_STATUS = "status"
+# For a run that failed, or was never made: why, from the error catalogue.
+RUN_ERROR_CODE = "error_code"
+RETRIEVER_CONFIG = "retriever_config"
+RETRIEVER_CONFIGS = "retriever_configs"
+# Set on the input of a run's activity when the run was asked for on a
+# finished case: its result is recorded and changes no status.
+ASKED_AFTERWARDS = "asked_afterwards"
 
 # AD-5: the external event that tells a case of one stored decision. Its
 # payload is the decision. The name carries the status the page had for it,
@@ -97,6 +116,7 @@ def decision_event(page_id: str, awaited: PageStatus) -> str:
 
 
 CaseLifecycle = task.Orchestrator[dict[str, Any], dict[str, str]]
+VerdictRunOrchestration = task.Orchestrator[dict[str, Any], dict[str, str | None]]
 
 
 def _stop_after(started: dict[str, Any]) -> StopAfter | None:
@@ -443,8 +463,8 @@ def build_case_lifecycle(
                     # other pages wait for a person: a failed case takes no
                     # decision, so nothing would ever wake those waits.
                     return {"case_id": case_id, CASE_STATUS: FAILED}
-                # The recording moved the page to `extracted`, and the case
-                # to `completed` if it was the last page in work.
+                # The recording moved the page to `extracted`. It did not
+                # complete the case, also if this was the last page in work.
                 page_statuses[page_id] = PageStatus.EXTRACTED
             for page_id, decided in list(waiting.items()):
                 if not decided.is_complete:
@@ -458,13 +478,113 @@ def build_case_lifecycle(
                 # A kept page now waits for the underwriter; an accepted one
                 # is extracted; a discarded or denied one is final.
                 go_on(page_id, page_statuses[page_id])
-        # Every page is final. The recordings of the decisions and of the
-        # extraction results have kept the case status in step with the
-        # pages (AD-5) and completed the case; this is the same rule, on the
-        # same pages.
-        return {
-            "case_id": case_id,
-            CASE_STATUS: case_status_following(page_statuses.values()).value,
-        }
+        # Every page is final: extracted, discarded or denied. The
+        # recordings of the decisions and of the extraction results have
+        # kept the case status in step with the pages (AD-5): the case is
+        # `running`, for its verdict runs.
+        #
+        # AD-15: one verdict run per retriever configuration the case was
+        # started with, each by a command of its own, all at once, on the
+        # same facts. Ids only go in (AD-6). `workflow` sequences this;
+        # `verdict` never starts itself.
+        configs = started.get(RETRIEVER_CONFIGS)
+        suggesting: list[task.Task[dict[str, Any]]] = [
+            context.call_activity(
+                RUN_VERDICT,
+                input={**about, RETRIEVER_CONFIG: config},
+                retry_policy=stage_policy,
+            )
+            for config in (configs if isinstance(configs, list) else [])
+        ]
+        suggested: list[dict[str, Any]] | None = None
+        if suggesting:
+            try:
+                # Waits for every run, also when one of them has failed.
+                suggested = yield task.when_all(suggesting)
+            except task.TaskFailedError:
+                # Every retry of at least one run failed.
+                suggested = None
+        if suggested is None or any(
+            not isinstance(answer, dict) or answer.get(OUTCOME) != OK
+            for answer in suggested
+        ):
+            # The case names no configuration; or a run was refused (a row
+            # that is not built), never answered or could not be recorded.
+            # A case is not completed without its runs: it is marked failed.
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        if any(answer.get(CASE_STATUS) == FAILED for answer in suggested):
+            # A failed run has failed the case, in the recording of its
+            # result (AD-8).
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+
+        # Every run is recorded, and only now is the case completed: by an
+        # activity, which writes the status and `case.completed` in one
+        # transaction, and only if the trail holds the runs.
+        try:
+            completed: dict[str, Any] | None = yield context.call_activity(
+                COMPLETE_CASE, input={"case_id": case_id}, retry_policy=retry_policy
+            )
+        except task.TaskFailedError:
+            completed = None
+        if (
+            not isinstance(completed, dict)
+            or completed.get(OUTCOME) != OK
+            or completed.get(CASE_STATUS) not in _ENDED
+        ):
+            # The case could not be completed, and nothing else will move it.
+            yield context.call_activity(
+                MARK_CASE_FAILED, input=about, retry_policy=retry_policy
+            )
+            return {"case_id": case_id, CASE_STATUS: FAILED}
+        return {"case_id": case_id, CASE_STATUS: completed[CASE_STATUS]}
 
     return case_lifecycle
+
+
+def build_verdict_run(stage_policy: task.RetryPolicy) -> VerdictRunOrchestration:
+    """Build the orchestration of one verdict run asked for on a finished case (AD-15).
+
+    One activity: the stage call and the recording of its result, which
+    changes no status of the case. Its output says how the run ended and
+    names the run, and for a failed one why, for whoever asked: ids and
+    codes only (AD-6).
+    """
+
+    def verdict_run(
+        context: task.OrchestrationContext, asked: dict[str, Any]
+    ) -> Generator[task.Task[Any], Any, dict[str, str | None]]:
+        try:
+            answer: dict[str, Any] | None = yield context.call_activity(
+                RUN_VERDICT,
+                input={**asked, ASKED_AFTERWARDS: True},
+                retry_policy=stage_policy,
+            )
+        except task.TaskFailedError:
+            # Every retry failed.
+            answer = None
+        run_id = answer.get(VERDICT_RUN_ID) if isinstance(answer, dict) else None
+        # The stored run's own code; or why the activity refused; or, with
+        # no answer at all, that the stage could not be had.
+        error_code = (
+            (answer.get(RUN_ERROR_CODE) or answer.get("reason"))
+            if isinstance(answer, dict)
+            else "upstream_unavailable"
+        )
+        if (
+            not isinstance(answer, dict)
+            or answer.get(OUTCOME) != OK
+            or answer.get(RUN_STATUS) != StageStatus.DONE.value
+            or not isinstance(run_id, str)
+        ):
+            # Refused, never answered, not recorded, or a run that failed.
+            return {
+                RUN_STATUS: StageStatus.FAILED.value,
+                VERDICT_RUN_ID: run_id if isinstance(run_id, str) else None,
+                RUN_ERROR_CODE: error_code if isinstance(error_code, str) else None,
+            }
+        return {RUN_STATUS: StageStatus.DONE.value, VERDICT_RUN_ID: run_id}
+
+    return verdict_run

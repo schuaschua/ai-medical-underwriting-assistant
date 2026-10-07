@@ -1,6 +1,6 @@
 """What the cross-service tests share: the real services, wired together without Dapr.
 
-These tests run `workflow`, `intake`, `classification` and `extraction` as they really run,
+These tests run `workflow`, `intake`, `classification`, `extraction`, `retrieval` and `verdict` as they really run,
 against the containers of compose.yaml, with the stand-ins of this package
 where Azure AI Language and the Foundry chat deployment would be. Where the
 Dapr sidecars would be, a transport hands a service invocation to the app of
@@ -35,6 +35,7 @@ from classification.settings import Settings as ClassificationSettings
 from contracts.models.classification import ClassificationList
 from contracts.models.extraction import FactList
 from contracts.models.intake import PageList
+from contracts.models.verdict import AgentStepList, VerdictRunList
 from contracts.models.workflow import AuditTrail, CaseProgress
 from extraction.adapters.http.app import create_app as create_extraction
 from extraction.settings import Settings as ExtractionSettings
@@ -49,6 +50,8 @@ from synthdata.generate import RULE_TABLE_FILE
 from synthdata.language_standin import LanguageStandIn
 from synthdata.layout_standin import LayoutStandIn
 from synthdata.manual import MANUAL_FILE_NAME
+from verdict.adapters.http.app import create_app as create_verdict
+from verdict.settings import Settings as VerdictSettings
 from web.adapters.http.app import create_app as create_web
 from web.settings import Settings as WebSettings
 from workflow.adapters.http.app import create_app as create_workflow
@@ -365,17 +368,6 @@ class LocalRetrieval:
             rows = connection.execute(_ALL_CHUNKS).fetchall()
         return {row[0]: dict(zip(CHUNK_FIELDS, row, strict=True)) for row in rows}
 
-    def forget_last_run(self) -> None:
-        """Remove the note of what the index was built from, so the next run parses again."""
-        with psycopg.connect(
-            host=self.settings.database_host,
-            port=self.settings.database_port,
-            dbname=self.settings.database_name,
-            user=self.settings.database_user,
-            autocommit=True,
-        ) as connection:
-            connection.execute("DELETE FROM retrieval.ingest_run")
-
     @property
     def model_calls(self) -> int:
         """Chat and embedding calls the model stand-in has had."""
@@ -395,6 +387,72 @@ class LocalRetrieval:
         )
         with TestClient(app, raise_server_exceptions=False) as client:
             yield client
+
+
+@dataclass
+class LocalVerdict:
+    """`verdict` on a test's database, as it really runs (stories 2.5 and 2.6).
+
+    The agent runs on Microsoft Agent Framework with the model stand-in
+    behind the service's gateway. Its tools reach the real `extraction` for
+    the case's facts and the real `retrieval`, over the ingested manual, for
+    the rules. `model` is the stand-in the agent talks to: a stand-in of its
+    own, so that what the agent and the search cost is not counted with the
+    classifier's and the extraction's calls.
+    """
+
+    settings: VerdictSettings
+    model: FoundryStandIn
+    extraction: LocalExtraction
+    retrieval: LocalRetrieval
+    # The sidecar of every instance made, so a test can see what was called.
+    sidecars: list[ServicesBehindSidecar] = field(default_factory=list)
+
+    def app(self, **changes: Any) -> Any:
+        """A new instance of the service, with the real `extraction` and `retrieval` behind its sidecar."""
+        sidecar = ServicesBehindSidecar(
+            extraction=self.extraction.app(),
+            retrieval=create_retrieval(
+                self.retrieval.settings,
+                model_transport=httpx2.ASGITransport(app=self.retrieval.model.app()),
+            ),
+        )
+        self.sidecars.append(sidecar)
+        return create_verdict(
+            self.settings.model_copy(update=changes),
+            sidecar=sidecar,
+            model=httpx2.ASGITransport(app=self.model.app()),
+        )
+
+    def calls(self, app_id: str) -> list[tuple[str, str]]:
+        """Every call the service made to one other service, as method and path."""
+        return [
+            (method, path)
+            for sidecar in self.sidecars
+            for called, method, path in sidecar.calls
+            if called == app_id
+        ]
+
+    def runs(self, case_id: str) -> VerdictRunList:
+        """`GET /cases/{case_id}/verdict-runs` on the service."""
+        with TestClient(self.app()) as client:
+            return VerdictRunList.model_validate(
+                client.get(f"/cases/{case_id}/verdict-runs").json()
+            )
+
+    def steps(self, verdict_run_id: str) -> AgentStepList:
+        """`GET /verdict-runs/{verdict_run_id}/steps` on the service."""
+        with TestClient(self.app()) as client:
+            return AgentStepList.model_validate(
+                client.get(f"/verdict-runs/{verdict_run_id}/steps").json()
+            )
+
+    def case_steps(self, case_id: str, **filters: str) -> AgentStepList:
+        """`GET /cases/{case_id}/agent-steps` on the service, with its optional filters."""
+        with TestClient(self.app()) as client:
+            return AgentStepList.model_validate(
+                client.get(f"/cases/{case_id}/agent-steps", params=filters).json()
+            )
 
 
 @contextlib.contextmanager

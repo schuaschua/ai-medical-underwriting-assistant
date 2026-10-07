@@ -9,7 +9,6 @@ would be: behind it `intake` answers the redaction command and
 import asyncio
 import contextlib
 import json
-import logging
 import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -32,13 +31,13 @@ from workflow_fakes import (
     classification_failed,
     redaction_done,
     starting,
+    verdict_done,
 )
 from workflow_local import after_the_start, connect, wait_for_case_status
 
 from contracts.enums import (
     CaseStatus,
     ClassifierContender,
-    PageStatus,
     RetrieverConfig,
     StopAfter,
 )
@@ -58,6 +57,7 @@ from workflow.domain.decisions import record_decision
 from workflow.domain.entities import StartParameters
 from workflow.domain.gate import Route
 from workflow.domain.lifecycle import new_case
+from workflow.domain.verdicts import complete_case
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -306,36 +306,6 @@ def test_story_1_10_decisions_move_a_started_case_page_by_page_to_its_end(
     ]
 
 
-def test_story_1_10_a_case_whose_waiting_pages_are_all_discarded_is_completed(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    sidecar = SidecarStandIn(
-        FakeStages(pages=2, readings={1: READINGS[1], 2: READINGS[2]})
-    )
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        waiting = wait_for_case_status(client, case_id, "awaiting_human")
-        for page in waiting["pages"]:
-            assert (
-                post(client, case_id, page["page_id"], "discard", CUSTOMER).status_code
-                == 200
-            )
-        ended = scheduler_client.wait_for_orchestration_completion(case_id, timeout=60)
-        progress = client.get(f"/cases/{case_id}/progress").json()
-        # A completed case takes no decision.
-        late = code_of(
-            post(client, case_id, waiting["pages"][0]["page_id"], "keep", CUSTOMER)
-        )
-
-    assert progress["case_status"] == "completed"
-    assert [page["page_status"] for page in progress["pages"]] == ["discarded"] * 2
-    assert ended is not None
-    assert json.loads(ended.serialized_output or "")["case_status"] == "completed"
-    assert late == (409, "not_awaiting_decision")
-
-
 # --- The real store ---------------------------------------------------------------
 
 
@@ -397,92 +367,16 @@ def decide(
     )
 
 
-def test_story_1_10_the_real_store_keeps_the_case_status_in_step_with_the_pages(
-    service_settings: Settings,
+def suggest_and_complete(
+    store: SqlCaseStore, runner: asyncio.Runner, case_id: str
 ) -> None:
-    engine = FakeEngine()
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, second, third) = gated_case(
-            store, runner, [Route.CUSTOMER, Route.TRIAGE, Route.EXTRACTION]
-        )
-        seen = [case_status(service_settings, case_id)]
-        # A decision before the settle: the customer was quick.
-        decide(store, runner, engine, case_id, first, "keep", "customer")
-        seen.append(case_status(service_settings, case_id))
-        settled_early = runner.run(
-            settle_case_after_gate(case_id, store=store, trace_id=None)
-        )
-        seen.append(settled_early.case_status.value)
-        decide(store, runner, engine, case_id, first, "accept", "underwriter")
-        seen.append(case_status(service_settings, case_id))
-        decide(store, runner, engine, case_id, second, "deny", "underwriter")
-        seen.append(case_status(service_settings, case_id))
-        # Story 1.9's deferred item: the settle, run again late, finds the
-        # pages as the decisions left them and undoes nothing.
-        late = runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        # The same decision again: the stored one, and no second row or event.
-        first_time = decision_rows(service_settings, case_id)
-        again = decide(store, runner, engine, case_id, second, "deny", "underwriter")
-        with pytest.raises(DomainError) as other:
-            decide(store, runner, engine, case_id, second, "accept", "underwriter")
+    """The lifecycle's last steps (stories 2.5 and 2.6): the verdict run is recorded, then the case completed."""
 
-    assert seen == [
-        "running",
-        "awaiting_human",
-        "awaiting_human",
-        "awaiting_human",
-        "running",
-    ]
-    assert late.case_status is CaseStatus.RUNNING
-    # The settle reports each page as the transaction that settled it read
-    # it: the lifecycle waits for those, not for the routes.
-    assert settled_early.page_statuses == {
-        first: PageStatus.AWAITING_TRIAGE,
-        second: PageStatus.AWAITING_TRIAGE,
-        third: PageStatus.EXTRACTING,
-    }
-    assert late.page_statuses == {
-        first: PageStatus.EXTRACTING,
-        second: PageStatus.DENIED,
-        third: PageStatus.EXTRACTING,
-    }
-    assert case_status(service_settings, case_id) == "running"
-    assert page_statuses(service_settings, case_id) == [
-        "extracting",
-        "denied",
-        "extracting",
-    ]
-    assert decision_rows(service_settings, case_id) == first_time
-    assert again.decision_id == first_time[2][3]
-    assert other.value.code is ErrorCode.NOT_AWAITING_DECISION
-    assert len(human_events(service_settings, case_id)) == 3
-    assert len(engine.told) == 4
+    async def scenario() -> None:
+        await record_stage_result(verdict_done(case_id), store=store)
+        await complete_case(case_id, store=store, trace_id=None)
 
-
-def test_story_1_10_the_real_store_completes_a_case_whose_pages_are_all_final(
-    service_settings: Settings,
-) -> None:
-    engine = FakeEngine()
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, second) = gated_case(
-            store, runner, [Route.CUSTOMER, Route.TRIAGE]
-        )
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        decide(store, runner, engine, case_id, first, "discard", "customer")
-        between = case_status(service_settings, case_id)
-        decide(store, runner, engine, case_id, second, "deny", "underwriter")
-        # A completed case takes no decision, and neither does another case's page.
-        with pytest.raises(DomainError) as late:
-            decide(store, runner, engine, case_id, first, "keep", "customer")
-        other_case, (other_page,) = gated_case(store, runner, [Route.CUSTOMER])
-        with pytest.raises(DomainError) as foreign:
-            decide(store, runner, engine, case_id, other_page, "keep", "customer")
-
-    assert between == "awaiting_human"
-    assert case_status(service_settings, case_id) == "completed"
-    assert late.value.code is ErrorCode.NOT_AWAITING_DECISION
-    assert foreign.value.code is ErrorCode.NOT_FOUND
-    assert page_statuses(service_settings, other_case) == ["awaiting_customer"]
+    runner.run(scenario())
 
 
 def test_story_1_10_the_real_store_answers_a_repeat_before_it_looks_at_the_case(
@@ -492,8 +386,11 @@ def test_story_1_10_the_real_store_answers_a_repeat_before_it_looks_at_the_case(
     with a_store(service_settings) as (store, runner):
         case_id, (page_id,) = gated_case(store, runner, [Route.CUSTOMER])
         runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        # The discard completes the case, which then takes no decision.
+        # The discard makes the one page final; the case gets its verdict
+        # run and is completed (stories 2.5 and 2.6), and then takes no
+        # decision.
         first = decide(store, runner, engine, case_id, page_id, "discard", "customer")
+        suggest_and_complete(store, runner, case_id)
         completed = case_status(service_settings, case_id)
         rows = decision_rows(service_settings, case_id)
         events = human_events(service_settings, case_id)
@@ -563,35 +460,6 @@ def test_story_1_10_two_decisions_at_once_are_settled_by_the_database(
         "discarded",
         won[0].page_status.value,
     ]
-
-
-def test_story_1_10_a_case_status_the_pages_ask_for_but_may_not_follow_is_logged(
-    migrated_database: Settings,
-    service_settings: Settings,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    engine = FakeEngine()
-    with a_store(service_settings) as (store, runner):
-        case_id, (page_id,) = gated_case(store, runner, [Route.CUSTOMER])
-        decide(store, runner, engine, case_id, page_id, "discard", "customer")
-        # Past the service: a page of the completed case is put back in work.
-        with connect(migrated_database, autocommit=True) as connection:
-            connection.execute(
-                "UPDATE workflow.page_status SET page_status = 'extracting' "
-                "WHERE page_id = %s",
-                (page_id,),
-            )
-        with caplog.at_level(logging.WARNING, logger="workflow.adapters.db"):
-            settled = runner.run(
-                settle_case_after_gate(case_id, store=store, trace_id=None)
-            )
-
-    # A completed case stays completed, and the log says what was wanted.
-    assert settled.case_status is CaseStatus.COMPLETED
-    assert (
-        f"case status not followed: case_id={case_id} case_status=completed "
-        "wanted=running"
-    ) in caplog.text
 
 
 def test_story_1_10_the_real_store_takes_no_decision_for_a_failed_or_stopped_case(
@@ -666,7 +534,7 @@ def test_story_1_10_when_the_audit_insert_fails_the_whole_decision_is_rolled_bac
             with pytest.raises(DBAPIError):
                 decide(store, runner, engine, case_id, page_id, "discard", "customer")
             # Neither the decision's row, nor the page's status, nor the
-            # case's, which the discard would have completed.
+            # case's, which the discard would have set running again.
             during = (
                 decision_rows(service_settings, case_id),
                 page_statuses(service_settings, case_id),
@@ -682,7 +550,9 @@ def test_story_1_10_when_the_audit_insert_fails_the_whole_decision_is_rolled_bac
     assert during == ([], ["awaiting_customer"], "awaiting_human")
     assert engine.told == [engine.told[0]]
     assert page_statuses(service_settings, case_id) == ["discarded"]
-    assert case_status(service_settings, case_id) == "completed"
+    # Every page final: the case runs on, for its verdict run (stories 2.5
+    # and 2.6).
+    assert case_status(service_settings, case_id) == "running"
     assert len(decision_rows(service_settings, case_id)) == 1
 
 

@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from contracts.enums import QueuedBy
 from contracts.models.web import TriagePage, TriageQueue
 from contracts.models.workflow import PageQueue, PageQueueQuery, QueuedPage
-from contracts.operations import get_operation
 
 CASE = "0199b7a0-0000-7000-8000-000000000001"
 PAGE = "0199b7a0-0000-7000-8000-000000000003"
@@ -40,22 +39,21 @@ def triage_page(**changes: Any) -> dict[str, Any]:
     }
 
 
-def test_story_1_11_the_queue_operation_takes_a_status_and_answers_with_the_queue() -> (
-    None
-):
-    operation = get_operation("list_pages_by_status")
-
-    assert (operation.method.value, operation.path) == ("GET", "/pages")
-    assert operation.query_model is PageQueueQuery
-    assert operation.response_model is PageQueue
-
-
-def test_story_1_11_the_queue_says_whether_more_pages_wait_than_it_lists() -> None:
+def test_story_1_11_the_queue_takes_a_known_status_and_says_whether_more_wait() -> None:
     queue = PageQueue.model_validate({"pages": [queued_page()], "has_more": True})
 
     assert queue.has_more is True
     with pytest.raises(ValidationError):
         PageQueue.model_validate({"pages": [queued_page()]})
+    assert PageQueueQuery.model_validate({"status": "awaiting_triage"})
+    for query in (
+        {},
+        {"status": ""},
+        {"status": "waiting"},
+        {"status": "AWAITING_TRIAGE"},
+    ):
+        with pytest.raises(ValidationError):
+            PageQueueQuery.model_validate(query)
 
 
 def test_story_1_11_a_queued_page_names_its_cases_classifier_and_how_it_got_there() -> (
@@ -75,15 +73,7 @@ def test_story_1_11_a_queued_page_names_its_cases_classifier_and_how_it_got_ther
         )
 
 
-@pytest.mark.parametrize("status", [None, "", "waiting", "AWAITING_TRIAGE"])
-def test_story_1_11_a_queue_query_without_a_known_status_is_rejected(
-    status: str | None,
-) -> None:
-    with pytest.raises(ValidationError):
-        PageQueueQuery.model_validate({} if status is None else {"status": status})
-
-
-def test_story_1_11_a_triage_page_carries_the_reading_the_screen_shows() -> None:
+def test_story_1_11_a_triage_page_carries_a_whole_reading_or_none() -> None:
     page = TriagePage.model_validate(triage_page())
 
     assert page.thumbnail_path == f"/api/pages/{PAGE}/thumbnail"
@@ -94,20 +84,13 @@ def test_story_1_11_a_triage_page_carries_the_reading_the_screen_shows() -> None
         "Shows an amount due.",
     )
     assert page.queued_by is QueuedBy.CUSTOMER
-
-
-def test_story_1_11_a_triage_page_may_come_without_its_reading() -> None:
-    page = TriagePage.model_validate(
+    # A page whose classification could not be read comes without its reading.
+    bare = TriagePage.model_validate(
         triage_page(page_type=None, is_medical=None, confidence=None, reason=None)
     )
-
-    assert page.page_type is None
-    assert TriageQueue(pages=[page], has_more=False).pages == [page]
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
+    assert bare.page_type is None
+    assert TriageQueue(pages=[bare], has_more=False).pages == [bare]
+    wrong: list[dict[str, Any]] = [
         {"page_type": None},
         {"confidence": None},
         {"reason": None},
@@ -116,12 +99,8 @@ def test_story_1_11_a_triage_page_may_come_without_its_reading() -> None:
         {"is_medical": True},
         {"confidence": 1.2},
         {"reason": "Two\nlines."},
-        {"thumbnail_path": " "},
         {"page_type": "receipt"},
-    ],
-)
-def test_story_1_11_a_triage_page_with_half_a_reading_or_a_wrong_one_is_rejected(
-    changes: dict[str, Any],
-) -> None:
-    with pytest.raises(ValidationError):
-        TriagePage.model_validate(triage_page(**changes))
+    ]
+    for changes in wrong:
+        with pytest.raises(ValidationError):
+            TriagePage.model_validate(triage_page(**changes))

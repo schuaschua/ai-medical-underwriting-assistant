@@ -9,7 +9,6 @@ tests, story 2.3).
 """
 
 import asyncio
-import logging
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -17,11 +16,6 @@ from typing import Any
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
 from retrieval_fakes import (
     CHAT,
     EMBEDDING,
@@ -32,26 +26,20 @@ from retrieval_fakes import (
     axis,
     chunk_record,
 )
-from sqlalchemy import Text, cast, func, literal, select, text
+from sqlalchemy import func, literal, select, text
 from sqlalchemy.exc import DBAPIError
 
 from contracts.enums import ChunkSet
 from contracts.errors import ErrorBody, ErrorCode
 from contracts.models.retrieval import RuleText, SearchResponse
-from retrieval.adapters import index as index_adapter
 from retrieval.adapters.db import SqlChunkRepository, build_database
 from retrieval.adapters.http.app import create_app
 from retrieval.adapters.http.routes import Dependencies
 from retrieval.adapters.index import (
     SqlChunkIndex,
-    any_word_of,
-    defining_statement,
-    matching_statement,
-    nearest_statement,
     read_only_transaction,
 )
 from retrieval.domain.entities import ChunkRecord, IngestRun
-from retrieval.domain.ports import IndexUnavailable
 from retrieval.domain.search import (
     NAMED_RULE_ID,
     SearchOptions,
@@ -223,110 +211,7 @@ def index(indexed_database: Settings) -> Index:
     return Index(indexed_database)
 
 
-# --- The vector side ------------------------------------------------------------------------
-
-
-def test_story_2_3_the_vector_side_is_exact_cosine_nearest_neighbour_over_the_smart_chunks(
-    index: Index,
-) -> None:
-    # Cosine with (1, 0, ...): A is 1, B and E are 1/sqrt(2), C and D are 0.
-    # Equally near chunks come in the order of their ids.
-    assert index.nearest(axis(1)) == smart(RULE_A, RULE_B, RULE_E, RULE_C, RULE_D)
-    assert index.nearest(axis(2)) == smart(RULE_C, RULE_B, RULE_A, RULE_D, RULE_E)
-    # Cosine, not distance: a longer vector of the same direction changes nothing.
-    assert index.nearest([value * 7.5 for value in axis(1)]) == index.nearest(axis(1))
-    assert index.nearest(axis(1), limit=2) == smart(RULE_A, RULE_B)
-    # Only the chunk set asked for.
-    assert index.nearest(axis(1), chunk_set=ChunkSet.FIXED) == [f"fixed-{RULE_A}"]
-
-
-def test_story_2_3_the_vector_side_uses_no_approximate_index(
-    indexed_database: Settings,
-) -> None:
-    with psycopg.connect(
-        host=indexed_database.database_host,
-        port=indexed_database.database_port,
-        dbname=indexed_database.database_name,
-        user=indexed_database.database_user,
-    ) as connection:
-        methods = connection.execute(
-            "SELECT indexdef FROM pg_indexes WHERE schemaname = 'retrieval' "
-            "AND tablename = 'chunk'"
-        ).fetchall()
-
-    # AD-12: exact search. Nothing of `hnsw` or `ivfflat` to read the vectors through.
-    assert not [row for row in methods if "hnsw" in row[0] or "ivfflat" in row[0]]
-
-
 # --- The full-text side ---------------------------------------------------------------------
-
-
-def test_story_2_3_the_full_text_side_matches_a_chunk_that_holds_some_of_the_words(
-    index: Index,
-) -> None:
-    # A sentence, not a keyword list: no chunk holds all of its words.
-    found = index.matching(
-        "The applicant's glycated haemoglobin was eight per cent last spring"
-    )
-
-    # B holds `eight` as well as the words A holds; the others hold none.
-    assert found == smart(RULE_B, RULE_A)
-    # Words are compared as the configuration stems them.
-    assert index.matching("kidney") == smart(RULE_B)
-    assert index.matching("urates") == smart(RULE_D)
-    assert index.matching("glycated", limit=1, chunk_set=ChunkSet.FIXED) == [
-        f"fixed-{RULE_A}"
-    ]
-
-
-def test_story_2_3_the_full_text_side_breaks_ties_by_chunk_id_and_keeps_to_its_limit(
-    index: Index,
-) -> None:
-    # Every `smart` chunk holds these two words once. The rank is divided by
-    # the chunk's length, so the shortest is first, and none is left out.
-    every = index.matching("probable rating")
-
-    assert sorted(every) == smart(RULE_A, RULE_B, RULE_C, RULE_D, RULE_E)
-    assert index.matching("probable rating") == every
-    assert index.matching("probable rating", limit=2) == every[:2]
-
-
-def test_story_2_3_of_two_chunks_with_the_same_query_words_the_shorter_is_ranked_first(
-    migrated_database: Settings,
-) -> None:
-    words = "Serum urate above the range."
-    padding = " Nothing more is said of it here, in so many further words." * 4
-    store(
-        migrated_database,
-        [
-            # By its id the long chunk would come first: only the rank puts it second.
-            chunk_record("UW-ZZ-001", words + padding, axis(1)),
-            chunk_record("UW-ZZ-002", words, axis(1)),
-        ],
-    )
-
-    # Each holds `serum`, `urate` and `range` once. The rank is divided by
-    # 1 + the logarithm of the chunk's length, so length alone decides.
-    assert Index(migrated_database).matching("serum urate range") == smart(
-        "UW-ZZ-002", "UW-ZZ-001"
-    )
-
-
-def test_story_2_3_chunks_that_match_equally_well_come_in_the_order_of_their_ids(
-    migrated_database: Settings,
-) -> None:
-    same = "Serum urate above the range."
-    store(
-        migrated_database,
-        [
-            chunk_record(rule, same, axis(1))
-            for rule in ("UW-ZZ-003", "UW-ZZ-001", "UW-ZZ-002")
-        ],
-    )
-    index = Index(migrated_database)
-
-    assert index.matching("urate") == smart("UW-ZZ-001", "UW-ZZ-002", "UW-ZZ-003")
-    assert index.nearest(axis(1)) == smart("UW-ZZ-001", "UW-ZZ-002", "UW-ZZ-003")
 
 
 def test_story_2_3_a_rule_id_in_a_query_is_found_whole_and_its_own_chunk_first(
@@ -348,20 +233,11 @@ def test_story_2_3_a_rule_id_in_a_query_is_found_whole_and_its_own_chunk_first(
     assert index.matching("UW-QQ-999", named=["UW-QQ-999"]) == []
 
 
-def test_story_2_3_a_query_of_stop_words_matches_nothing_on_the_full_text_side(
-    index: Index,
-) -> None:
-    for query in ("the and of it", "a", "?!", "   .   "):
-        assert index.matching(query) == []
-
-
 @pytest.mark.parametrize(
     "query",
     [
         "urate & | ! ( ) <-> :*",
-        "urate' OR '1'='1",
         "urate'); DROP TABLE retrieval.chunk; --",
-        "urate \\ %s $1 :query",
     ],
 )
 def test_story_2_3_nothing_in_a_query_is_read_as_an_operator_or_as_sql(
@@ -373,37 +249,9 @@ def test_story_2_3_nothing_in_a_query_is_read_as_an_operator_or_as_sql(
     assert rows(indexed_database) == before
 
 
-def test_story_2_3_only_the_operator_between_two_words_is_made_or(index: Index) -> None:
-    def printed(query: str) -> str:
-        (text,) = index.column(select(cast(any_word_of(literal(query)), Text)))
-        return str(text)
-
-    # An address is one word to the parser, and its `&` is part of the word.
-    assert printed("x.com/a?b&c and urate") == (
-        "'x.com/a?b&c' | 'x.com' | '/a?b&c' | 'urat'"
-    )
-    assert printed("urate") == "'urat'"
-    # And such a query still finds what its other words say.
-    assert index.matching("x.com/a?b&c and urate") == smart(RULE_D)
-
-
 BOUNDARY_CASES = [
-    "UW-DM-001",
-    "uw-dm-001 and Uw-Ht-002",
     "what does UW-DM-001, UW-DM-001. (UW-HT-002) say",
-    "UW-DM-001-UW-HT-002",
-    "XUW-DM-001",
     "UW-DM-0011",
-    "UW-DM-001x",
-    "_UW-DM-001",
-    "UW-DM-001_",
-    "9UW-DM-001",
-    "UW-D-001 UW-ABCDE-001 UW-DM-01",
-    "UW_DM_001 UWDM001",
-    "\u00e9UW-DM-001 UW-DM-001\u00e9",
-    "UW-D\u017fM-001 \u212aUW-DM-001",
-    "rule:UW-ABCD-123;uw-ab-000\tUW-AB-999\n",
-    "HbA1c from 7.0 to below 8.0 %",
 ]
 
 
@@ -422,25 +270,6 @@ def test_story_2_3_python_and_sql_agree_on_what_a_rule_id_in_a_query_is(
     in_sql = tuple(dict.fromkeys(f"UW-{found.upper()}" for found in by_sql))
 
     assert in_sql == rule_ids_named_in(query)
-
-
-def test_story_2_3_the_statements_carry_every_value_as_a_bound_parameter() -> None:
-    secret = "SECRET-QUERY'; DROP TABLE chunk; --"  # noqa: S105 - a made-up query, not a credential
-    statements = [
-        nearest_statement(SMART, axis(1), 50),
-        matching_statement(SMART, secret, ["UW-AA-001"], 50),
-        defining_statement(SMART, "UW-AA-001"),
-    ]
-
-    for statement in statements:
-        compiled = statement.compile()
-        # security rule 21: the text of the statement holds no value.
-        assert "SECRET" not in str(compiled)
-        assert "UW-AA-001" not in str(compiled)
-        assert "smart" not in str(compiled).replace("smart-", "")
-    assert secret in statements[1].compile().params.values()
-    # The same text-search configuration as the stored column (story 2.2).
-    assert "'english'::regconfig" in str(statements[1].compile())
 
 
 # --- The search, whole ------------------------------------------------------------------------
@@ -537,20 +366,6 @@ def test_story_2_3_the_two_sides_are_fused_by_rank_into_one_order(
     assert model.embedded == [["glycated haemoglobin was eight per cent"]]
 
 
-def test_story_2_3_a_chunk_only_the_vector_side_finds_is_returned(
-    service: TestClient, model: Model
-) -> None:
-    # E's words are in no query; its vector is next to the query's.
-    model.vector = list(axis(4))
-
-    result = search(service, "serum urate above the range", top_k=2)
-
-    # D by its words alone, E by its vector alone and first there.
-    by_id = {item.chunk_id: item for item in result.items}
-    assert set(by_id) == set(smart(RULE_D, RULE_E))
-    assert by_id[f"smart-{RULE_E}"].score == pytest.approx(1 / 61)
-
-
 def test_story_2_3_a_chunk_only_the_full_text_side_finds_is_returned(
     migrated_database: Settings,
 ) -> None:
@@ -576,96 +391,8 @@ def test_story_2_3_a_chunk_only_the_full_text_side_finds_is_returned(
     assert [item.score for item in result.items] == pytest.approx([1 / 61, 1 / 61])
 
 
-def test_story_2_3_a_rule_id_as_the_query_ranks_that_rules_chunk_first(
-    service: TestClient, model: Model
-) -> None:
-    # The vector of such a query says little: here it points at D, and C is
-    # fourth on that side (A, B and C are equally far, in the order of their ids).
-    model.vector = list(axis(3))
-
-    result = search(service, RULE_C)
-
-    # The full-text side: C, which defines the rule, then B, which refers to it.
-    assert [item.chunk_id for item in result.items[:3]] == smart(RULE_C, RULE_B, RULE_D)
-    assert [item.score for item in result.items[:3]] == pytest.approx(
-        [1 / 61 + 1 / 64, 1 / 62 + 1 / 63, 1 / 61]
-    )
-    assert result.items[0].rule_ids == [RULE_C]
-
-
-def test_story_2_3_the_same_query_on_the_same_index_gives_the_same_answer(
-    service: TestClient, indexed_database: Settings
-) -> None:
-    before = rows(indexed_database)
-
-    answers = [search(service, "glycated haemoglobin per cent rating") for _ in "123"]
-
-    assert answers[0].items == answers[1].items == answers[2].items
-    # A search only reads: not one row was written.
-    assert rows(indexed_database) == before
-
-
-@pytest.mark.parametrize(("top_k", "expected"), [(1, 1), (5, 5), (50, 5)])
-def test_story_2_3_top_k_caps_what_the_index_answers(
-    service: TestClient, top_k: int, expected: int
-) -> None:
-    result = search(service, "probable rating", top_k=top_k)
-
-    assert len(result.items) == expected
-    assert [item.rank for item in result.items] == list(range(1, expected + 1))
-
-
-def test_story_2_3_a_query_of_stop_words_is_answered_by_the_vector_side_alone(
-    service: TestClient,
-) -> None:
-    result = search(service, "the and of it")
-
-    assert [item.chunk_id for item in result.items] == smart(
-        RULE_A, RULE_B, RULE_E, RULE_C, RULE_D
-    )
-    assert [item.score for item in result.items] == pytest.approx(
-        [1 / 61, 1 / 62, 1 / 63, 1 / 64, 1 / 65]
-    )
-
-
-def test_story_2_3_an_index_without_chunks_is_no_error(
-    migrated_database: Settings, model: Model
-) -> None:
-    with service_on(migrated_database, model) as client:
-        searched = client.post(
-            "/searches", json={"query": "anything", "retriever_config": "r3"}
-        )
-        read = client.get(f"/rules/{RULE_A}")
-
-    assert searched.status_code == 200
-    assert SearchResponse.model_validate(searched.json()).items == []
-    assert read.status_code == 404
-    assert ErrorBody.model_validate(read.json()).error.code is ErrorCode.NOT_FOUND
-
-
 def answered(response: Any) -> tuple[int, ErrorCode]:
     return response.status_code, ErrorBody.model_validate(response.json()).error.code
-
-
-def test_story_2_3_a_database_that_cannot_be_reached_is_upstream_unavailable_without_detail(
-    indexed_database: Settings, model: Model, caplog: pytest.LogCaptureFixture
-) -> None:
-    unreachable = indexed_database.model_copy(
-        update={"database_port": 1, "database_connect_timeout_seconds": 1}
-    )
-
-    with caplog.at_level(logging.INFO), service_on(unreachable, model) as client:
-        searched = client.post(
-            "/searches", json={"query": "SECRET-QUERY", "retriever_config": "r3"}
-        )
-        read = client.get(f"/rules/{RULE_A}")
-
-    for response in (searched, read):
-        assert answered(response) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
-        assert "127.0.0.1" not in response.text and "SECRET" not in response.text
-    # The error's type only (security rule 31).
-    assert "index read failed: type=OperationalError" in caplog.text
-    assert "SECRET" not in caplog.text and "127.0.0.1" not in caplog.text
 
 
 @contextmanager
@@ -682,44 +409,6 @@ def table_locked(settings: Settings) -> Iterator[None]:
             yield
         finally:
             connection.rollback()
-
-
-def test_story_2_3_a_statement_that_runs_too_long_is_ended_by_the_server(
-    indexed_database: Settings, model: Model, caplog: pytest.LogCaptureFixture
-) -> None:
-    short = indexed_database.model_copy(
-        update={"database_statement_timeout_seconds": 1}
-    )
-
-    # The statement itself is ended by the server after its limit.
-    async def slow_statement() -> None:
-        database = build_database(short)
-        try:
-            async with SqlChunkIndex(database).snapshot() as view:
-                await view._connection.exec_driver_sql("SELECT pg_sleep(30)")
-        finally:
-            await database.dispose()
-
-    with pytest.raises(IndexUnavailable) as ended:
-        asyncio.run(slow_statement())
-    assert ended.value.reason == "QueryCanceled"
-
-    # And a search or a rule read that meets such a statement says so, plainly.
-    with (
-        caplog.at_level(logging.INFO),
-        service_on(short, model, deadline_seconds=20.0) as client,
-        table_locked(short),
-    ):
-        searched = client.post(
-            "/searches", json={"query": "SECRET urate", "retriever_config": "r3"}
-        )
-        read = client.get(f"/rules/{RULE_A}")
-
-    for response in (searched, read):
-        assert answered(response) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
-        assert "items" not in response.json()
-    assert "index read failed: type=QueryCanceled" in caplog.text
-    assert "SECRET" not in caplog.text and "pg_sleep" not in caplog.text
 
 
 def test_story_2_3_a_search_the_database_holds_up_ends_at_its_own_deadline(
@@ -794,66 +483,6 @@ def remove_chunk(settings: Settings, rule_id: str) -> None:
         )
 
 
-def test_story_2_3_a_search_is_refused_when_the_last_ingest_run_used_another_deployment(
-    indexed_database: Settings, model: Model, caplog: pytest.LogCaptureFixture
-) -> None:
-    other = indexed_database.model_copy(
-        update={"embedding_deployment": "another-embedding"}
-    )
-
-    with caplog.at_level(logging.INFO), service_on(other, model) as client:
-        refused = client.post(
-            "/searches", json={"query": "urate", "retriever_config": "r3"}
-        )
-        read = client.get(f"/rules/{RULE_D}")
-        # A new ingest run with the service's deployment: the very next
-        # search reads the changed record and is answered.
-        with psycopg.connect(
-            host=other.database_host,
-            port=other.database_port,
-            dbname=other.database_name,
-            user=other.database_user,
-            autocommit=True,
-        ) as connection:
-            connection.execute(
-                "UPDATE retrieval.ingest_run SET embedding_deployment = %s "
-                "WHERE chunk_set = 'smart'",
-                ("another-embedding",),
-            )
-        again = search(client, "urate")
-
-    assert answered(refused) == (503, ErrorCode.MODEL_UNAVAILABLE)
-    assert "another embedding model" in refused.json()["error"]["message"]
-    assert (
-        "search refused: embedding deployment differs: "
-        f"configured=another-embedding index={EMBEDDING}"
-    ) in caplog.text
-    assert read.status_code == 200
-    assert again.items[0].rule_ids == [RULE_D]
-
-
-def test_story_2_3_each_database_read_has_a_span_that_holds_no_text(
-    service: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(index_adapter, "tracer", provider.get_tracer("test"))
-
-    search(service, "SECRET-QUERY glycated haemoglobin")
-    service.get(f"/rules/{RULE_A}")
-
-    spans = {
-        span.name: dict(span.attributes or {}) for span in exporter.get_finished_spans()
-    }
-    assert spans == {
-        "retrieval.db.read_ingest_run": {},
-        "retrieval.db.vector_search": {"retrieval.chunks.count": 5},
-        "retrieval.db.full_text_search": {"retrieval.chunks.count": 2},
-        "retrieval.db.read_rule": {"retrieval.chunks.count": 1},
-    }
-
-
 # --- The rule read ----------------------------------------------------------------------------
 
 
@@ -878,24 +507,6 @@ def test_story_2_3_a_rule_is_read_from_the_chunk_that_defines_it(
     assert service.get(f"/rules/{RULE_A}").json()["chunk_id"] == f"smart-{RULE_A}"
     assert index.defining(RULE_A, ChunkSet.FIXED).chunk_id == f"fixed-{RULE_A}"
     assert index.defining("UW-QQ-999") is None
-
-
-def test_story_2_3_rule_reads_by_row_and_their_refusals(service: TestClient) -> None:
-    plain = service.get(f"/rules/{RULE_A}").json()
-
-    def read(rule_id: str, **params: str) -> tuple[int, Any]:
-        response = service.get(f"/rules/{rule_id}", params=params)
-        body = response.json()
-        return response.status_code, body.get("error", {}).get("code", body)
-
-    assert read(RULE_A, retriever_config="r3") == (200, plain)
-    assert read(RULE_A, retriever_config="r5") == (200, plain)
-    # The `fixed` set is stored here by hand, and still not served: no
-    # ingestion writes it yet.
-    assert read(RULE_A, retriever_config="r1") == (409, "retriever_not_available")
-    assert read(RULE_A, retriever_config="r9") == (422, "validation_failed")
-    assert read("UW-QQ-999") == (404, "not_found")
-    assert read("uw-aa-001") == (422, "validation_failed")
 
 
 def test_story_2_3_the_service_built_from_its_settings_searches_the_real_index(

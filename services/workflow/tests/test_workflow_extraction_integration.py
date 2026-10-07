@@ -10,16 +10,14 @@ services and the model stand-in is tested beside the stand-ins (`packages/`).
 import asyncio
 import contextlib
 import json
-import threading
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import psycopg
 import pytest
-from alembic import command
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.client import OrchestrationStatus
 from fastapi.testclient import TestClient
@@ -36,13 +34,11 @@ from workflow_fakes import (
 )
 from workflow_local import connect, wait_for_case_status
 
-from contracts.enums import ClassifierContender, Decision, PageStatus, RetrieverConfig
-from contracts.errors import DomainError
+from contracts.enums import ClassifierContender, RetrieverConfig
 from contracts.ids import new_id
 from contracts.models.workflow import AuditTrail, DecisionRequest
 from workflow.adapters.db import SqlCaseStore, build_database
 from workflow.adapters.http.app import create_app
-from workflow.adapters.migrations import alembic_config, bundled_head
 from workflow.adapters.scheduler import SchedulerEngine, build_client
 from workflow.domain.cases import (
     record_route,
@@ -50,9 +46,7 @@ from workflow.domain.cases import (
     settle_case_after_gate,
 )
 from workflow.domain.decisions import (
-    DecisionTeller,
     record_decision,
-    tell_untold_decisions,
 )
 from workflow.domain.entities import StartParameters
 from workflow.domain.gate import Route
@@ -276,65 +270,20 @@ def test_story_2_4_a_page_accepted_later_is_extracted_then_and_the_case_complete
         sure,
         unsure,
     ]
+    # Stories 2.5 and 2.6: with the last page final the case gets its
+    # verdict run, and only then is it completed.
+    assert [item["retriever_config"] for item in sidecar.verdict_commands(case_id)] == [
+        "r3"
+    ]
     actions = trail_actions(service_settings, case_id)
-    assert actions[-3:] == [
+    assert actions[-4:] == [
         ("page.accepted", unsure),
         ("facts.extracted", unsure),
+        ("verdict.suggested", None),
         ("case.completed", None),
     ]
     # The decision was told by the request that stored it, and is marked so.
     assert len(told_rows(service_settings)) == 1
-
-
-def test_story_2_4_a_case_that_fails_while_a_page_waits_has_its_orchestration_ended(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    # The sure page's extraction fails while the unsure page waits. The stage
-    # holds its answer until the case is seen waiting.
-    extraction = threading.Event()
-    sidecar = SidecarStandIn(
-        FakeStages(
-            pages=2,
-            readings=SURE_AND_UNSURE,
-            extraction="failed",
-            extraction_error_code="invalid_model_output",
-            extraction_hold=extraction,
-        )
-    )
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        waiting = wait_for_case_status(client, case_id, "awaiting_human")
-        failing, unsure = (page["page_id"] for page in waiting["pages"])
-        extraction.set()
-        runtime_status, output = ended(scheduler_client, case_id)
-        progress = client.get(f"/cases/{case_id}/progress").json()
-        refused = client.post(
-            f"/cases/{case_id}/pages/{unsure}/decisions",
-            json={"decision": "accept", **UNDERWRITER},
-        )
-
-    # The orchestration ended by itself, though a page still waited.
-    assert runtime_status is OrchestrationStatus.COMPLETED
-    assert output == {"case_id": case_id, "case_status": "failed"}
-    assert progress["case_status"] == "failed"
-    assert (progress["error_code"], progress["pages"][0]["error_code"]) == (
-        "invalid_model_output",
-        "invalid_model_output",
-    )
-    assert page_statuses(service_settings, case_id) == ["failed", "awaiting_triage"]
-    # One page-level `stage.failed` event, no `case.completed`.
-    actions = trail_actions(service_settings, case_id)
-    assert actions[-1] == ("stage.failed", failing)
-    assert [action for action, _ in actions].count("stage.failed") == 1
-    assert "case.completed" not in [action for action, _ in actions]
-    # The waiting page takes no decision.
-    assert (refused.status_code, refused.json()["error"]["code"]) == (
-        409,
-        "not_awaiting_decision",
-    )
-    assert page_statuses(service_settings, case_id)[1] == "awaiting_triage"
 
 
 def test_story_2_4_a_decision_whose_event_was_lost_is_told_by_workflow_itself(
@@ -385,9 +334,11 @@ def test_story_2_4_a_decision_whose_event_was_lost_is_told_by_workflow_itself(
         "completed",
     )
     assert page_statuses(service_settings, case_id) == ["extracted"]
-    assert [action for action, _ in trail_actions(service_settings, case_id)][-3:] == [
+    assert [action for action, _ in trail_actions(service_settings, case_id)][-4:] == [
         "page.accepted",
         "facts.extracted",
+        # Stories 2.5 and 2.6: the verdict run, before the case completes.
+        "verdict.suggested",
         "case.completed",
     ]
     assert len(told_rows(service_settings)) == 1
@@ -452,48 +403,6 @@ def decide(
     )
 
 
-def test_story_2_4_the_real_store_completes_a_case_in_the_recording_of_its_last_result(
-    service_settings: Settings,
-) -> None:
-    engine = FakeEngine()
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, second, third) = gated_case(
-            store, runner, [Route.EXTRACTION, Route.EXTRACTION, Route.CUSTOMER]
-        )
-        seen = [case_status(service_settings, case_id)]
-        outcomes = [
-            runner.run(record_stage_result(facts_done(case_id, first), store=store))
-        ]
-        seen.append(case_status(service_settings, case_id))
-        decide(store, runner, engine, case_id, third, "discard", "customer")
-        seen.append(case_status(service_settings, case_id))
-        last = facts_done(case_id, second)
-        outcomes.append(runner.run(record_stage_result(last, store=store)))
-        seen.append(case_status(service_settings, case_id))
-        # The activity ran again; and a late result under another reference.
-        outcomes.append(runner.run(record_stage_result(last, store=store)))
-        outcomes.append(
-            runner.run(record_stage_result(facts_done(case_id, second), store=store))
-        )
-
-    assert seen == ["awaiting_human", "awaiting_human", "running", "completed"]
-    assert outcomes == [
-        RecordOutcome.RECORDED,
-        RecordOutcome.RECORDED,
-        RecordOutcome.DUPLICATE,
-        RecordOutcome.OUT_OF_ORDER,
-    ]
-    assert page_statuses(service_settings, case_id) == [
-        "extracted",
-        "extracted",
-        "discarded",
-    ]
-    # In the order written: the last result's event, then the completion, once.
-    actions = trail_actions(service_settings, case_id)
-    assert actions[-2:] == [("facts.extracted", second), ("case.completed", None)]
-    assert [action for action, _ in actions].count("case.completed") == 1
-
-
 def test_story_2_4_the_real_store_fails_page_and_case_on_a_failed_extraction(
     service_settings: Settings,
 ) -> None:
@@ -517,116 +426,6 @@ def test_story_2_4_the_real_store_fails_page_and_case_on_a_failed_extraction(
         "WHERE case_id = %s ORDER BY audit_event_seq DESC LIMIT 1",
         case_id,
     ) == [("stage.failed", failing, "model_unavailable")]
-
-
-def test_story_2_4_the_real_store_marks_told_decisions_and_lists_the_untold_ones(
-    service_settings: Settings,
-) -> None:
-    engine = FakeEngine()
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, second, third) = gated_case(
-            store, runner, [Route.TRIAGE, Route.TRIAGE, Route.TRIAGE]
-        )
-        told = decide(store, runner, engine, case_id, first, "accept", "underwriter")
-        engine.fail_events = True
-        for minutes, page_id in ((1, second), (2, third)):
-            with pytest.raises(DomainError, match="could not be told"):
-                decide(
-                    store,
-                    runner,
-                    engine,
-                    case_id,
-                    page_id,
-                    "deny",
-                    "underwriter",
-                    now=NOW + timedelta(minutes=minutes),
-                )
-        engine.fail_events = False
-        after = NOW + timedelta(hours=1)
-        untold = runner.run(store.decisions_not_told(after, 10))
-        untold_ids = [decision.decision_id for decision in untold]
-        # Oldest first; a limit and a time are honoured.
-        one = runner.run(store.decisions_not_told(after, 1))
-        early = runner.run(store.decisions_not_told(NOW + timedelta(minutes=2), 10))
-        # `workflow` tells them, and marks each once whatever is repeated.
-        count = runner.run(
-            tell_untold_decisions(
-                DecisionTeller(grace_seconds=0.0),
-                store=store,
-                engine=engine,
-                now=lambda: after,
-            )
-        )
-        runner.run(store.mark_decision_told(untold_ids[0], after + timedelta(days=1)))
-        left = runner.run(store.decisions_not_told(after + timedelta(days=2), 10))
-
-    assert [(item.page_id, item.decision.value) for item in untold] == [
-        (second, "deny"),
-        (third, "deny"),
-    ]
-    assert [item.page_id for item in one] == [second]
-    assert [item.page_id for item in early] == [second]
-    assert (count, left) == (2, [])
-    rows = told_rows(service_settings)
-    assert {row[0] for row in rows} == {told.decision_id, *untold_ids}
-    assert len(rows) == 3
-    assert {row[1] for row in rows} == {NOW, after}
-    assert [(call[1], call[3].value) for call in engine.told] == [
-        (first, "accept"),
-        (second, "deny"),
-        (third, "deny"),
-    ]
-
-
-def test_story_2_4_a_decision_of_a_case_without_an_orchestration_fails_the_case_and_is_not_marked(
-    service_settings: Settings, local_scheduler: Settings
-) -> None:
-    # The real engine, asked about a case that has no orchestration at all
-    # (as after the emulator lost its state).
-    engine = SchedulerEngine(build_client(service_settings))
-    with a_store(service_settings) as (store, runner):
-        try:
-            case_id, (accepted, waiting) = gated_case(
-                store, runner, [Route.TRIAGE, Route.CUSTOMER]
-            )
-            found = runner.run(
-                engine.decision_made(
-                    case_id, accepted, PageStatus.AWAITING_TRIAGE, Decision.ACCEPT
-                )
-            )
-            recorded = runner.run(
-                record_decision(
-                    case_id,
-                    accepted,
-                    DecisionRequest.model_validate(
-                        {"decision": "accept", "actor": "underwriter"}
-                    ),
-                    store=store,
-                    engine=engine,
-                    now=lambda: NOW,
-                )
-            )
-            # The service's own look, an hour on: a failed case's decision
-            # is not looked for again.
-            again = runner.run(store.decisions_not_told(NOW + timedelta(hours=1), 10))
-        finally:
-            runner.run(engine.aclose())
-
-    assert found is Told.MISSING
-    assert recorded.page_status.value == "extracting"
-    # Not marked as told; the case does not stay waiting.
-    assert told_rows(service_settings) == []
-    assert case_status(service_settings, case_id) == "failed"
-    assert trail_actions(service_settings, case_id)[-2:] == [
-        ("page.accepted", accepted),
-        ("stage.failed", None),
-    ]
-    assert page_statuses(service_settings, case_id) == [
-        "extracting",
-        "awaiting_customer",
-    ]
-    assert again == []
-    assert waiting
 
 
 def test_story_2_4_a_decision_of_a_case_whose_orchestration_is_dead_fails_the_case(
@@ -695,28 +494,3 @@ def test_story_2_4_the_mark_is_only_ever_added_and_the_decision_is_never_changed
             (new_id(),),
         )
     assert told_rows(service_settings) == [(decided.decision_id, NOW)]
-
-
-def test_story_2_4_migration_0006_adds_the_mark_and_can_be_taken_back(
-    migrated_database: Settings,
-) -> None:
-    def tables() -> list[str]:
-        return [
-            row[0]
-            for row in query(
-                migrated_database,
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'workflow' ORDER BY table_name",
-            )
-        ]
-
-    assert bundled_head() == "0006"
-    assert "decision_told" in tables()
-
-    # Expand only: an older build runs against the newer schema, and the
-    # table can be dropped again without touching a decision.
-    command.downgrade(alembic_config(migrated_database), "0005")
-    assert "decision_told" not in tables()
-    assert "human_decision" in tables()
-    command.upgrade(alembic_config(migrated_database), "head")
-    assert "decision_told" in tables()

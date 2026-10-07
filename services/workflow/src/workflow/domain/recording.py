@@ -93,9 +93,9 @@ class Recording:
     decision: PageDecision | None = None
     # Set for a done page stage result: once it is written, the store gives
     # the case the status its pages then give it (`domain/case_status.py`),
-    # in the same transaction. That is how the last page reaching a final
-    # status completes the case, with its `case.completed` event. A
-    # recording never names `completed` itself.
+    # in the same transaction. That never completes the case: with its
+    # last page final the case is `running`, for its verdict runs (AD-15).
+    # A recording never names `completed` itself.
     follows_pages: bool = False
 
 
@@ -108,19 +108,29 @@ _PAGE_STATUS_WHEN_DONE: Mapping[AuditAction, PageStatus] = MappingProxyType(
 )
 
 
-def plan_recording(result: StageResult) -> Recording:
+def plan_recording(result: StageResult, *, asked_afterwards: bool = False) -> Recording:
     """Work out what a stage result changes; the result's audit record reports it.
 
     A failed result fails the case, and its page if it names one. A done
     redaction starts the tracking of its pages; a done classification or
     extraction moves its page on, and the case status then follows the
-    pages. Nothing here routes a page: the gate is a rule of its own (AD-7).
+    pages. A done verdict run changes no status: it is its
+    `verdict.suggested` event and nothing more, and the case is completed by
+    a step of its own once every run is recorded (AD-15). Nothing here
+    routes a page: the gate is a rule of its own (AD-7).
+
+    `asked_afterwards` is for a verdict run someone asked for on a case
+    that was finished already: whatever its result, the case stays as it
+    is. A failed one is its `stage.failed` event, with its code, and
+    changes no status.
     """
     audit = result.audit
     # A page stage's record is about that stage's page; a case-level stage's
     # record names no page. Anything else would move the wrong page.
     if audit.page_id != getattr(result, "page_id", None):
         raise DomainError(ErrorCode.VALIDATION_FAILED, WRONG_PAGE_MESSAGE)
+    if asked_afterwards:
+        return Recording(audit=audit, error_code=result.error_code)
     if result.status is StageStatus.FAILED:
         return Recording(
             audit=audit,

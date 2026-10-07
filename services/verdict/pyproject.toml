@@ -1,0 +1,38 @@
+[project]
+name = "verdict"
+version = "0.1.0"
+description = "The verdict service: an agent with three tools proposes cited reasons, and domain code decides the suggested verdict (spine AD-15, AD-10, AD-16)"
+requires-python = "==3.13.*"
+dependencies = [
+    "contracts",
+    # AD-15: the verdict agent is built with Microsoft Agent Framework. Its
+    # chat client is given the one OpenAI client the model gateway builds.
+    "agent-framework-core==1.20.0",
+    "agent-framework-openai==1.15.0",
+    # Migrations run from the pipeline; the service reads the bundled head at readiness.
+    "alembic==1.20.0",
+    # Entra sign-in for PostgreSQL, the Foundry model deployment and telemetry.
+    "azure-identity==1.26.0",
+    "azure-monitor-opentelemetry==1.8.10",
+    "fastapi==0.142.2",
+    # AD-3: facts are read from `extraction` and rules from `retrieval`
+    # through the Dapr sidecar over HTTP.
+    "httpx==0.28.1",
+    # The HTTP library of the model client: the gateway builds its client
+    # with it, so that no redirect is followed and no proxy setting applies.
+    "httpx2==2.13.1",
+    # AD-16: the shared chat deployment, called from the one gateway module.
+    "openai==3.24.0",
+    "psycopg[binary]==3.3.6",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "sqlalchemy[asyncio]==2.1.3",
+    "uvicorn==0.54.0",
+]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+[build-system]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"

@@ -311,6 +311,8 @@ export const strings = {
       awaiting_customer: "the customer, to keep or discard",
       awaiting_triage: "the underwriter's triage queue",
     } satisfies Record<RouteDetail["route"], string>,
+    // Stories 2.5 and 2.6: which retrieval row a suggested verdict was made with.
+    suggestedWith: (row: string) => `Made with retrieval row ${row}.`,
     failedBecause: (reason: string) => `Reason: ${reason}`,
     noReason: "No reason was recorded.",
     // Why a step failed, in plain words, for every code of the catalogue.
@@ -333,6 +335,7 @@ export const strings = {
       not_awaiting_decision: "The page was not waiting for that decision.",
       pages_not_terminal: "Some pages were not finished yet.",
       rule_not_seen: "A rule was asked for that had not been found first.",
+      step_limit: "The limit on the agent's steps was reached.",
       retriever_not_available:
         "The way of searching the manual that was asked for is not available yet.",
       stage_timeout: "The step took too long and was stopped.",

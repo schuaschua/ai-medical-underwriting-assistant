@@ -345,6 +345,14 @@ class Gap(ContractModel):
     meaning: OneLine
 
 
+# The two ways a definition says when its rule applies. The model stand-in
+# reads them back (`verdict_standin`), so the wording is kept in one place.
+APPLIES_ON_FILE = "Applies only to an applicant with {name} on file"
+APPLIES_TO_ANY = "Applies to any applicant with this reading"
+APPLIES_UNLESS = ", unless {names} is on file"
+NOT_ON_A_READING = ": a reading alone does not meet this rule"
+
+
 class Applicability(ContractModel):
     """What must be true of an applicant for an impairment's rules to apply."""
 

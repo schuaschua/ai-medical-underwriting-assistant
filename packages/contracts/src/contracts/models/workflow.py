@@ -24,7 +24,7 @@ from contracts.enums import (
     StopAfter,
 )
 from contracts.errors import ErrorCode
-from contracts.ids import CaseId, DecisionId, EvalRunId, PageId
+from contracts.ids import CaseId, DecisionId, EvalRunId, PageId, VerdictRunId
 
 RetrieverConfigs = Annotated[list[RetrieverConfig], Field(min_length=1)]
 
@@ -119,11 +119,30 @@ class VerdictRunRequest(ContractModel):
 
 
 class VerdictRunRequested(ContractModel):
-    """The requested run's state; the run itself is read from `verdict`."""
+    """The requested run's state; the run itself is read from `verdict`.
+
+    `running` while the run is under way, then `done` or `failed`.
+    """
 
     case_id: CaseId
     retriever_config: RetrieverConfig
     status: StageStatus
+    # The run's id at `verdict`, once the run has ended and `workflow` has
+    # its result. Null while it runs, and for a run that was refused before
+    # it began.
+    verdict_run_id: VerdictRunId | None
+    # Set when, and only when, the run failed: why, from the error catalogue.
+    error_code: ErrorCode | None = None
+
+    @model_validator(mode="after")
+    def _a_running_run_has_no_id_yet(self) -> Self:
+        if (self.status is StageStatus.FAILED) != (self.error_code is not None):
+            raise ValueError("error_code is set when, and only when, status is failed")
+        if self.status is StageStatus.RUNNING and self.verdict_run_id is not None:
+            raise ValueError("verdict_run_id is null while the run is running")
+        if self.status is StageStatus.DONE and self.verdict_run_id is None:
+            raise ValueError("a done run names its verdict_run_id")
+        return self
 
 
 class PageProgress(ContractModel):

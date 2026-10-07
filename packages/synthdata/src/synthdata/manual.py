@@ -13,6 +13,10 @@ from functools import cache
 import pymupdf
 
 from synthdata.manual_model import (
+    APPLIES_ON_FILE,
+    APPLIES_TO_ANY,
+    APPLIES_UNLESS,
+    NOT_ON_A_READING,
     ImpairmentSpec,
     ManualSpec,
     Measure,
@@ -343,11 +347,37 @@ def source_words(rule: RuleSpec, own: Sequence[Decimal]) -> str:
     )
 
 
+def applicability_words(spec: ManualSpec, impairment: ImpairmentSpec) -> str:
+    """The one sentence of a definition that says when the impairment's rules apply.
+
+    A definition is read on its own, as a search returns it: without this
+    sentence a healthy reading would lie inside the band of an impairment
+    that needs a diagnosis.
+    """
+    names = {item.impairment_id: item.name for item in spec.impairments}
+    unless = (
+        APPLIES_UNLESS.format(
+            names=" or ".join(names[other] for other in impairment.applies.not_with)
+        )
+        if impairment.applies.not_with
+        else ""
+    )
+    if impairment.applies.basis == "diagnosis":
+        return (
+            APPLIES_ON_FILE.format(name=impairment.name)
+            + unless
+            + NOT_ON_A_READING
+            + "."
+        )
+    return APPLIES_TO_ANY + unless + "."
+
+
 def definition_words(spec: ManualSpec, rule: RuleSpec, section: str) -> str:
     """The one paragraph that defines `rule`: complete without the rest of the section."""
     impairment = spec.impairment_of(rule.rule_id)
     parts = [
         f"Rule {rule.rule_id}: {impairment.name} (section {section}.4).",
+        applicability_words(spec, impairment),
         f"Threshold: {rule.threshold.words}.",
         f"Probable rating: {rule.rating_words}.",
     ]

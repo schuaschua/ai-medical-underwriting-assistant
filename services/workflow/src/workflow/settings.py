@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     default_retriever_configs: Annotated[list[RetrieverConfig], Field(min_length=1)] = [
         RetrieverConfig.R3
     ]
+    # AD-11: the ladder rows a case may run with in this build: the ones
+    # `verdict` and `retrieval` can answer (VERDICT_* and RETRIEVAL_* hold the
+    # same list for now: `r3`). A start, or a request for one more verdict
+    # run, that names another row is refused with `retriever_not_available`
+    # at once, not after every stage and decision.
+    available_retriever_configs: Annotated[
+        list[RetrieverConfig], Field(min_length=1)
+    ] = [RetrieverConfig.R3]
 
     # AD-7: the gate's threshold. A page classified with this confidence or
     # more is sent on by its label; one below it goes to triage. It is used
@@ -192,6 +200,11 @@ class Settings(BaseSettings):
         configs = self.default_retriever_configs
         if len(set(configs)) != len(configs):
             raise ValueError("default_retriever_configs must not repeat a value")
+        if not set(configs) <= set(self.available_retriever_configs):
+            raise ValueError(
+                "WORKFLOW_DEFAULT_RETRIEVER_CONFIGS must be among "
+                "WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS"
+            )
         if self.worker_max_concurrent_activities > self.database_pool_size:
             raise ValueError(
                 "WORKFLOW_WORKER_MAX_CONCURRENT_ACTIVITIES must not be larger "

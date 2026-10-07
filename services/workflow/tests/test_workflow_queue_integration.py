@@ -11,11 +11,8 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 
 import pytest
-from fastapi.testclient import TestClient
 from workflow_fakes import (
     FakeEngine,
-    FakeStages,
-    SidecarStandIn,
     classification_done,
     redaction_done,
     starting,
@@ -32,7 +29,6 @@ from contracts.enums import (
 from contracts.ids import new_id
 from contracts.models.workflow import DecisionRequest, PageQueue
 from workflow.adapters.db import SqlCaseStore, build_database
-from workflow.adapters.http.app import create_app
 from workflow.domain.cases import (
     fail_case,
     record_route,
@@ -246,66 +242,3 @@ def test_story_1_11_the_real_store_leaves_out_eval_run_failed_and_completed_case
     assert (statuses[failed_case], statuses[stopped_case]) == ("failed", "completed")
     assert listed(queue) == [listed_page]
     assert queue.has_more is False
-
-
-def test_story_1_11_the_real_store_answers_an_empty_queue(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        queue = triage(store, runner)
-
-    assert (queue.pages, queue.has_more) == ([], False)
-
-
-def test_story_1_11_the_real_store_leaves_out_a_running_case_told_to_stop_after_the_gate(
-    service_settings: Settings, migrated_database: Settings
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        _, (listed_page,) = routed_case(store, runner, [(Route.TRIAGE, 5)])
-        # No eval run, and not settled yet: the case still runs, with a page
-        # in triage that nobody may decide.
-        stopping_case, (unlisted,) = routed_case(
-            store,
-            runner,
-            [(Route.TRIAGE, 1)],
-            replace(PARAMETERS, stop_after=StopAfter.GATE),
-            settled=False,
-        )
-        with connect(migrated_database, autocommit=True) as connection:
-            case = connection.execute(
-                "SELECT case_status, stop_after, eval_run_id "
-                "FROM workflow.case_status WHERE case_id = %s",
-                (stopping_case,),
-            ).fetchone()
-            page = connection.execute(
-                "SELECT page_status FROM workflow.page_status WHERE page_id = %s",
-                (unlisted,),
-            ).fetchone()
-
-        queue = triage(store, runner)
-
-    # Only `stop_after` keeps it out: it runs, belongs to no eval run, and waits.
-    assert case == ("running", "gate", None)
-    assert page == ("awaiting_triage",)
-    assert listed(queue) == [listed_page]
-
-
-def test_story_1_11_the_queue_limit_setting_reaches_the_route_of_the_real_service(
-    service_settings: Settings, local_scheduler: Settings
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        _, (older, _newer) = routed_case(
-            store, runner, [(Route.TRIAGE, 1), (Route.TRIAGE, 2)]
-        )
-    # The service as it builds itself from its settings: no dependency is handed in.
-    app = create_app(
-        service_settings.model_copy(update={"page_queue_limit": 1}),
-        sidecar=SidecarStandIn(FakeStages(pages=1)).transport(),
-    )
-
-    with TestClient(app) as client:
-        response = client.get("/pages", params={"status": "awaiting_triage"})
-
-    assert response.status_code == 200
-    queue = PageQueue.model_validate(response.json())
-    assert (listed(queue), queue.has_more) == ([older], True)

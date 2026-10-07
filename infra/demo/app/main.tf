@@ -218,6 +218,47 @@ resource "time_sleep" "extraction_role_propagation" {
   }
 }
 
+# The verdict identity holds these roles and no others (azure.md, "Runtime
+# roles"). It reads facts from extraction and rules from retrieval through
+# Dapr, so it holds no role on storage or on a search service. Its PostgreSQL
+# role is not an Azure role: the database bootstrap creates it
+# (infra/bootstrap/README.md, section 9).
+resource "azurerm_role_assignment" "verdict_acr_pull" {
+  scope                = local.foundation.container_registry_id
+  role_definition_name = "AcrPull"
+  principal_id         = local.verdict_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "verdict_metrics_publisher" {
+  scope                = local.foundation.application_insights_id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = local.verdict_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Scoped to the Foundry project, not to the account (azure.md rule 9): the
+# agent runs on the shared chat deployment with the service's own identity
+# (spine AD-16). There is no key.
+resource "azurerm_role_assignment" "verdict_foundry_user" {
+  scope                = local.foundation.foundry_project_id
+  role_definition_name = "Foundry User"
+  principal_id         = local.verdict_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# As for intake: verdict waits for all of its own role assignments, so its
+# first revision can pull its image, call the model and send telemetry.
+resource "time_sleep" "verdict_role_propagation" {
+  create_duration = var.role_propagation_wait
+
+  triggers = {
+    acr_pull_id          = azurerm_role_assignment.verdict_acr_pull.id
+    metrics_publisher_id = azurerm_role_assignment.verdict_metrics_publisher.id
+    foundry_user_id      = azurerm_role_assignment.verdict_foundry_user.id
+  }
+}
+
 # The retrieval identity holds these roles and no others (azure.md, "Runtime
 # roles"); the service and its ingestion job share it (spine AD-12). Its
 # PostgreSQL role is not an Azure role: the database bootstrap creates it
@@ -782,7 +823,7 @@ module "classification" {
 
 # Internal ingress only (spine AD-18): reachable from inside the environment,
 # and called only through Dapr service invocation (AD-3), by workflow (the
-# extract command) and, later, by web and verdict (reads). It reads each
+# extract command), by verdict (reads) and, later, by web. It reads each
 # page's text from intake through its own sidecar, and is held at exactly one
 # replica.
 module "extraction" {
@@ -904,6 +945,116 @@ module "extraction" {
   # and Azure has to have spread them.
   depends_on = [
     time_sleep.extraction_role_propagation,
+  ]
+}
+
+# --- verdict ---------------------------------------------------------------------
+
+# Internal ingress only (spine AD-18): reachable from inside the environment,
+# and called only through Dapr service invocation (AD-3), by workflow (the
+# verdict run command) and, later, by web (reads). It reads the case's facts
+# from extraction, and searches and reads the manual's rules at retrieval,
+# through its own sidecar, and is held at exactly one replica.
+module "verdict" {
+  source  = "Azure/avm-res-app-containerapp/azurerm"
+  version = "0.9.0"
+
+  name                                  = local.names.verdict
+  resource_group_name                   = local.foundation.resource_group_name
+  resource_group_id                     = local.foundation.resource_group_id
+  location                              = local.foundation.location
+  container_app_environment_resource_id = local.foundation.container_apps_environment_id
+  workload_profile_name                 = local.workload_profile
+  revision_mode                         = "Single"
+
+  managed_identities = {
+    user_assigned_resource_ids = [local.verdict_identity.id]
+  }
+
+  registries = [{
+    server   = local.foundation.container_registry_login_server
+    identity = local.verdict_identity.id
+  }]
+
+  secrets = {
+    appi = {
+      name  = local.appi_secret_name
+      value = local.foundation.application_insights_connection_string
+    }
+  }
+
+  ingress = {
+    external_enabled           = false
+    allow_insecure_connections = false
+    target_port                = var.verdict_port
+    transport                  = "auto"
+    traffic_weight = [{
+      latest_revision = true
+      percentage      = 100
+    }]
+  }
+
+  # Service invocation only (AD-3). Commands carry ids, and a case's facts
+  # and a search's rules are well under the sidecar's default request limit.
+  dapr = {
+    enabled      = true
+    app_id       = "verdict"
+    app_port     = var.verdict_port
+    app_protocol = "http"
+  }
+
+  template = {
+    min_replicas = local.verdict_replicas
+    max_replicas = local.verdict_replicas
+
+    containers = [{
+      name   = "verdict"
+      image  = "${local.image_repositories.verdict}:${var.image_tag}"
+      cpu    = local.container_cpu
+      memory = local.container_memory
+
+      # The settings are in locals.tf (local.verdict_env): no password and no
+      # model key.
+      env = local.verdict_env
+
+      # azure.md rule 22. Startup and liveness ask the process; readiness
+      # also asks the database, and fails unless its schema revision equals
+      # the migration head bundled in the image.
+      startup_probes = [{
+        transport               = "HTTP"
+        port                    = var.verdict_port
+        path                    = var.verdict_health_path
+        interval_seconds        = 5
+        timeout                 = 2
+        failure_count_threshold = 10
+      }]
+      readiness_probes = [{
+        transport               = "HTTP"
+        port                    = var.verdict_port
+        path                    = var.verdict_ready_path
+        interval_seconds        = 10
+        timeout                 = 5
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }]
+      liveness_probes = [{
+        transport               = "HTTP"
+        port                    = var.verdict_port
+        path                    = var.verdict_health_path
+        interval_seconds        = 30
+        timeout                 = 2
+        failure_count_threshold = 3
+      }]
+    }]
+  }
+
+  enable_telemetry = true
+  tags             = local.tags
+
+  # The first revision needs every one of the identity's role assignments,
+  # and Azure has to have spread them.
+  depends_on = [
+    time_sleep.verdict_role_propagation,
   ]
 }
 

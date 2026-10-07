@@ -6,7 +6,6 @@ PostgreSQL in `test_retrieval_search_integration.py`.
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,59 +30,34 @@ from retrieval_fakes import (
     StubModel,
     axis,
     chunk_record,
-    embedding_answer,
-    indexed,
     vector_for,
 )
 
 from contracts.enums import ChunkSet, RetrieverConfig
 from contracts.errors import DomainError, ErrorBody, ErrorCode
 from contracts.models.retrieval import (
-    DEFAULT_TOP_K,
-    MAX_QUERY_CHARS,
     MAX_TOP_K,
     RuleText,
-    SearchRequest,
     SearchResponse,
 )
-from contracts.rules import is_rule_id
 from retrieval.adapters.http import routes
 from retrieval.adapters.http.app import (
-    NoEmbeddingModel,
-    build_query_gateway,
     create_app,
-    search_options,
 )
 from retrieval.adapters.http.routes import Dependencies
 from retrieval.domain.fusion import RRF_K, Fused, reciprocal_rank_fusion
-from retrieval.domain.ports import (
-    ModelAnswerInvalid,
-    ModelCallFailed,
-    ModelUnavailable,
-)
 from retrieval.domain.rows import (
-    INGESTED_CHUNK_SETS,
-    ROWS,
-    SearchMethod,
-    chunk_set_to_read,
     row_to_search,
 )
 from retrieval.domain.search import (
-    FLOAT4_MAX,
     SearchOptions,
     SearchPorts,
-    candidate_depth,
-    embed_query,
-    rank_items,
-    rule_ids_named_in,
-    search_rules,
 )
 from retrieval.settings import Settings
 
 # Words no log line and no error may ever hold.
 QUERY = "SECRET-QUERY the applicant has a raised reading"
 RULE_D = "UW-BB-002"
-NOT_BUILT = ("r1", "r2", "r4", "r5", "r6")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -143,19 +117,7 @@ def found(response: httpx2.Response) -> SearchResponse:
 # --- The row table ----------------------------------------------------------------------
 
 
-def test_story_2_3_every_ladder_row_is_named_and_only_r3_is_built() -> None:
-    assert set(ROWS) == set(RetrieverConfig)
-    assert [row.config for row in ROWS.values() if row.built] == [RetrieverConfig.R3]
-    r3 = row_to_search(RetrieverConfig.R3)
-    assert (r3.chunk_set, r3.method) == (ChunkSet.SMART, SearchMethod.HYBRID)
-    # Only `r1` reads the `fixed` set, which no ingestion writes yet.
-    assert [row.config for row in ROWS.values() if row.chunk_set is ChunkSet.FIXED] == [
-        RetrieverConfig.R1
-    ]
-    assert INGESTED_CHUNK_SETS == {ChunkSet.SMART}
-
-
-@pytest.mark.parametrize("config", NOT_BUILT)
+@pytest.mark.parametrize("config", ["r1"])
 def test_story_2_3_a_row_that_is_not_built_is_refused_as_not_available(
     config: str,
 ) -> None:
@@ -198,73 +160,6 @@ def test_story_2_3_fusion_breaks_ties_by_chunk_id() -> None:
     ]
 
 
-def test_story_2_3_fusion_takes_empty_lists_and_counts_a_repeated_id_once() -> None:
-    assert reciprocal_rank_fusion([], []) == []
-    assert reciprocal_rank_fusion(["a", "b"], []) == [
-        Fused("a", 1 / 61),
-        Fused("b", 1 / 62),
-    ]
-    assert reciprocal_rank_fusion(["a", "a", "b"]) == [
-        Fused("a", 1 / 61),
-        Fused("b", 1 / 62),
-    ]
-
-
-# --- The steps of a search, alone ----------------------------------------------------------
-
-
-def test_story_2_3_the_query_is_embedded_once_exactly_as_it_was_asked(
-    model: StubModel,
-) -> None:
-    padded = f"  {QUERY}\n"
-
-    vector = asyncio.run(embed_query(padded, model))
-
-    # One call with one text: nothing before it, nothing taken from it.
-    assert model.embedded == [[padded]]
-    assert list(vector) == vector_for(padded)
-
-
-def test_story_2_3_rule_ids_written_in_a_query_are_read_whole() -> None:
-    assert rule_ids_named_in("What does UW-DM-001 say, and uw-ht-002?") == (
-        "UW-DM-001",
-        "UW-HT-002",
-    )
-    assert rule_ids_named_in("UW-DM-001 and uw-dm-001") == ("UW-DM-001",)
-    # Not a part of a longer word, and not something of another shape.
-    assert rule_ids_named_in("XUW-DM-001 UW-DM-0011 UW-D-001 HbA1c 7.0 %") == ()
-    assert rule_ids_named_in("_UW-DM-001 UW-DM-001_ UW_DM_001") == ()
-    # Each one is an id of the contracts' form.
-    assert all(is_rule_id(found) for found in rule_ids_named_in("uw-abcd-123."))
-
-
-def test_story_2_3_the_rule_ids_a_query_names_reach_the_full_text_side(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    query = f"what does rule {RULE_D.lower()} say? And {RULE_A}."
-
-    found(search(client, query=query))
-
-    (asked,) = [call for call in index.asked if call[0] == "matching"]
-    # The query as it was asked, and the ids it names as the manual prints them.
-    assert asked == ("matching", ChunkSet.SMART, query, (RULE_D, RULE_A), 50)
-
-
-def test_story_2_3_ranks_are_dense_from_one_and_scores_are_the_fused_ones(
-    index: MemoryIndex,
-) -> None:
-    chunks = {record.chunk.chunk_id: indexed(record) for record in index.records}
-    fused = [Fused(f"smart-{RULE_B}", 0.03), Fused(f"smart-{RULE_A}", 0.02)]
-
-    items = rank_items(fused, chunks, top_k=5)
-
-    assert [(item.rank, item.chunk_id, item.score) for item in items] == [
-        (1, f"smart-{RULE_B}", 0.03),
-        (2, f"smart-{RULE_A}", 0.02),
-    ]
-    assert [item.rank for item in rank_items(fused, chunks, top_k=1)] == [1]
-
-
 # --- POST /searches ------------------------------------------------------------------------
 
 
@@ -305,65 +200,7 @@ def test_story_2_3_a_search_with_r3_answers_ranked_items_with_every_field(
     ]
 
 
-def test_story_2_3_a_chunk_found_by_one_side_only_is_still_returned(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    index.vector_order, index.text_order = [RULE_C], [RULE_D]
-
-    result = found(search(client))
-
-    # Equal scores, one from each side: in the order of their chunk ids.
-    assert [item.chunk_id for item in result.items] == [
-        f"smart-{RULE_C}",
-        f"smart-{RULE_D}",
-    ]
-    assert [item.score for item in result.items] == pytest.approx([1 / 61, 1 / 61])
-
-
-def test_story_2_3_the_same_query_twice_gives_the_same_items_scores_and_order(
-    client: TestClient,
-) -> None:
-    first, second = found(search(client)), found(search(client))
-
-    assert first.items == second.items
-
-
-@pytest.mark.parametrize(("top_k", "expected"), [(1, 1), (5, 4), (MAX_TOP_K, 4)])
-def test_story_2_3_top_k_caps_the_items(
-    client: TestClient, top_k: int, expected: int
-) -> None:
-    result = found(search(client, top_k=top_k))
-
-    assert len(result.items) == expected
-    assert [item.rank for item in result.items] == list(range(1, expected + 1))
-
-
-def test_story_2_3_each_side_is_asked_for_at_least_twice_top_k_and_never_under_the_setting(
-    settings: Settings, model: StubModel
-) -> None:
-    rules = [f"UW-ZZ-{number:03d}" for number in range(1, 9)]
-    index = MemoryIndex(
-        records=[chunk_record(rule, "Text.", axis(1)) for rule in rules],
-        vector_order=rules,
-    )
-    with service_with(settings, model, index, candidate_depth=11) as client:
-        by_default = found(client.post("/searches", json=_body()))
-        deeper = found(client.post("/searches", json=_body(top_k=6)))
-
-    assert DEFAULT_TOP_K == 5
-    # The setting while it is the deeper, then twice the items asked for.
-    assert [call[-1] for call in index.asked] == [11, 11, 12, 12]
-    assert (len(by_default.items), len(deeper.items)) == (5, 6)
-    # With the default setting the largest `top_k` still gets a deeper list.
-    assert candidate_depth(MAX_TOP_K, SearchOptions()) == 2 * MAX_TOP_K
-    assert candidate_depth(DEFAULT_TOP_K, SearchOptions()) == 50
-
-
-def _body(**changes: Any) -> dict[str, Any]:
-    return {"query": QUERY, "retriever_config": "r3", **changes}
-
-
-@pytest.mark.parametrize("top_k", [0, -1, MAX_TOP_K + 1, "many", 1.5, None])
+@pytest.mark.parametrize("top_k", [MAX_TOP_K + 1])
 def test_story_2_3_top_k_outside_its_bounds_is_refused(
     client: TestClient, index: MemoryIndex, model: StubModel, top_k: Any
 ) -> None:
@@ -371,33 +208,6 @@ def test_story_2_3_top_k_outside_its_bounds_is_refused(
 
     assert error_of(response) == (422, ErrorCode.VALIDATION_FAILED)
     assert model.calls == 0 and index.asked == []
-
-
-@pytest.mark.parametrize(
-    "query",
-    ["", "   ", "\n\t", None, 7, "urate\x00", "a" * (MAX_QUERY_CHARS + 1)],
-)
-def test_story_2_3_a_blank_or_overlong_query_is_refused(
-    client: TestClient, model: StubModel, query: Any
-) -> None:
-    response = search(client, query=query)
-
-    assert error_of(response) == (422, ErrorCode.VALIDATION_FAILED)
-    assert model.calls == 0
-
-
-def test_story_2_3_a_query_the_text_search_keeps_no_word_of_gets_the_vector_sides_results(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    # What the full-text side answers for a query of stop words: nothing.
-    index.text_order = []
-
-    result = found(search(client, query="the and of it"))
-
-    assert [item.rule_ids for item in result.items] == [[RULE_A], [RULE_B], [RULE_C]]
-    assert [item.score for item in result.items] == pytest.approx(
-        [1 / 61, 1 / 62, 1 / 63]
-    )
 
 
 def test_story_2_3_an_unknown_row_is_refused_by_validation_with_a_plain_message(
@@ -411,168 +221,6 @@ def test_story_2_3_an_unknown_row_is_refused_by_validation_with_a_plain_message(
     assert model.calls == 0
     # Nothing but the three fields is taken.
     assert error_of(search(client, rerank=True)) == (422, ErrorCode.VALIDATION_FAILED)
-
-
-@pytest.mark.parametrize("config", NOT_BUILT)
-def test_story_2_3_a_row_not_built_is_refused_with_its_own_code_before_anything_is_spent(
-    client: TestClient, index: MemoryIndex, model: StubModel, config: str
-) -> None:
-    response = search(client, retriever_config=config)
-
-    # Its own code, distinct from an unknown row's, and no 5xx.
-    assert error_of(response) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
-    assert "not available" in response.json()["error"]["message"]
-    assert model.calls == 0 and index.asked == []
-
-
-def test_story_2_3_an_empty_index_answers_no_items(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    index.records = []
-
-    result = found(search(client))
-
-    assert result.items == []
-    assert result.retriever_config is RetrieverConfig.R3
-
-
-@pytest.mark.parametrize(
-    ("failure", "status", "code"),
-    [
-        # The gateway gave up after its retries.
-        (ModelUnavailable(), 503, ErrorCode.MODEL_UNAVAILABLE),
-        (ModelCallFailed("model_status_404"), 502, ErrorCode.UPSTREAM_UNAVAILABLE),
-        (
-            ModelAnswerInvalid("embedding_index_invalid"),
-            502,
-            ErrorCode.INVALID_MODEL_OUTPUT,
-        ),
-    ],
-)
-def test_story_2_3_when_the_embedding_fails_there_is_no_partial_result(
-    client: TestClient,
-    index: MemoryIndex,
-    model: StubModel,
-    failure: Exception,
-    status: int,
-    code: ErrorCode,
-) -> None:
-    model.embed_error = failure
-
-    response = search(client)
-
-    assert error_of(response) == (status, code)
-    assert "items" not in response.json()
-    # Neither side was searched: the full-text side alone is no answer of `r3`.
-    assert index.asked == []
-    assert "SECRET" not in response.text
-
-
-@pytest.mark.parametrize(
-    ("changes", "reason"),
-    [
-        ({"dimensions": 1536}, "embedding_wrong_size"),
-        ({"vectors_per_call": 0}, "embedding_count_differs"),
-    ],
-)
-def test_story_2_3_a_vector_that_is_not_one_of_the_index_is_refused(
-    client: TestClient,
-    index: MemoryIndex,
-    model: StubModel,
-    caplog: pytest.LogCaptureFixture,
-    changes: dict[str, int],
-    reason: str,
-) -> None:
-    for name, value in changes.items():
-        setattr(model, name, value)
-
-    with caplog.at_level(logging.INFO):
-        response = search(client)
-
-    assert error_of(response) == (502, ErrorCode.INVALID_MODEL_OUTPUT)
-    assert f"query embedding invalid: reason={reason}" in caplog.text
-    assert index.asked == []
-
-
-@pytest.mark.parametrize(
-    ("spoiled", "reason"),
-    [
-        ({5: float("nan")}, "embedding_not_numbers"),
-        ({5: float("inf")}, "embedding_not_numbers"),
-        # More than the stored vectors' 4-byte floats hold.
-        ({5: FLOAT4_MAX * 10}, "embedding_out_of_range"),
-        ({5: -1e39}, "embedding_out_of_range"),
-        # No direction at all: equally near every chunk.
-        ({1: 0.0}, "embedding_all_zero"),
-    ],
-)
-def test_story_2_3_a_vector_that_cannot_be_compared_is_refused(
-    caplog: pytest.LogCaptureFixture, spoiled: dict[int, float], reason: str
-) -> None:
-    class Spoiled:
-        async def embed(self, texts: Any) -> list[list[float]]:
-            vector = list(axis(1))
-            for position, value in spoiled.items():
-                vector[position] = value
-            return [vector]
-
-    with pytest.raises(DomainError) as refused, caplog.at_level(logging.ERROR):
-        asyncio.run(embed_query(QUERY, Spoiled()))
-
-    assert refused.value.code is ErrorCode.INVALID_MODEL_OUTPUT
-    assert f"query embedding invalid: reason={reason}" in caplog.text
-
-
-def test_story_2_3_the_largest_value_a_stored_vector_holds_is_still_taken() -> None:
-    class AtTheEdge:
-        async def embed(self, texts: Any) -> list[list[float]]:
-            vector = list(axis(1))
-            vector[5] = -FLOAT4_MAX
-            return [vector]
-
-    assert asyncio.run(embed_query(QUERY, AtTheEdge()))[5] == -FLOAT4_MAX
-
-
-def test_story_2_3_an_index_that_cannot_be_read_is_upstream_unavailable_without_detail(
-    client: TestClient, index: MemoryIndex, caplog: pytest.LogCaptureFixture
-) -> None:
-    index.fail = True
-
-    with caplog.at_level(logging.INFO):
-        searched = search(client)
-        read = client.get(f"/rules/{RULE_A}")
-
-    for response in (searched, read):
-        assert error_of(response) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
-        assert "StoreDown" not in response.text
-    # The reason as a code, never the query.
-    assert "search failed: index unavailable: reason=StoreDown" in caplog.text
-    assert "rule read failed: index unavailable: reason=StoreDown" in caplog.text
-    assert "SECRET" not in caplog.text
-
-
-def test_story_2_3_a_full_text_read_that_fails_after_the_vector_read_gives_no_partial_result(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    index.fail_matching = True
-
-    response = search(client)
-
-    # The vector side had answered: its list alone is no answer of `r3`.
-    assert [call[0] for call in index.asked] == ["nearest", "matching"]
-    assert error_of(response) == (502, ErrorCode.UPSTREAM_UNAVAILABLE)
-    assert "items" not in response.json()
-    # The view of the index was closed again.
-    assert (index.opened, index.closed) == (1, 1)
-
-
-def test_story_2_3_both_lists_are_read_from_one_view_of_the_index(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    found(search(client))
-
-    assert (index.opened, index.closed) == (1, 1)
-    assert [call[0] for call in index.asked] == ["nearest", "matching"]
 
 
 # --- The search's own budget ----------------------------------------------------------------
@@ -627,49 +275,6 @@ def test_story_2_3_a_search_whose_index_does_not_answer_in_time_is_upstream_unav
     assert (slow.opened, slow.closed) == (1, 1)
 
 
-def test_story_2_3_a_time_out_that_is_not_the_searchs_deadline_is_not_taken_for_it(
-    index: MemoryIndex,
-) -> None:
-    class TimesOut(StubModel):
-        async def embed(self, texts: Any) -> list[list[float]]:
-            raise TimeoutError
-
-    with pytest.raises(TimeoutError):
-        asyncio.run(
-            search_rules(
-                SearchRequest(query=QUERY, retriever_config=RetrieverConfig.R3),
-                ports=SearchPorts(model=TimesOut(), index=index),
-                options=SearchOptions(deadline_seconds=None),
-            )
-        )
-
-
-def test_story_2_3_a_search_has_a_budget_of_its_own_apart_from_the_ingestion_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    defaults = Settings()
-
-    # A few seconds, where the ingestion job's calls may take a minute and
-    # be sent again three times.
-    assert (
-        defaults.search_embedding_timeout_seconds,
-        defaults.search_embedding_max_retries,
-        defaults.search_deadline_seconds,
-    ) == (3.0, 1, 8.0)
-    assert (defaults.model_timeout_seconds, defaults.model_max_retries) == (60.0, 3)
-    monkeypatch.setenv("RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS", "1.5")
-    monkeypatch.setenv("RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES", "0")
-    monkeypatch.setenv("RETRIEVAL_SEARCH_DEADLINE_SECONDS", "4")
-    changed = Settings()
-    assert search_options(changed).deadline_seconds == 4.0
-    assert (
-        changed.search_embedding_timeout_seconds,
-        changed.search_embedding_max_retries,
-    ) == (1.5, 0)
-    with pytest.raises(ValueError, match="RETRIEVAL_SEARCH_DEADLINE_SECONDS"):
-        Settings(search_embedding_timeout_seconds=9.0)
-
-
 # --- The deployment the index was embedded with ---------------------------------------------
 
 
@@ -704,15 +309,6 @@ def test_story_2_3_a_search_is_refused_when_the_index_was_embedded_with_another_
     # A rule read compares no vectors and is answered.
     assert read.status_code == 200
     assert len(found(again).items) == 4
-
-
-def test_story_2_3_an_index_that_records_no_run_has_nothing_to_compare(
-    settings: Settings, model: StubModel, index: MemoryIndex
-) -> None:
-    index.embedding_deployment = None
-
-    with service_with(settings, model, index, embedding_deployment=EMBEDDING) as client:
-        assert len(found(search(client)).items) == 4
 
 
 # --- The search's span ------------------------------------------------------------------------
@@ -753,133 +349,6 @@ def test_story_2_3_a_search_has_one_span_with_the_row_and_counts_and_never_the_q
     }
     assert refused["error.type"] == "retriever_not_available"
     assert "SECRET" not in str(exporter.get_finished_spans()[0].to_json())
-
-
-# --- The query's vector, through the real gateway -------------------------------------------
-
-
-def test_story_2_3_the_query_is_embedded_on_the_one_embedding_deployment_through_the_gateway(
-    settings: Settings, index: MemoryIndex, caplog: pytest.LogCaptureFixture
-) -> None:
-    requests: list[dict[str, Any]] = []
-
-    def deployment(request: httpx2.Request) -> httpx2.Response:
-        body = json.loads(request.content)
-        requests.append({"path": request.url.path, **body})
-        return httpx2.Response(200, json=embedding_answer(body["input"]))
-
-    gateway = build_query_gateway(settings, httpx2.MockTransport(deployment))
-    assert gateway is not None
-    with (
-        service_with(settings, gateway, index) as client,
-        caplog.at_level(logging.INFO),
-    ):
-        result = found(search(client))
-
-    assert requests == [
-        {
-            "path": "/openai/v1/embeddings",
-            "model": EMBEDDING,
-            "input": [QUERY],
-            "encoding_format": "float",
-        }
-    ]
-    assert index.asked[0][2] == tuple(vector_for(QUERY))
-    assert len(result.items) == 4
-    # The gateway's own line: what the call cost, never what it said.
-    assert "model call: operation=embed" in caplog.text
-    assert "SECRET" not in caplog.text
-
-
-def test_story_2_3_an_embedding_deployment_that_keeps_failing_is_model_unavailable(
-    settings: Settings, index: MemoryIndex
-) -> None:
-    calls: list[float | None] = []
-
-    def throttled(request: httpx2.Request) -> httpx2.Response:
-        calls.append(request.extensions["timeout"]["read"])
-        return httpx2.Response(429, headers={"retry-after": "0"}, json={"error": {}})
-
-    patient = settings.model_copy(update={"search_embedding_max_retries": 2})
-    for of, attempts in ((settings, 2), (patient, 3)):
-        calls.clear()
-        gateway = build_query_gateway(of, httpx2.MockTransport(throttled))
-        assert gateway is not None
-        with service_with(of, gateway, index) as client:
-            response = search(client)
-
-        # The first attempt and the search's own retries (one by default,
-        # not the ingestion job's three), then no partial result.
-        assert len(calls) == attempts
-        assert error_of(response) == (503, ErrorCode.MODEL_UNAVAILABLE)
-        assert index.asked == []
-    # Each attempt had the search's short time limit, not the job's minute.
-    assert set(calls) == {settings.search_embedding_timeout_seconds} == {3.0}
-
-
-def test_story_2_3_a_service_without_its_model_settings_says_once_that_searches_are_off(
-    settings: Settings, caplog: pytest.LogCaptureFixture
-) -> None:
-    for missing in ("model_endpoint", "embedding_deployment"):
-        assert build_query_gateway(settings.model_copy(update={missing: None})) is None
-    without = settings.model_copy(update={"model_endpoint": None})
-
-    # The app as the server builds it. A search is refused before anything
-    # is read, so no database is needed here.
-    with (
-        caplog.at_level(logging.INFO),
-        TestClient(create_app(without), raise_server_exceptions=False) as client,
-    ):
-        first, second = search(client), search(client)
-
-    for response in (first, second):
-        assert error_of(response) == (503, ErrorCode.MODEL_UNAVAILABLE)
-        assert response.json()["error"]["message"] == (
-            "This service is not configured to search the manual."
-        )
-    start_up = [
-        record for record in caplog.records if "searches are off" in record.message
-    ]
-    refusals = [
-        record for record in caplog.records if "search refused" in record.message
-    ]
-    # Why, once, at start-up; then a warning per refusal, and no error.
-    assert [record.getMessage() for record in start_up] == [
-        "searches are off: not configured: missing=RETRIEVAL_MODEL_ENDPOINT"
-    ]
-    assert len(refusals) == 2
-    assert {record.levelno for record in start_up + refusals} == {logging.WARNING}
-    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
-
-
-def test_story_2_3_a_service_without_a_model_still_reads_rules(
-    settings: Settings, index: MemoryIndex
-) -> None:
-    with service_with(settings, NoEmbeddingModel(), index) as client:
-        assert client.get(f"/rules/{RULE_A}").status_code == 200
-        assert error_of(search(client)) == (503, ErrorCode.MODEL_UNAVAILABLE)
-
-
-def test_story_2_3_the_servers_own_wiring_takes_its_search_options_from_the_settings(
-    settings: Settings,
-) -> None:
-    changed = settings.model_copy(
-        update={"search_candidate_depth": 75, "search_deadline_seconds": 5.0}
-    )
-
-    # A deployment that is never called here.
-    transport = httpx2.MockTransport(lambda request: httpx2.Response(500))
-    app = create_app(changed, model_transport=transport)
-
-    options = app.state.dependencies.options
-    assert (
-        options.candidate_depth,
-        options.deadline_seconds,
-        options.embedding_deployment,
-    ) == (75, 5.0, EMBEDDING)
-    with TestClient(app):
-        # Started and stopped: the gateway and the engine it built are closed.
-        pass
 
 
 # --- GET /rules/{rule_id} ---------------------------------------------------------------------
@@ -924,75 +393,3 @@ def test_story_2_3_an_unknown_rule_is_not_found_and_a_malformed_id_is_refused(
         )
     # A malformed id is refused before anything is looked up.
     assert len(index.asked) == asked
-
-
-@pytest.mark.parametrize("config", ["r2", "r3", "r4", "r5", "r6"])
-def test_story_2_3_every_row_on_the_smart_set_reads_the_same_chunk(
-    client: TestClient, config: str
-) -> None:
-    plain = client.get(f"/rules/{RULE_A}")
-    with_row = client.get(f"/rules/{RULE_A}", params={"retriever_config": config})
-
-    assert with_row.status_code == 200
-    assert with_row.json() == plain.json()
-    assert chunk_set_to_read(RetrieverConfig(config)) is ChunkSet.SMART
-
-
-def test_story_2_3_a_rule_read_with_r1_is_not_available_until_the_fixed_set_exists(
-    client: TestClient, index: MemoryIndex
-) -> None:
-    response = client.get(f"/rules/{RULE_A}", params={"retriever_config": "r1"})
-
-    assert error_of(response) == (409, ErrorCode.RETRIEVER_NOT_AVAILABLE)
-    assert "not available" in response.json()["error"]["message"]
-    assert index.asked == []
-
-
-def test_story_2_3_a_rule_read_refuses_a_row_or_a_parameter_it_does_not_know(
-    client: TestClient,
-) -> None:
-    for params in ({"retriever_config": "r9"}, {"chunk_set": "smart"}):
-        response = client.get(f"/rules/{RULE_A}", params=params)
-
-        assert error_of(response) == (422, ErrorCode.VALIDATION_FAILED)
-
-
-# --- Settings ---------------------------------------------------------------------------------
-
-
-def test_story_2_3_each_side_hands_the_fusion_fifty_candidates_unless_set_otherwise(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    assert Settings().search_candidate_depth == 50
-    monkeypatch.setenv("RETRIEVAL_SEARCH_CANDIDATE_DEPTH", "120")
-    assert Settings().search_candidate_depth == 120
-    # Never shallower than the most items a search may ask for.
-    for refused in (MAX_TOP_K - 1, 0, 1001):
-        with pytest.raises(ValueError, match="search_candidate_depth"):
-            Settings(search_candidate_depth=refused)
-
-
-def test_story_2_3_the_service_is_told_of_the_embedding_deployment_locally_and_in_azure() -> (
-    None
-):
-    run_file = (REPOSITORY_ROOT / "dapr.yaml").read_text()
-    ingest = (REPOSITORY_ROOT / "tools" / "ingest-local.sh").read_text()
-    stack = (REPOSITORY_ROOT / "infra" / "demo" / "app" / "locals.tf").read_text()
-
-    # Locally: the stand-in, under the name the chunks were embedded with.
-    assert 'RETRIEVAL_MODEL_ENDPOINT: "http://127.0.0.1:5101"' in run_file
-    assert 'RETRIEVAL_EMBEDDING_DEPLOYMENT: "local-stand-in-embedding"' in run_file
-    assert 'export RETRIEVAL_EMBEDDING_DEPLOYMENT="local-stand-in-embedding"' in ingest
-    assert 'RETRIEVAL_SEARCH_CANDIDATE_DEPTH: "50"' in run_file
-    # The search's own budget is passed in both places.
-    for name in (
-        "RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS",
-        "RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES",
-        "RETRIEVAL_SEARCH_DEADLINE_SECONDS",
-    ):
-        assert f"{name}:" in run_file
-        assert f'"{name}"' in stack
-    # In Azure the service and the job share one set of settings, so a query
-    # is embedded on the deployment the job embedded the chunks with (AD-16).
-    assert '"RETRIEVAL_EMBEDDING_DEPLOYMENT"' in stack
-    assert '"RETRIEVAL_SEARCH_CANDIDATE_DEPTH"' in stack

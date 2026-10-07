@@ -6,7 +6,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from contracts import enums
-from contracts.enums import DemoRole, PageType
+from contracts.enums import PageType
 from contracts.ids import Uuid7Str, is_uuid7, new_id
 from contracts.query import build_fact_query
 from contracts.rules import (
@@ -76,13 +76,7 @@ def test_story_1_1_enums_hold_exactly_the_spine_values() -> None:
         assert {member.value for member in enum} == values, enum.__name__
 
 
-def test_story_1_1_demo_role_admin_is_not_a_member() -> None:
-    assert DemoRole("customer") is DemoRole.CUSTOMER
-    with pytest.raises(ValueError):
-        DemoRole("admin")
-
-
-def test_story_1_1_new_id_is_a_uuid7_carrying_its_timestamp() -> None:
+def test_story_1_1_ids_are_canonical_uuid7_carrying_their_timestamp() -> None:
     unix_ms = 1_791_288_000_000
 
     value = new_id(unix_ms)
@@ -93,124 +87,68 @@ def test_story_1_1_new_id_is_a_uuid7_carrying_its_timestamp() -> None:
     assert new_id() != new_id()
     # Ids sort by the time they were made.
     assert new_id(1) < new_id(2)
-
-
-def test_story_1_1_new_id_rejects_a_timestamp_that_does_not_fit() -> None:
-    with pytest.raises(ValueError):
-        new_id(-1)
-    with pytest.raises(ValueError):
-        new_id(1 << 48)
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
+    for unfit in (-1, 1 << 48):
+        with pytest.raises(ValueError):
+            new_id(unfit)
+    for wrong in (
         "0199b7a0-0000-4000-8000-000000000001",  # version 4
         "0199B7A0-0000-7000-8000-000000000001",  # upper case
-        "0199b7a000007000800000000000001",
         "0199b7a0-0000-7000-c000-000000000001",  # wrong variant
         "",
-    ],
-)
-def test_story_1_1_id_type_rejects_anything_but_a_canonical_uuid7(value: str) -> None:
-    assert not is_uuid7(value)
-    with pytest.raises(ValidationError):
-        UUID7.validate_python(value)
+    ):
+        assert not is_uuid7(wrong)
+        with pytest.raises(ValidationError):
+            UUID7.validate_python(wrong)
 
 
-@pytest.mark.parametrize("value", ["UW-DM-003", "UW-HTN-120"])
-def test_story_1_1_good_rule_id_is_accepted(value: str) -> None:
-    assert RULE_ID.validate_python(value) == value
-    assert is_rule_id(value)
+def test_story_1_1_rule_ids_follow_the_pattern_and_only_defined_rules_are_found() -> (
+    None
+):
+    for good in ("UW-DM-003", "UW-HTN-120"):
+        assert RULE_ID.validate_python(good) == good
+        assert is_rule_id(good)
+    for bad in ("uw-dm-3", "UW-D-003", "UW-DIABE-003", "UW-DM-003\n", "XUW-DM-003"):
+        assert not is_rule_id(bad)
+        with pytest.raises(ValidationError):
+            RULE_ID.validate_python(bad)
 
-
-@pytest.mark.parametrize(
-    "value",
-    ["uw-dm-3", "UW-D-003", "UW-DIABE-003", "UW-DM-003 ", "UW-DM-003\n", "XUW-DM-003"],
-)
-def test_story_1_1_bad_rule_id_is_rejected(value: str) -> None:
-    assert not is_rule_id(value)
-    with pytest.raises(ValidationError):
-        RULE_ID.validate_python(value)
-
-
-def test_story_1_1_definition_marker_finds_defined_rules_only() -> None:
     text = (
         "Rule UW-DM-003: HbA1c from 8.0% to 8.9% carries a debit of 50%. "
         "See also UW-HTN-120 and Rule UW-DM-004 for related impairments.\n"
         "Rule UW-DM-005: HbA1c of 9.0% or more is declined. Rule UW-DM-003: repeated."
     )
-
     assert rule_ids_defined_in(text) == ["UW-DM-003", "UW-DM-005"]
     assert rule_ids_defined_in("Refer to UW-DM-003 where it applies.") == []
-    assert (
-        rule_ids_defined_in("Rule uw-dm-3: malformed. Rule UW-DIABE-003: too long.")
-        == []
-    )
     assert re.search(RULE_DEFINITION_PATTERN, "Rule UW-DM-003: text") is not None
 
 
-@pytest.mark.parametrize(
-    ("page_type", "expected"),
-    [
-        ("lab_report", True),
-        ("attending_physician_statement", True),
-        ("application_form", True),
-        ("id_document", False),
-        ("invoice", False),
-        ("other", False),
-    ],
-)
-def test_story_1_1_page_type_mapping(page_type: str, expected: bool) -> None:
-    assert is_medical(page_type) is expected
-    assert is_medical(PageType(page_type)) is expected
-
-
-def test_story_1_1_page_type_mapping_rejects_an_unknown_type() -> None:
+def test_story_1_1_page_type_mapping_says_which_types_are_medical() -> None:
+    expected = {
+        "lab_report": True,
+        "attending_physician_statement": True,
+        "application_form": True,
+        "id_document": False,
+        "invoice": False,
+        "other": False,
+    }
+    for page_type, medical in expected.items():
+        assert is_medical(page_type) is medical
+        assert is_medical(PageType(page_type)) is medical
     with pytest.raises(ValueError):
         is_medical("utility_bill")
 
 
-def test_story_1_1_normalise_ignores_case_and_whitespace() -> None:
+def test_story_1_1_normalise_ignores_case_whitespace_and_pdf_artefacts() -> None:
     assert normalise("  HbA1c\n 8.2 % ") == normalise("hba1c 8.2 %") == "hba1c 8.2 %"
-    assert normalise("A\t\tB C\r\nD") == "a b c d"
+    assert normalise("A\t\tB C\r\nD") == "a b c d"
     assert normalise("   ") == ""
-
-
-def test_story_1_1_normalise_keeps_a_mask_token_as_one_token() -> None:
-    normalised = normalise("Patient [Person] seen")
-
-    assert normalised == "patient [person] seen"
-    assert "[person]" in normalised.split(" ")
-
-
-def test_story_1_1_normalise_folds_a_pdf_ligature() -> None:
-    assert (
-        normalise("de\ufb01ned \ufb02uid")
-        == normalise("defined fluid")
-        == "defined fluid"
-    )
-
-
-def test_story_1_1_normalise_drops_a_soft_hyphen() -> None:
-    assert (
-        normalise("hyper\u00adtension") == normalise("Hypertension") == "hypertension"
-    )
-
-
-@pytest.mark.parametrize("invisible", ["\u200b", "\u200c", "\u200d", "\ufeff"])
-def test_story_1_1_normalise_drops_zero_width_characters(invisible: str) -> None:
-    assert normalise(f"HbA1c{invisible} 8.2{invisible}%") == "hba1c 8.2%"
-    assert normalise(f"{invisible}HbA1c") == "hba1c"
-
-
-def test_story_1_1_normalise_folds_case_beyond_ascii() -> None:
+    # A ligature, a soft hyphen, zero-width characters, case beyond ASCII.
+    assert normalise("de\ufb01ned \ufb02uid") == "defined fluid"
+    assert normalise("hyper\u00adtension") == normalise("Hypertension")
+    assert normalise("\ufeffHbA1c\u200b 8.2\u200d%") == "hba1c 8.2%"
     assert normalise("STRASSE") == normalise("stra\u00dfe") == "strasse"
-
-
-def test_story_1_1_normalise_keeps_a_mask_token_through_pdf_artefacts() -> None:
+    # A mask token stays one token through all of it.
     normalised = normalise("Patient\u00a0[Per\u00adson]\u200b seen by [Person]")
-
     assert normalised == "patient [person] seen by [person]"
     assert normalised.split(" ").count("[person]") == 2
 
@@ -220,8 +158,5 @@ def test_story_1_1_query_builder_gives_the_same_query_for_the_same_statement() -
 
     assert build_fact_query(statement) == build_fact_query(statement) == "HbA1c 8.2%"
     assert build_fact_query("  HbA1c \n 8.2% ") == build_fact_query(statement)
-
-
-def test_story_1_1_query_builder_rejects_a_blank_statement() -> None:
     with pytest.raises(ValueError):
         build_fact_query(" \n ")

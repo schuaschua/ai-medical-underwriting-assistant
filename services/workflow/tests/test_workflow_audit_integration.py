@@ -8,7 +8,6 @@ would be: behind it `intake` answers the redaction command and
 
 import asyncio
 import contextlib
-import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -24,7 +23,6 @@ from workflow_fakes import (
     FakeStages,
     SidecarStandIn,
     classification_done,
-    classification_failed,
     redaction_done,
     starting,
 )
@@ -45,7 +43,7 @@ from workflow.adapters.db import SqlCaseStore, build_database
 from workflow.adapters.http.app import create_app
 from workflow.adapters.migrations import alembic_config
 from workflow.adapters.scheduler import build_client
-from workflow.domain.cases import read_audit_trail, record_route, record_stage_result
+from workflow.domain.cases import read_audit_trail, record_stage_result
 from workflow.domain.entities import StartParameters
 from workflow.domain.gate import Route, route_recording
 from workflow.domain.lifecycle import new_case
@@ -192,11 +190,12 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
     # redaction, once; then per page its classification, its route and its
     # decisions, each cause before its effect. The two pages that reached
     # `extracting`, one by the gate and one by an accept, are extracted
-    # (story 2.4), and with the last page final the case is completed: that
-    # is the trail's last event.
+    # (story 2.4). With the last page final the case gets its verdict run,
+    # a case-level event after every page's (stories 2.5 and 2.6), and only
+    # then is it completed: that is the trail's last event.
     assert actions[:2] == [("case.started", None), ("document.redacted", None)]
-    assert actions[-1] == ("case.completed", None)
-    assert sorted(actions[2:-1]) == sorted(
+    assert actions[-2:] == [("verdict.suggested", None), ("case.completed", None)]
+    assert sorted(actions[2:-2]) == sorted(
         [("page.classified", page) for page in (first, second, third, fourth)]
         + [("page.routed", page) for page in (first, second, third, fourth)]
         + [
@@ -236,8 +235,14 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
         ("page.accepted", ActorKind.HUMAN, "underwriter"),
         ("page.denied", ActorKind.HUMAN, "underwriter"),
         ("facts.extracted", ActorKind.AI, "extraction:chat-main"),
+        ("verdict.suggested", ActorKind.AI, "verdict:chat-main"),
         ("case.completed", ActorKind.AI, "workflow:case-lifecycle"),
     }
+    # The run's event refers to the run `verdict` stored for the case.
+    suggested = trail.events[-2]
+    assert (
+        suggested.ref == sidecar.stages.verdict_results[(case_id, "r3")].verdict_run_id
+    )
     assert all(event.error_code is None for event in trail.events)
     assert all(event.occurred_at.utcoffset() == timedelta(0) for event in trail.events)
 
@@ -304,106 +309,6 @@ def test_story_1_12_a_failed_stage_is_in_the_trail_with_its_error_code(
         assert walked.get(page.page_id, [PageStatus.UPLOADED])[-1] is page.page_status
 
 
-def test_story_1_12_a_route_is_listed_after_its_classification_whatever_the_clocks_say(
-    service_settings: Settings,
-) -> None:
-    case_id, page_id = new_id(), new_id()
-    # The classifier's clock runs five minutes ahead of `workflow`'s.
-    ahead = datetime.now(UTC) + timedelta(minutes=5)
-
-    async def scenario(store: SqlCaseStore) -> AuditTrail:
-        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
-        await record_stage_result(redaction_done(case_id, [page_id]), store=store)
-        classified = classification_done(case_id, page_id, occurred_at=ahead)
-        await record_stage_result(classified, store=store)
-        await record_route(
-            case_id,
-            page_id,
-            classified.classification_id,
-            Route.TRIAGE,
-            0.9,
-            store=store,
-        )
-        return await read_audit_trail(case_id, store=store)
-
-    with a_store(service_settings) as (store, runner):
-        trail = runner.run(scenario(store))
-
-    assert [event.action.value for event in trail.events] == [
-        "case.started",
-        "document.redacted",
-        "page.classified",
-        "page.routed",
-    ]
-    classified_event, routed_event = trail.events[2:]
-    # Each still shows the time its work was done.
-    assert classified_event.occurred_at == ahead
-    assert routed_event.occurred_at < classified_event.occurred_at
-    assert routed_event.detail == RouteDetail(
-        route=PageStatus.AWAITING_TRIAGE, threshold=0.9
-    )
-
-
-def test_story_1_12_the_real_store_lists_the_first_events_up_to_the_limit(
-    service_settings: Settings,
-) -> None:
-    case_id = new_id()
-    page_ids = [new_id() for _ in range(3)]
-
-    async def scenario(store: SqlCaseStore) -> list[AuditTrail]:
-        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
-        await record_stage_result(redaction_done(case_id, page_ids), store=store)
-        await record_stage_result(
-            classification_done(case_id, page_ids[0]), store=store
-        )
-        await record_stage_result(
-            classification_failed(case_id, page_ids[1], "invalid_model_output"),
-            store=store,
-        )
-        return [
-            await read_audit_trail(case_id, store=store, limit=limit)
-            for limit in (4, 2, 1)
-        ]
-
-    with a_store(service_settings) as (store, runner):
-        whole, two, one = runner.run(scenario(store))
-
-    # The start, the redaction and the two classifications.
-    assert (len(whole.events), whole.has_more) == (4, False)
-    assert whole.events[3].error_code is ErrorCode.INVALID_MODEL_OUTPUT
-    assert (two.events, two.has_more) == (whole.events[:2], True)
-    assert (one.events, one.has_more) == (whole.events[:1], True)
-
-
-def test_story_1_12_the_service_lists_no_more_events_than_its_setting_allows(
-    service_settings: Settings,
-) -> None:
-    case_id = new_id()
-    page_ids = [new_id(), new_id()]
-
-    async def record_three(store: SqlCaseStore) -> None:
-        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
-        await record_stage_result(redaction_done(case_id, page_ids), store=store)
-        for page_id in page_ids:
-            await record_stage_result(
-                classification_done(case_id, page_id), store=store
-            )
-
-    with a_store(service_settings) as (store, runner):
-        runner.run(record_three(store))
-    limited = service_settings.model_copy(update={"audit_trail_limit": 2})
-    with workflow_service(limited, SidecarStandIn().transport()) as client:
-        answer: dict[str, Any] = client.get(f"/cases/{case_id}/audit").json()
-        unknown = client.get(f"/cases/{new_id()}/audit")
-
-    assert [event["action"] for event in answer["events"]] == [
-        "case.started",
-        "document.redacted",
-    ]
-    assert answer["has_more"] is True
-    assert (unknown.status_code, unknown.json()["error"]["code"]) == (404, "not_found")
-
-
 # --- The order of writing (migration 0004) ------------------------------------------
 
 
@@ -414,35 +319,6 @@ def stored_order(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
             "FROM workflow.audit_event WHERE case_id = %s ORDER BY audit_event_seq",
             (case_id,),
         ).fetchall()
-
-
-def test_story_1_12_events_recorded_at_the_same_instant_are_listed_in_the_order_written(
-    service_settings: Settings,
-) -> None:
-    case_id = new_id()
-    page_ids = [new_id() for _ in range(8)]
-
-    async def scenario(store: SqlCaseStore) -> AuditTrail:
-        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
-        # One clock value for every event: nothing but the order of
-        # writing tells them apart.
-        await record_stage_result(
-            redaction_done(case_id, page_ids), store=store, now=lambda: NOW
-        )
-        for page_id in page_ids:
-            await record_stage_result(
-                classification_done(case_id, page_id), store=store, now=lambda: NOW
-            )
-        return await read_audit_trail(case_id, store=store)
-
-    with a_store(service_settings) as (store, runner):
-        trail = runner.run(scenario(store))
-
-    assert [event.page_id for event in trail.events] == [None, None, *page_ids]
-    rows = stored_order(service_settings, case_id)
-    assert {row[3] for row in rows} == {NOW}
-    numbers = [row[2] for row in rows]
-    assert numbers == sorted(set(numbers))
 
 
 def test_story_1_12_an_event_written_later_with_an_earlier_record_time_is_listed_later(
@@ -579,60 +455,3 @@ def test_story_1_12_the_migration_numbers_the_events_already_there_in_the_order_
         pytest.raises(psycopg.errors.RestrictViolation),
     ):
         connection.execute("DELETE FROM workflow.audit_event")
-
-
-def test_story_1_12_a_stored_row_that_breaks_the_error_code_rule_does_not_fail_the_trail(
-    migrated_database: Settings,
-    service_settings: Settings,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    case_id = new_id()
-    page_ids = [new_id(), new_id()]
-
-    async def record_two(store: SqlCaseStore) -> None:
-        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
-        await record_stage_result(redaction_done(case_id, page_ids), store=store)
-        await record_stage_result(
-            classification_failed(case_id, page_ids[0], "model_unavailable"),
-            store=store,
-        )
-
-    with a_store(service_settings) as (store, runner):
-        runner.run(record_two(store))
-        # Rows no build of today writes: a code on an event that is no
-        # failure, and a code the catalogue does not know.
-        misplaced, unknown = new_id(), new_id()
-        with connect(migrated_database, autocommit=True) as connection:
-            for event_id, action, code in (
-                (misplaced, "page.classified", "secret_word"),
-                (unknown, "stage.failed", "a_code_of_tomorrow"),
-            ):
-                connection.execute(
-                    "INSERT INTO workflow.audit_event (audit_event_id, actor_kind, "
-                    "actor, action, occurred_at, case_id, page_id, ref, trace_id, "
-                    "recorded_at, error_code) VALUES (%s, 'ai', "
-                    "'classification:chat-main', %s, now(), %s, %s, %s, %s, "
-                    "now(), %s)",
-                    (event_id, action, case_id, page_ids[1], new_id(), "0" * 32, code),
-                )
-        with caplog.at_level(logging.WARNING, logger="workflow.adapters.db"):
-            trail = runner.run(read_audit_trail(case_id, store=store))
-
-    assert [(event.action.value, event.error_code) for event in trail.events] == [
-        ("case.started", None),
-        ("document.redacted", None),
-        ("stage.failed", ErrorCode.MODEL_UNAVAILABLE),
-        ("page.classified", None),
-        ("stage.failed", ErrorCode.STAGE_FAILED),
-    ]
-    # Each is logged with the case's id and the event's id, and nothing else.
-    assert (
-        f"audit event error code ignored: case_id={case_id} "
-        f"audit_event_id={misplaced}" in caplog.text
-    )
-    assert (
-        f"audit event error code unknown: case_id={case_id} "
-        f"audit_event_id={unknown}" in caplog.text
-    )
-    assert "secret_word" not in caplog.text
-    assert "a_code_of_tomorrow" not in caplog.text

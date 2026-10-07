@@ -658,7 +658,7 @@ az containerapp job execution show -g rg-aiuw-demo-wus3 -n "$JOB" --job-executio
 az containerapp job logs show -g rg-aiuw-demo-wus3 -n "$JOB" --execution "$EXECUTION" --container ingest
 ```
 
-A run that succeeds ends with `ingestion done: pages=206 chunks=111 written=111 moved=0 removed=0 unchanged=0 skipped=no`. A run that fails ends with `ingestion failed: code=<error code> reason=<what exactly>` and leaves the table as it was; the reasons are listed in the root `README.md`. Starting the job again is safe: over the same manual, with the same deployments and prompt, it ends early with `written=0 ... unchanged=111 skipped=yes`, without sending the manual to Document Intelligence or calling a model. What the index was built from is one row of `retrieval.ingest_run` (the manual's SHA-256, the prompt's digest, the deployment names). A run that would remove more than a tenth of the stored chunks is refused (`too_many_chunks_removed`), because a manual that was parsed badly looks like one that lost its rules; its log names the chunks, and after checking them the one run is let through with `RETRIEVAL_INGEST_ALLOW_LARGE_REMOVAL=true` on that execution. Start it again after uploading a changed manual, and after a deploy that changed the context-line prompt or a deployment name (every chunk is then written again, about a hundred chat calls).
+A run that succeeds ends with `ingestion done: pages=211 chunks=111 written=111 moved=0 removed=0 unchanged=0 skipped=no`. A run that fails ends with `ingestion failed: code=<error code> reason=<what exactly>` and leaves the table as it was; the reasons are listed in the root `README.md`. Starting the job again is safe: over the same manual, with the same deployments and prompt, it ends early with `written=0 ... unchanged=111 skipped=yes`, without sending the manual to Document Intelligence or calling a model. What the index was built from is one row of `retrieval.ingest_run` (the manual's SHA-256, the prompt's digest, the deployment names). A run that would remove more than a tenth of the stored chunks is refused (`too_many_chunks_removed`), because a manual that was parsed badly looks like one that lost its rules; its log names the chunks, and after checking them the one run is let through with `RETRIEVAL_INGEST_ALLOW_LARGE_REMOVAL=true` on that execution. Start it again after uploading a changed manual, and after a deploy that changed the context-line prompt or a deployment name (every chunk is then written again, about a hundred chat calls).
 
 **Upgrading an environment that is already set up.** Not yet run. When `retrieval` ships a new migration and the database was bootstrapped before, run step 0, then step 2 alone, and finish with step 4, as in section 6. The job does not need to run again for a migration that keeps the `chunk` table's rows.
 
@@ -783,6 +783,135 @@ Then the `extraction` app's latest revision becomes ready within a minute or so,
 `workflow` gets a migration with this story too (`0006`, table `decision_told`, with SELECT and INSERT for the service role): run section 5's upgrade steps for it in the same session, or `workflow` reports "not ready" and its worker does not start.
 
 **Upgrading an environment that is already set up.** Not yet run. When `extraction` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2. If the migration added a table, add its grant to step 3 (the rights its code uses, by name) and run step 3 again: tables get no default grant here, and the step hands every table and sequence in the schema over and repeats the grants, so it is safe to run again. Finish with step 4. Until the migration step has run, `extraction` reports "not ready", because its image carries a newer head than the database.
+
+## 9. Database role for `verdict`
+
+Added by stories 2.5 and 2.6. Not yet run: the environment was down while the stories were built, so these steps are written from section 5, which has been run, and are on the list for the final test session (`_bmad-output/implementation-artifacts/deferred-work.md`). Add each run to the log below.
+
+`verdict` owns schema `verdict`: table `verdict_run`, which holds the key row and the stored result of each run of the agent for a case and a retriever configuration, table `reason`, one row per cited reason of a run, and table `agent_step`, the log of every tool call the agent made (spine AD-4, AD-6, AD-15). As for `intake`, an operator does these steps once after the `foundation` stack is up, and again after every teardown. Until this section is done, `verdict` reports "not ready", and a case fails once every page is final and `workflow` commands its verdict runs, because no run can be stored.
+
+The steps are those of section 5 with this service's names, not those of section 8: `verdict`'s migrations grant the service role its rights themselves, table by table, so there is no step that grants on "all tables" and there are no default privileges. The grants come from migration `0001`. On `verdict.agent_step` the service role gets `SELECT` and `INSERT` and nothing else: the step log is append-only, and the database is what refuses an `UPDATE` or a `DELETE`. A trigger on the table refuses `UPDATE`, `DELETE` and `TRUNCATE` for every other role as well, the owner included, and a downgrade of the migrations is refused while the table holds steps. The table's column `agent_step_seq` is numbered by the database itself (an identity column): the service role's `INSERT` on the table covers it, its sequence needs no grant of its own, and step 3 leaves that sequence with its table. On `verdict.verdict_run` the role gets `SELECT`, `INSERT`, `UPDATE` and `DELETE` (the key row is inserted, settled or taken over, released), and on `verdict.reason` `SELECT` and `INSERT`. Do not add a wider grant by hand.
+
+Run the steps in this order, in one shell, from the repository root: the role first, because the migrations grant to it and fail if it does not exist.
+
+**Step 0. Set up the shell, and open the firewall for your address.** As step 0 of section 4, with the role names of this service:
+
+```bash
+set -euo pipefail
+
+SERVER="$(terraform -chdir=infra/demo/foundation output -raw postgresql_server_name)"
+HOST="$(terraform -chdir=infra/demo/foundation output -raw postgresql_fqdn)"
+DATABASE="$(terraform -chdir=infra/demo/foundation output -raw postgresql_database_name)"
+ME="$(az ad signed-in-user show --query id -o tsv)"   # your database role is named after your object id
+SERVICE_ROLE="id-aiuw-demo-wus3-verdict"              # must equal: terraform -chdir=infra/demo/app output verdict_database_role
+DEPLOY_ROLE="id-aiuw-demo-wus3-deploy"                # the pipeline's role, which will run migrations later
+
+cleanup() {
+  # Always: the temporary firewall rule (azure.md rule 13) and the token.
+  az postgres flexible-server firewall-rule delete -g rg-aiuw-demo-wus3 -n "$SERVER" \
+    --rule-name operator-bootstrap --yes || true
+  unset PGPASSWORD
+}
+trap cleanup EXIT
+
+az postgres flexible-server firewall-rule create -g rg-aiuw-demo-wus3 -n "$SERVER" \
+  --rule-name operator-bootstrap --start-ip-address "$(curl -s https://api.ipify.org)"
+
+# An Entra token is the password. It lasts about an hour.
+export PGPASSWORD="$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)"
+```
+
+**Step 1. Role.** The service's role is named after its identity. If section 4 or 5 was done in this bring-up, your own role is already a member of the pipeline's role and the second statement changes nothing.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=postgres user=$ME sslmode=require" <<SQL
+-- Created only if it is not there yet, so this step can be run again.
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$SERVICE_ROLE') THEN
+    PERFORM pgaadauth_create_principal('$SERVICE_ROLE', false, false);
+  END IF;
+END
+\$\$;
+GRANT "$DEPLOY_ROLE" TO "$ME";
+SQL
+```
+
+The step is safe to run again: the role is created only when it is missing, and the grant changes nothing the second time.
+
+**Step 2. Schema, migrations and the service role's rights.** This creates schema `verdict`, its three tables and its version table, and grants the service role its rights on each. `VERDICT_DATABASE_SERVICE_ROLE` names the role to grant to; the run stops with a message if it is not set. It signs in with your own Azure sign-in, not with `PGPASSWORD`.
+
+```bash
+VERDICT_DATABASE_HOST="$HOST" VERDICT_DATABASE_NAME="$DATABASE" VERDICT_DATABASE_USER="$ME" \
+VERDICT_DATABASE_SERVICE_ROLE="$SERVICE_ROLE" VERDICT_DATABASE_ENTRA_AUTH=true \
+  uv run alembic -c services/verdict/alembic.ini upgrade head
+```
+
+**Step 3. Ownership.** The schema and every table, sequence and function in it are handed to the pipeline's role, so that it owns them as the spine's conventions say and can run later migrations. The step is safe to run again. Ownership does not change what the service role was granted in step 2. The last statement shows those rights: check that the `agent_step` row lists `INSERT` and `SELECT` only.
+
+```bash
+psql -v ON_ERROR_STOP=1 "host=$HOST dbname=$DATABASE user=$ME sslmode=require" <<SQL
+ALTER SCHEMA verdict OWNER TO "$DEPLOY_ROLE";
+-- Every table and every sequence in the schema, whatever migrations have
+-- added since this was written. A sequence that belongs to a table column
+-- follows its table and is left out.
+DO \$\$
+DECLARE item record;
+BEGIN
+  FOR item IN
+    SELECT c.relname, c.relkind FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'verdict' AND c.relkind IN ('r', 'p', 'S')
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_depend d
+        WHERE d.objid = c.oid AND d.deptype IN ('a', 'i') AND c.relkind = 'S'
+      )
+    ORDER BY c.relkind DESC
+  LOOP
+    EXECUTE format(
+      'ALTER %s verdict.%I OWNER TO %I',
+      CASE WHEN item.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+      item.relname, '$DEPLOY_ROLE'
+    );
+  END LOOP;
+  -- Functions too (the trigger function that guards the step log).
+  FOR item IN
+    SELECT p.oid::regprocedure AS signature FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'verdict'
+  LOOP
+    EXECUTE format('ALTER FUNCTION %s OWNER TO %I', item.signature, '$DEPLOY_ROLE');
+  END LOOP;
+END
+\$\$;
+
+SELECT table_name, string_agg(privilege_type, ', ' ORDER BY privilege_type) AS service_role_rights
+FROM information_schema.role_table_grants
+WHERE table_schema = 'verdict' AND grantee = '$SERVICE_ROLE'
+GROUP BY table_name ORDER BY table_name;
+SQL
+```
+
+Expected, not yet observed:
+
+| table_name | service_role_rights |
+| --- | --- |
+| `agent_step` | `INSERT, SELECT` |
+| `alembic_version` | `SELECT` |
+| `reason` | `INSERT, SELECT` |
+| `verdict_run` | `DELETE, INSERT, SELECT, UPDATE` |
+
+**Step 4. Close up and check.** As step 4 of section 4.
+
+```bash
+cleanup; trap - EXIT
+az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER" -o table   # no operator-bootstrap rule
+```
+
+Then the `verdict` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run. Its other access, to the chat deployment it shares with `classification` and `extraction`, is the Azure role Foundry User on the Foundry project, which the `app` stack assigns; nothing is done for it here. It holds no role on storage and none on a search service: it reads the case's facts from `extraction` and the manual's rules from `retrieval` through Dapr.
+
+`workflow` may get a migration with these stories too: if its image carries a newer head than the database, run section 5's upgrade steps for it in the same session, or `workflow` reports "not ready" and its worker does not start.
+
+**Upgrading an environment that is already set up.** Not yet run. When `verdict` ships a new migration and the database was bootstrapped before, do not repeat the whole section. Run step 0, then step 2 alone, with `VERDICT_DATABASE_SERVICE_ROLE` set as there: the migrations bring the schema to the new head and grant the service role its rights on anything they add. Run step 3 again when a migration added a table, sequence or function while you, not the pipeline's role, ran it; the step takes whatever the schema holds and is safe to run again. Finish with step 4. Until the migration step has run, `verdict` reports "not ready", because its image carries a newer head than the database.
 
 ## Out-of-band log
 

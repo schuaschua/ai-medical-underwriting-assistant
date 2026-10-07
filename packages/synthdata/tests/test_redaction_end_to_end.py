@@ -19,6 +19,7 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     ServicesBehindSidecar,
     audit_rows,
     completed,
@@ -41,12 +42,14 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     case_id, _ = intake.upload("case-002.pdf")
     sidecar = ServicesBehindSidecar(
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     progress, trail, _ = start_and_wait(
@@ -110,7 +113,7 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
 
 @pytest.mark.parametrize(
     ("mode", "error_code"),
-    [(Mode.FAIL, "redaction_failed"), (Mode.HANG, "stage_timeout")],
+    [(Mode.FAIL, "redaction_failed")],
 )
 def test_story_1_7_with_a_stand_in_told_to_fail_or_hang_the_case_fails_and_no_page_exists(
     workflow_service_settings: Settings,

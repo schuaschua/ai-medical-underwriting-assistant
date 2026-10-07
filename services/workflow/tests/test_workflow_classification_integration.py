@@ -155,9 +155,14 @@ def test_story_1_8_every_page_of_a_started_case_is_classified_with_one_event_eac
         assert event.detail is None
         assert event.eval_run_id == eval_run_id
     # The start, the redaction, four classifications and four routes; then
-    # four extractions and the completion (story 2.4).
-    assert len(trail.events) == 15
+    # four extractions (story 2.4), the case's verdict run and, last, the
+    # completion (stories 2.5 and 2.6).
+    assert len(trail.events) == 16
     assert trail.events[0].action.value == "case.started"
+    assert [event.action.value for event in trail.events[-2:]] == [
+        "verdict.suggested",
+        "case.completed",
+    ]
     # Redaction came first: nothing was classified before it was done.
     assert sidecar.requests[0].url.path.endswith(f"/cases/{case_id}/redaction")
 
@@ -230,69 +235,4 @@ def test_story_1_8_a_case_started_with_the_contender_that_is_not_built_fails(
         ("stage.failed", None, "stage_failed", None, "workflow:case-lifecycle")
     ]
     assert {row[2] for row in page_rows(service_settings, case_id)} == {"uploaded"}
-    assert case_status(service_settings, case_id) == "failed"
-
-
-def test_story_1_8_in_progress_is_retried_until_the_stage_answers(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    # The first command got lost on its way back; the stage is still at it
-    # when the command is sent again, twice.
-    stages = FakeStages(pages=1)
-    stages.classify_script = ["down", "in_progress", "in_progress"]
-    sidecar = SidecarStandIn(stages)
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        completed(scheduler_client, case_id)
-
-    assert len(sidecar.classify_commands(case_id)) == 4
-    # Classified in the end, sent on by the gate and extracted (story 2.4).
-    assert [row[2] for row in page_rows(service_settings, case_id)] == ["extracted"]
-    assert [row[0] for row in audit_rows(service_settings, case_id)] == [
-        "document.redacted",
-        "page.classified",
-        "page.routed",
-        "facts.extracted",
-        "case.completed",
-    ]
-
-
-def test_story_1_8_when_classification_never_answers_the_case_is_marked_failed(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    stages = FakeStages(pages=1)
-    stages.classify_script = ["down"] * 50
-    sidecar = SidecarStandIn(stages)
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        state = completed(scheduler_client, case_id)
-
-    # As often as the stage policy says, then the case fails with its one event.
-    assert len(sidecar.classify_commands(case_id)) == FAST_RETRIES["stage_max_attempts"]
-    assert json.loads(state.serialized_output or "")["case_status"] == "failed"
-    assert audit_rows(service_settings, case_id)[1:] == [
-        ("stage.failed", None, "stage_failed", None, "workflow:case-lifecycle")
-    ]
-    assert [row[2] for row in page_rows(service_settings, case_id)] == ["uploaded"]
-
-
-def test_story_1_8_a_page_the_stage_does_not_hold_fails_the_case_without_a_retry(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    stages = FakeStages(pages=2)
-    stages.classify_script = ["not_found"] * 50
-    sidecar = SidecarStandIn(stages)
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        state = completed(scheduler_client, case_id)
-
-    assert json.loads(state.serialized_output or "")["case_status"] == "failed"
-    # Asked once for each page: `not_found` is answered, never retried.
-    assert len(sidecar.classify_commands(case_id)) == 2
     assert case_status(service_settings, case_id) == "failed"

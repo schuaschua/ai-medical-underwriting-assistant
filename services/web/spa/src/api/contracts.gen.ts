@@ -4,23 +4,6 @@
 export type ActorKind = "human" | "ai";
 export type JsonValue = unknown;
 /**
- * The verdict agent's three tools (AD-15).
- */
-export type ToolName = "list_facts" | "search_rules" | "read_rule";
-export type AuditAction =
-  | "case.started"
-  | "document.redacted"
-  | "page.classified"
-  | "page.routed"
-  | "page.kept"
-  | "page.discarded"
-  | "page.accepted"
-  | "page.denied"
-  | "facts.extracted"
-  | "verdict.suggested"
-  | "stage.failed"
-  | "case.completed";
-/**
  * Every `error.code` a service may return.
  */
 export type ErrorCode =
@@ -40,6 +23,7 @@ export type ErrorCode =
   | "not_awaiting_decision"
   | "pages_not_terminal"
   | "rule_not_seen"
+  | "step_limit"
   | "retriever_not_available"
   | "stage_timeout"
   | "stage_failed"
@@ -48,6 +32,31 @@ export type ErrorCode =
   | "model_unavailable"
   | "upstream_unavailable"
   | "internal_error";
+/**
+ * How one tool call of the verdict agent ended (AD-15).
+ */
+export type StepOutcome = "done" | "refused" | "failed";
+/**
+ * The verdict agent's three tools (AD-15).
+ */
+export type ToolName = "list_facts" | "search_rules" | "read_rule";
+export type AuditAction =
+  | "case.started"
+  | "document.redacted"
+  | "page.classified"
+  | "page.routed"
+  | "page.kept"
+  | "page.discarded"
+  | "page.accepted"
+  | "page.denied"
+  | "facts.extracted"
+  | "verdict.suggested"
+  | "stage.failed"
+  | "case.completed";
+/**
+ * The retrieval ladder rows (AD-11).
+ */
+export type RetrieverConfig = "r1" | "r2" | "r3" | "r4" | "r5" | "r6";
 export type CaseStatus = "running" | "awaiting_human" | "completed" | "failed";
 export type PageStatus =
   | "uploaded"
@@ -64,10 +73,6 @@ export type PageStatus =
  */
 export type StageStatus = "running" | "done" | "failed";
 export type ClassifierContender = "llm" | "doc-intelligence";
-/**
- * The retrieval ladder rows (AD-11).
- */
-export type RetrieverConfig = "r1" | "r2" | "r3" | "r4" | "r5" | "r6";
 /**
  * Where a case may be told to stop early (AD-17: the classifier bake-off).
  */
@@ -184,6 +189,7 @@ export interface Contracts {
   StageStatus: StageStatus;
   StartCaseOptions: StartCaseOptions;
   StartCaseRequest: StartCaseRequest;
+  StepOutcome: StepOutcome;
   StopAfter: StopAfter;
   SystemReason: SystemReason;
   ToolName: ToolName;
@@ -191,6 +197,7 @@ export interface Contracts {
   TriageQueue: TriageQueue;
   UploadedCase: UploadedCase;
   Verdict: Verdict;
+  VerdictDetail: VerdictDetail;
   VerdictOutput: VerdictOutput;
   VerdictRun: VerdictRun;
   VerdictRunCommand: VerdictRunCommand;
@@ -208,18 +215,25 @@ export interface AgentStep {
     [k: string]: JsonValue;
   };
   case_id: string;
+  error_code: ErrorCode | null;
   fact_id: string | null;
   latency_ms: number;
   occurred_at: string;
+  outcome: StepOutcome;
   rule_ids: string[];
   step_no: number;
   tool: ToolName;
   verdict_run_id: string;
 }
 /**
- * Response of both agent log reads, in step order.
+ * Response of both agent log reads: the steps in the order they were made.
+ *
+ * Within a run by step number; across the runs of a case, run after run.
+ * The answer is bounded: `has_more` says that more steps exist than are
+ * listed.
  */
 export interface AgentStepList {
+  has_more: boolean;
   steps: AgentStep[];
 }
 /**
@@ -246,6 +260,7 @@ export interface AuditRecord {
         [k: string]: number;
       }
     | RouteDetail
+    | VerdictDetail
     | null;
   error_code?: ErrorCode | null;
   eval_run_id: string | null;
@@ -260,6 +275,15 @@ export interface AuditRecord {
 export interface RouteDetail {
   route: "extracting" | "awaiting_customer" | "awaiting_triage";
   threshold: number;
+}
+/**
+ * Detail of `verdict.suggested`: the retriever configuration the run was made with (AD-15).
+ *
+ * A case gets one run per configuration it was started with, and each is
+ * an event of its own: the detail says which.
+ */
+export interface VerdictDetail {
+  retriever_config: RetrieverConfig;
 }
 /**
  * Response of `GET /cases/{case_id}/audit`: the case's events, oldest first.
@@ -734,10 +758,14 @@ export interface VerdictRunCommand {
   retriever_config: RetrieverConfig;
 }
 /**
- * Response of `GET /cases/{case_id}/verdict-runs`.
+ * Response of `GET /cases/{case_id}/verdict-runs`: the case's runs, oldest first.
+ *
+ * The answer is bounded: `has_more` says that the case has more runs than
+ * are listed.
  */
 export interface VerdictRunList {
   case_id: string;
+  has_more: boolean;
   verdict_runs: VerdictRun[];
 }
 /**
@@ -748,11 +776,15 @@ export interface VerdictRunRequest {
 }
 /**
  * The requested run's state; the run itself is read from `verdict`.
+ *
+ * `running` while the run is under way, then `done` or `failed`.
  */
 export interface VerdictRunRequested {
   case_id: string;
+  error_code?: ErrorCode | null;
   retriever_config: RetrieverConfig;
   status: StageStatus;
+  verdict_run_id: string | null;
 }
 export interface VerdictRunResult {
   audit: AuditRecord;

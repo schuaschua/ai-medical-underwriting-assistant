@@ -22,7 +22,7 @@ holds the ruff, mypy and pytest settings for every member.
   audit record, enums, the error catalogue, the `rule_id` patterns, the page type mapping, the eval
   query builder and text normalisation. It imports only the standard library and pydantic. A change to
   it is one pull request that updates every affected service.
-- `services/` holds the seven services. So far there are six. `services/web/` is the FastAPI service
+- `services/` holds the seven services. `services/web/` is the FastAPI service
   that serves the React app in `services/web/spa/` and every `/api` route from one origin.
   `services/intake/` owns cases, documents and the stored PDFs: database schema `intake` and the blob
   containers `originals` and `cases`. `services/workflow/` owns the case lifecycle: one orchestration
@@ -33,13 +33,17 @@ holds the ruff, mypy and pytest settings for every member.
   its Dapr sidecar: it asks `intake` to create a case from an upload, then asks `workflow` to start
   it. It passes a person's decision about a page on to `workflow`, reads the classifications from
   `classification`, and composes the underwriter's triage queue from `workflow`'s queue and those
-  classifications; a page's thumbnail it reads from `intake`. `workflow` commands `intake`, `classification` and `extraction`, and `classification` reads
+  classifications; a page's thumbnail it reads from `intake`. `workflow` commands `intake`, `classification`, `extraction` and `verdict`, and `classification` reads
   each page from `intake`. `services/extraction/` reads the medical facts of each page that reaches
   extraction, each with a verbatim quote that code checks against the page text `intake` stores
   (database schema `extraction`); its prompt is in `services/extraction/src/extraction/prompts/`. `services/retrieval/` owns the underwriting manual's rules as chunks with
   vectors (database schema `retrieval`, blob container `manual`) and the one-off job that ingests the
   manual; its prompt is in `services/retrieval/src/retrieval/prompts/`. It searches those chunks
-  (`POST /searches`) and reads a rule by its id (`GET /rules/<rule_id>`), and calls no other service. No service imports another service's code.
+  (`POST /searches`) and reads a rule by its id (`GET /rules/<rule_id>`), and calls no other service. `services/verdict/` suggests a verdict for a case,
+  with cited reasons: its agent reads the case's facts from `extraction` and searches and reads the
+  manual's rules at `retrieval`, both through its Dapr sidecar, and every tool call it makes is kept
+  in an append-only step log (database schema `verdict`); its prompt is in
+  `services/verdict/src/verdict/prompts/`. No service imports another service's code.
 
 ### Install and check
 
@@ -83,7 +87,7 @@ It starts PostgreSQL with pgvector, the Azurite blob emulator and the Durable Ta
 containers (`compose.yaml`), applies the database migrations, builds the SPA, starts a stand-in for
 Azure AI Language, one for the Foundry model deployments and one for Document Intelligence's layout
 model (see below), ingests the underwriting manual, and runs the `web`, `intake`, `workflow`,
-`classification`, `extraction` and `retrieval` services, each with its Dapr sidecar (`dapr.yaml`; each later service
+`classification`, `extraction`, `retrieval` and `verdict` services, each with its Dapr sidecar (`dapr.yaml`; each later service
 is added to that file).
 If the Dapr runtime is missing it stops and says so. Then open <http://localhost:8000/>. The app and
 its API share that one address: `/api/health` answers without a role, and every other `/api` route
@@ -354,12 +358,20 @@ customer), `--mode invalid` (an answer that is not the JSON asked for) or `--mod
 (every call answered 429) to see the other outcomes. For extraction it reads the labelled values and
 the table rows the generator prints on the medical pages, and nothing else; `--mode
 quote_not_on_page` adds to every page a fact whose quote is on no page (stored as unverified), and
-`--mode masked_value` adds a masked value proposed as a fact (never stored); with `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
+`--mode masked_value` adds a masked value proposed as a fact (never stored). For the verdict agent it
+plays one fixed conversation, worked out from the messages it is sent: it lists the facts, searches
+the manual for each reading, reads the rule whose band the fact meets, follows a reference the facts
+meet, and answers with one reason per rule. Five modes show what `verdict`'s own code then does:
+`--mode endless_loop` (never answers: the run stops at the step limit and the case is referred),
+`--mode unseen_rule` (also cites a rule and a fact the run never saw: not stored), `--mode
+wrong_effect` (debits the rules do not say: not stored, and the case is referred), `--mode
+low_confidence` (confidence 0.6: referred) and `--mode invalid_answer` (a final answer that is not
+the JSON asked for: the run and the case fail). With `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
 (`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`). It is part of the same dev-only package, and
-`classification` and `extraction` refuse a plain-HTTP model endpoint that is not on this machine.
-Locally the audit trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT` and
-`EXTRACTION_CHAT_DEPLOYMENT` in `dapr.yaml`); in Azure those settings are the name of the real
-deployment.
+`classification`, `extraction` and `verdict` refuse a plain-HTTP model endpoint that is not on this machine.
+Locally the audit trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT`,
+`EXTRACTION_CHAT_DEPLOYMENT` and `VERDICT_CHAT_DEPLOYMENT` in `dapr.yaml`); in Azure those settings
+are the name of the real deployment.
 
 **The manual's rules as chunks (story 2.2).** `retrieval` holds the underwriting manual
 (`data/manual/underwriting-manual.pdf`) as one `smart` chunk per rule, in table `retrieval.chunk`. A
@@ -483,7 +495,7 @@ and threshold and prints how many came first, in the top 3 and in the top 5
 only count shared words, so those numbers say little about the real embedding model.
 
 The services never run migrations when they start, here or in Azure, and `intake`, `workflow`,
-`classification`, `extraction` and `retrieval` each report "not ready" (`/ready`) until their schema is at the
+`classification`, `extraction`, `retrieval` and `verdict` each report "not ready" (`/ready`) until their schema is at the
 newest migration they ship with. Locally, one script stands in
 for the pipeline's migration step. `./tools/dev.sh` runs it for you; run it yourself after pulling a
 change that adds a migration:
@@ -503,11 +515,16 @@ and for `extraction` likewise (`uv run alembic -c services/extraction/alembic.in
 For `retrieval` it applies that service's migrations
 (`uv run alembic -c services/retrieval/alembic.ini upgrade head`) and uploads the manual to the
 emulator's `manual` container (`uv run python -m retrieval.local_setup data/manual/underwriting-manual.pdf`).
+For `verdict` it creates the database role `verdict` (`uv run python -m verdict.local_setup`) and
+applies that service's migrations (`uv run alembic -c services/verdict/alembic.ini upgrade head`, with
+`VERDICT_DATABASE_SERVICE_ROLE=verdict`), which grant the role its rights, as for `workflow`.
 It can be run again safely.
 
 `workflow` runs as that role, not as the database's own user, so the rule that the audit trail is
 append-only holds on your machine as it does in Azure: the role may read `workflow.audit_event` and
-add to it, and the database refuses it an `UPDATE` or a `DELETE`.
+add to it, and the database refuses it an `UPDATE` or a `DELETE`. `verdict` runs as its own role
+in the same way: it may read `verdict.agent_step`, the agent's step log, and add to it, and nothing
+more.
 
 | What | Where |
 | --- | --- |
@@ -520,8 +537,9 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | Stand-in for the Foundry chat and embedding deployments (this machine only) | `http://localhost:5101` |
 | `retrieval` (`/health`, `/ready`, `POST /searches`, `GET /rules/<rule_id>`), and its Dapr sidecar | `http://localhost:8004`, `http://localhost:3504` |
 | `extraction` (`/health`, `/ready`, `POST /fact-sets`, `GET /cases/<case_id>/facts`), and its Dapr sidecar | `http://localhost:8005`, `http://localhost:3505` |
+| `verdict` (`/health`, `/ready`, `POST /verdict-runs`, `GET /cases/<case_id>/verdict-runs`, `GET /verdict-runs/<verdict_run_id>/steps`, `GET /cases/<case_id>/agent-steps?tool=&rule_id=`), and its Dapr sidecar | `http://localhost:8006`, `http://localhost:3506` |
 | Stand-in for Document Intelligence's layout model (this machine only) | `http://localhost:5102` |
-| PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |
+| PostgreSQL (database and user `aiuw`, and the roles `workflow` and `verdict`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
 | Durable Task Scheduler emulator (task hubs `default` and, for tests, `aiuw-test`), and its dashboard | `localhost:8080`, <http://localhost:8082/> |
 
@@ -539,7 +557,14 @@ in Azure it signs in to PostgreSQL and to the chat deployment with its managed i
 (`CLASSIFICATION_MODEL_ENDPOINT` is the Foundry account's endpoint there, with
 `CLASSIFICATION_MODEL_ENTRA_AUTH=true`; there is no key). `extraction` reads page text from `intake`
 through its own sidecar (`EXTRACTION_DAPR_HTTP_PORT`) and signs in the same way
-(`EXTRACTION_MODEL_ENDPOINT`, `EXTRACTION_MODEL_ENTRA_AUTH=true`).
+(`EXTRACTION_MODEL_ENDPOINT`, `EXTRACTION_MODEL_ENTRA_AUTH=true`). `verdict` reads a case's facts
+from `extraction` and the manual's rules from `retrieval` through its own sidecar
+(`VERDICT_DAPR_HTTP_PORT`) and signs in the same way (`VERDICT_MODEL_ENDPOINT`,
+`VERDICT_MODEL_ENTRA_AUTH=true`). To look at a case's suggested verdicts on this machine, read
+`http://localhost:8006/cases/<case_id>/verdict-runs`; the steps of one run are at
+`http://localhost:8006/verdict-runs/<verdict_run_id>/steps`, and a case's steps across its runs at
+`http://localhost:8006/cases/<case_id>/agent-steps`, which takes `?tool=` and `?rule_id=` to narrow
+them.
 `workflow` reaches the scheduler emulator without a credential; in Azure it signs in to the Durable Task
 Scheduler and PostgreSQL with its managed identity. The emulator keeps its state in memory, so
 orchestrations are gone after `docker compose stop`, while case status and the audit trail stay in
@@ -559,6 +584,7 @@ docker build -f services/intake/Dockerfile -t aiuw-intake:dev .
 docker build -f services/workflow/Dockerfile -t aiuw-workflow:dev .
 docker build -f services/classification/Dockerfile -t aiuw-classification:dev .
 docker build -f services/extraction/Dockerfile -t aiuw-extraction:dev .
+docker build -f services/verdict/Dockerfile -t aiuw-verdict:dev .
 docker build -f services/retrieval/Dockerfile -t aiuw-retrieval:dev .   # the service, and the job: python -m retrieval.ingest
 ```
 
@@ -601,6 +627,17 @@ pages from `intake` only. The deploy builds the `extraction` image, fails unless
 latest revision runs it, and says whether it is ready. Its database role and migration are a manual
 step (`infra/bootstrap/README.md`, section 8); until it is done, a case fails once a page reaches
 extraction.
+
+Stories 2.5 and 2.6 add a seventh Container App, `verdict` (internal ingress, one replica, so that
+its own cap on model calls is the cap for the environment). Its identity holds Foundry User on the
+Foundry project, for the chat deployment it shares with `classification` and `extraction`, and no
+role on storage: it reads facts from `extraction` and rules from `retrieval` only. The `app` stack
+sets the cap on its model calls, the most tool calls one run may make and the confidence under which
+a run refers its case (`verdict_model_max_concurrent_calls`, `verdict_step_limit` and
+`verdict_confidence_floor` in `infra/demo/app/terraform.tfvars`). The deploy builds the `verdict`
+image, fails unless `verdict`'s latest revision runs it, and says whether it is ready. Its database
+role and migration are a manual step (`infra/bootstrap/README.md`, section 9); until it is done, a
+case fails once all its pages are final and its verdict runs are commanded.
 
 The `deploy` workflow (`.github/workflows/deploy.yml`) is started by hand on `main` and deploys only
 the commit `main` is at. It builds the `web`, `intake`, `workflow` and `classification` images in the

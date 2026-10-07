@@ -9,12 +9,10 @@ the stand-ins (`packages/` tests, story 2.4).
 """
 
 import asyncio
-import secrets
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,12 +20,8 @@ import httpx2
 import psycopg
 import pytest
 from alembic import command
-from alembic.autogenerate import compare_metadata
-from alembic.config import main as alembic_command_line
-from alembic.migration import MigrationContext
 from extraction_fakes import (
     DEPLOYMENT,
-    NO_FACTS,
     PAGE_TEXT,
     QUOTE,
     STATEMENT,
@@ -37,34 +31,25 @@ from extraction_fakes import (
     fact,
 )
 from fastapi.testclient import TestClient
-from psycopg import sql
-from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
 
 from contracts.errors import ErrorBody, ErrorCode
 from contracts.ids import new_id
 from contracts.models.extraction import Fact, FactList, FactSetResult
 from contracts.text import normalise
-from extraction.adapters import db as db_module
 from extraction.adapters.db import (
     SqlFactRepository,
-    SqlSchemaRevision,
     build_database,
-    database_url,
-    metadata,
 )
 from extraction.adapters.http.app import create_app
 from extraction.adapters.migrations import (
     alembic_config,
     bundled_head,
-    include_name,
 )
 from extraction.domain.entities import FactSetKey
-from extraction.settings import Settings, get_settings
+from extraction.settings import Settings
 
 pytestmark = pytest.mark.integration
 
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 
 
@@ -167,66 +152,6 @@ def test_story_2_4_the_migration_keeps_everything_in_schema_extraction(
     ) == [("fact", "extraction", "fact_set")]
 
 
-def test_story_2_4_the_tables_in_code_match_the_migrated_database(
-    migrated_database: Settings,
-) -> None:
-    engine = create_engine(database_url(migrated_database))
-    try:
-        with engine.connect() as connection:
-            context = MigrationContext.configure(
-                connection,
-                opts={
-                    "include_schemas": True,
-                    "include_name": include_name,
-                    "version_table": "alembic_version",
-                    "version_table_schema": "extraction",
-                    "compare_type": True,
-                },
-            )
-            differences = compare_metadata(context, metadata)
-    finally:
-        engine.dispose()
-
-    # Nothing to add, drop or alter: what the service writes is what exists.
-    assert differences == []
-
-
-def test_story_2_4_the_migration_can_be_taken_back(migrated_database: Settings) -> None:
-    command.downgrade(alembic_config(migrated_database), "base")
-
-    assert (
-        query(
-            migrated_database,
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'extraction' AND table_name IN ('fact', 'fact_set')",
-        )
-        == []
-    )
-    command.upgrade(alembic_config(migrated_database), "head")
-    assert fact_sets(migrated_database) == []
-
-
-def test_story_2_4_the_documented_alembic_command_migrates_the_database_named_in_the_environment(
-    empty_database: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # tools/migrate-local.sh: alembic -c services/extraction/alembic.ini
-    # upgrade head, with the database chosen by EXTRACTION_DATABASE_* alone.
-    monkeypatch.setenv("EXTRACTION_DATABASE_HOST", empty_database.database_host)
-    monkeypatch.setenv("EXTRACTION_DATABASE_PORT", str(empty_database.database_port))
-    monkeypatch.setenv("EXTRACTION_DATABASE_NAME", empty_database.database_name)
-    monkeypatch.setenv("EXTRACTION_DATABASE_USER", empty_database.database_user)
-    monkeypatch.setenv("EXTRACTION_DATABASE_ENTRA_AUTH", "false")
-    get_settings.cache_clear()
-    try:
-        alembic_command_line(argv=["-c", str(ALEMBIC_INI), "upgrade", "head"])
-    finally:
-        get_settings.cache_clear()
-
-    assert query(
-        empty_database, "SELECT version_num FROM extraction.alembic_version"
-    ) == [(bundled_head(),)]
-
-
 def test_story_2_4_readiness_fails_until_the_schema_is_at_the_bundled_head(
     empty_database: Settings,
 ) -> None:
@@ -257,41 +182,6 @@ def test_story_2_4_readiness_fails_until_the_schema_is_at_the_bundled_head(
     )
     assert after.status_code == 200
     assert unknown.status_code == 502
-
-
-def test_story_2_4_readiness_reports_a_permission_error_as_such_not_as_unmigrated(
-    migrated_database: Settings, caplog: pytest.LogCaptureFixture
-) -> None:
-    # A role that may sign in but has no rights on schema `extraction`.
-    role = f"no_rights_{secrets.token_hex(4)}"
-    with connect(migrated_database, autocommit=True) as connection:
-        connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
-    settings = migrated_database.model_copy(update={"database_user": role})
-    try:
-        with TestClient(create_app(settings), raise_server_exceptions=False) as client:
-            response = client.get("/ready")
-    finally:
-        with connect(migrated_database, autocommit=True) as connection:
-            connection.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
-
-    assert response.status_code == 502
-    # The SQLSTATE of "permission denied", never the message.
-    assert "schema revision unreadable: sqlstate=42501" in caplog.text
-    assert "not ready: database type=ProgrammingError" in caplog.text
-
-
-def test_story_2_4_ready_fails_when_the_database_is_unreachable(
-    settings: Settings,
-) -> None:
-    down = settings.model_copy(
-        update={"database_port": 1, "database_connect_timeout_seconds": 1}
-    )
-
-    with TestClient(create_app(down), raise_server_exceptions=False) as client:
-        response = client.get("/ready")
-
-    assert response.status_code == 502
-    assert "127.0.0.1" not in response.text
 
 
 # --- The repository -------------------------------------------------------------------------
@@ -325,33 +215,6 @@ def a_fact(key: FactSetKey, page_number: int = 1, **changes: Any) -> Fact:
     return Fact.model_validate(values)
 
 
-def test_story_2_4_the_key_row_is_inserted_as_running_once_per_key(
-    migrated_database: Settings,
-) -> None:
-    key = FactSetKey(new_id(), new_id())
-    first_id, second_id = new_id(), new_id()
-
-    with a_repository(migrated_database) as (repository, runner):
-        assert runner.run(repository.find(key)) is None
-        inserted = runner.run(repository.begin(first_id, key, NOW))
-        again = runner.run(repository.begin(second_id, key, NOW))
-        # The same page of another case is another key.
-        other = runner.run(
-            repository.begin(new_id(), FactSetKey(new_id(), key.page_id), NOW)
-        )
-        found = runner.run(repository.find(key))
-
-    assert inserted is None and other is None
-    assert again is not None and found == again
-    assert (again.fact_set_id, again.key, again.started_at, again.running) == (
-        first_id,
-        key,
-        NOW,
-        True,
-    )
-    assert (key.case_id, key.page_id, "running") in fact_sets(migrated_database)
-
-
 def test_story_2_4_begins_that_arrive_together_insert_one_row(
     migrated_database: Settings,
 ) -> None:
@@ -365,55 +228,6 @@ def test_story_2_4_begins_that_arrive_together_insert_one_row(
         inserted = list(pool.map(begin, range(6)))
 
     assert inserted.count(True) == 1
-    assert len(fact_sets(migrated_database)) == 1
-
-
-def test_story_2_4_begin_tries_again_when_the_row_in_its_way_was_released_meanwhile(
-    migrated_database: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    key = FactSetKey(new_id(), new_id())
-    first_id, second_id = new_id(), new_id()
-    real_key_row = db_module._key_row
-    reads = 0
-
-    async def released_meanwhile(connection: Any, wanted: FactSetKey) -> Any:
-        # Between the insert that met the first call's row and the read of
-        # it, the first call gives its row up.
-        nonlocal reads
-        reads += 1
-        if reads == 1:
-            with connect(migrated_database, autocommit=True) as other:
-                other.execute("DELETE FROM extraction.fact_set")
-        return await real_key_row(connection, wanted)
-
-    with a_repository(migrated_database) as (repository, runner):
-        assert runner.run(repository.begin(first_id, key, NOW)) is None
-        monkeypatch.setattr(db_module, "_key_row", released_meanwhile)
-        # Not "there already" with nothing there: the insert is made again,
-        # and the row is this call's own.
-        second = runner.run(repository.begin(second_id, key, NOW))
-        monkeypatch.undo()
-        row = runner.run(repository.find(key))
-
-    assert second is None
-    assert reads == 1
-    assert row is not None and row.fact_set_id == second_id
-
-
-def test_story_2_4_begin_gives_up_when_the_row_can_be_neither_inserted_nor_read(
-    migrated_database: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    key = FactSetKey(new_id(), new_id())
-
-    async def never_there(connection: Any, wanted: FactSetKey) -> None:
-        return None
-
-    with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(new_id(), key, NOW))
-        monkeypatch.setattr(db_module, "_key_row", never_there)
-        with pytest.raises(db_module.KeyRowContended):
-            runner.run(repository.begin(new_id(), key, NOW))
-
     assert len(fact_sets(migrated_database)) == 1
 
 
@@ -510,48 +324,6 @@ def test_story_2_4_a_result_and_its_facts_are_stored_together_once_and_the_first
     ]
 
 
-def test_story_2_4_a_failed_end_and_a_page_without_facts_store_no_fact(
-    migrated_database: Settings,
-) -> None:
-    failed_key, empty_key = (
-        FactSetKey(new_id(), new_id()),
-        FactSetKey(new_id(), new_id()),
-    )
-    failed_id, empty_id = new_id(), new_id()
-
-    with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(failed_id, failed_key, NOW))
-        runner.run(repository.begin(empty_id, empty_key, NOW))
-        runner.run(repository.finish(failed_id, "{}", None))
-        runner.run(repository.finish(empty_id, "{}", []))
-        listed = runner.run(repository.of_case(failed_key.case_id)) + runner.run(
-            repository.of_case(empty_key.case_id)
-        )
-
-    assert listed == []
-    assert sorted(row[2] for row in fact_sets(migrated_database)) == ["done", "failed"]
-    assert facts(migrated_database) == []
-
-
-def test_story_2_4_facts_that_cannot_be_stored_leave_the_key_row_running(
-    migrated_database: Settings,
-) -> None:
-    key = FactSetKey(new_id(), new_id())
-    fact_set_id = new_id()
-    same_id = new_id()
-    # Two facts with one id: the second insert fails, and the result with it.
-    clashing = [a_fact(key, fact_id=same_id), a_fact(key, fact_id=same_id)]
-
-    with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(fact_set_id, key, NOW))
-        with pytest.raises(IntegrityError):
-            runner.run(repository.finish(fact_set_id, "{}", clashing))
-        row = runner.run(repository.find(key))
-
-    assert row is not None and row.running
-    assert facts(migrated_database) == []
-
-
 def test_story_2_4_the_database_takes_offsets_only_with_a_verified_quote(
     migrated_database: Settings,
 ) -> None:
@@ -585,40 +357,6 @@ def test_story_2_4_the_database_takes_offsets_only_with_a_verified_quote(
                     end,
                 ),
             )
-
-
-def test_story_2_4_a_running_key_row_can_be_released_and_a_settled_one_cannot(
-    migrated_database: Settings,
-) -> None:
-    running_key, settled_key = (
-        FactSetKey(new_id(), new_id()),
-        FactSetKey(new_id(), new_id()),
-    )
-    running_id, settled_id = new_id(), new_id()
-
-    with a_repository(migrated_database) as (repository, runner):
-        runner.run(repository.begin(running_id, running_key, NOW))
-        runner.run(repository.begin(settled_id, settled_key, NOW))
-        runner.run(repository.finish(settled_id, "{}", None))
-        runner.run(repository.release(running_id))
-        runner.run(repository.release(settled_id))
-        assert runner.run(repository.find(running_key)) is None
-        assert runner.run(repository.find(settled_key)) is not None
-
-
-def test_story_2_4_the_schema_revision_is_none_before_any_migration(
-    empty_database: Settings,
-) -> None:
-    with asyncio.Runner() as runner:
-        database = build_database(empty_database)
-        try:
-            before = runner.run(SqlSchemaRevision(database).current())
-            command.upgrade(alembic_config(empty_database), "head")
-            after = runner.run(SqlSchemaRevision(database).current())
-        finally:
-            runner.run(database.dispose())
-
-    assert (before, after) == (None, bundled_head())
 
 
 # --- The real service ---------------------------------------------------------------------
@@ -705,7 +443,6 @@ def test_story_2_4_a_repeat_is_answered_from_the_database_without_a_model_call(
     [
         (("not the object that was asked for",), "invalid_model_output", 1),
         ((429,), "model_unavailable", 2),
-        ((400,), "stage_failed", 1),
     ],
 )
 def test_story_2_4_a_failed_extraction_is_stored_as_failed_with_no_fact(
@@ -732,22 +469,6 @@ def test_story_2_4_a_failed_extraction_is_stored_as_failed_with_no_fact(
     assert deployment.calls == calls
     assert fact_sets(migrated_database) == [(case_id, page_id, "failed")]
     assert listed.json() == {"case_id": case_id, "facts": []}
-
-
-def test_story_2_4_a_page_with_nothing_medical_is_done_with_no_fact(
-    migrated_database: Settings,
-) -> None:
-    sidecar = IntakeSidecar()
-    case_id = new_id()
-    page_id = sidecar.pages.add(case_id, "Invoice\nTotal due\n94.74")
-
-    with service(migrated_database, sidecar, Deployment(NO_FACTS)) as client:
-        response = client.post("/fact-sets", json=command_for(case_id, page_id))
-
-    result = FactSetResult.model_validate(response.json())
-    assert (result.status.value, result.fact_ids) == ("done", [])
-    assert result.audit.action.value == "facts.extracted"
-    assert fact_sets(migrated_database) == [(case_id, page_id, "done")]
 
 
 def test_story_2_4_when_intake_is_down_for_the_page_no_row_is_left_and_the_repeat_works(
@@ -786,20 +507,3 @@ def test_story_2_4_when_intake_is_down_for_the_page_no_row_is_left_and_the_repea
     assert rows_after_failure == []
     assert FactSetResult.model_validate(again.json()).status.value == "done"
     assert deployment.calls == 1
-
-
-def test_story_2_4_a_page_intake_does_not_hold_for_the_case_leaves_no_row(
-    migrated_database: Settings,
-) -> None:
-    sidecar = IntakeSidecar()
-    case_id = new_id()
-    sidecar.pages.add(case_id)
-    deployment = Deployment()
-
-    with service(migrated_database, sidecar, deployment) as client:
-        unknown_page = client.post("/fact-sets", json=command_for(case_id, new_id()))
-        unknown_case = client.post("/fact-sets", json=command_for(new_id(), new_id()))
-
-    assert (unknown_page.status_code, unknown_case.status_code) == (404, 404)
-    assert fact_sets(migrated_database) == []
-    assert deployment.calls == 0

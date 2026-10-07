@@ -1,7 +1,7 @@
 {
   "manual_file": "underwriting-manual.pdf",
   "manual_title": "Synthetic Underwriting Manual",
-  "page_count": 206,
+  "page_count": 211,
   "notice": "The debit percentages and the decisions to decline are invented for this synthetic manual. The thresholds follow the public source named in each rule, except the edges a rule marks as this manual's own.",
   "contents_page": 2,
   "sections": [
@@ -23,202 +23,202 @@
     {
       "number": "4",
       "title": "Prediabetes",
-      "first_page": 21
+      "first_page": 22
     },
     {
       "number": "5",
       "title": "Build: underweight and obesity",
-      "first_page": 25
+      "first_page": 26
     },
     {
       "number": "6",
       "title": "Raised LDL cholesterol",
-      "first_page": 31
+      "first_page": 32
     },
     {
       "number": "7",
       "title": "Raised triglycerides",
-      "first_page": 36
+      "first_page": 37
     },
     {
       "number": "8",
       "title": "Gout",
-      "first_page": 40
+      "first_page": 41
     },
     {
       "number": "9",
       "title": "Hypothyroidism",
-      "first_page": 44
+      "first_page": 45
     },
     {
       "number": "10",
       "title": "Hypertension",
-      "first_page": 48
+      "first_page": 49
     },
     {
       "number": "11",
       "title": "Myocardial infarction",
-      "first_page": 55
+      "first_page": 57
     },
     {
       "number": "12",
       "title": "Heart failure",
-      "first_page": 60
+      "first_page": 62
     },
     {
       "number": "13",
       "title": "Atrial fibrillation",
-      "first_page": 65
+      "first_page": 67
     },
     {
       "number": "14",
       "title": "Aortic stenosis",
-      "first_page": 70
+      "first_page": 72
     },
     {
       "number": "15",
       "title": "Hypertrophic cardiomyopathy",
-      "first_page": 74
+      "first_page": 77
     },
     {
       "number": "16",
       "title": "Abdominal aortic aneurysm",
-      "first_page": 78
+      "first_page": 81
     },
     {
       "number": "17",
       "title": "Peripheral artery disease",
-      "first_page": 83
+      "first_page": 86
     },
     {
       "number": "18",
       "title": "Carotid artery stenosis",
-      "first_page": 87
+      "first_page": 90
     },
     {
       "number": "19",
       "title": "Stroke",
-      "first_page": 91
+      "first_page": 94
     },
     {
       "number": "20",
       "title": "Venous thromboembolism",
-      "first_page": 96
+      "first_page": 99
     },
     {
       "number": "21",
       "title": "Tobacco use",
-      "first_page": 100
+      "first_page": 103
     },
     {
       "number": "22",
       "title": "Alcohol use",
-      "first_page": 106
+      "first_page": 109
     },
     {
       "number": "23",
       "title": "Long-term opioid therapy",
-      "first_page": 111
+      "first_page": 114
     },
     {
       "number": "24",
       "title": "Asthma",
-      "first_page": 116
+      "first_page": 119
     },
     {
       "number": "25",
       "title": "Chronic obstructive pulmonary disease",
-      "first_page": 120
+      "first_page": 123
     },
     {
       "number": "26",
       "title": "Obstructive sleep apnoea",
-      "first_page": 125
+      "first_page": 129
     },
     {
       "number": "27",
       "title": "Chronic kidney disease",
-      "first_page": 130
+      "first_page": 134
     },
     {
       "number": "28",
       "title": "Albuminuria",
-      "first_page": 136
+      "first_page": 140
     },
     {
       "number": "29",
       "title": "Chronic hepatitis B",
-      "first_page": 140
+      "first_page": 144
     },
     {
       "number": "30",
       "title": "Chronic hepatitis C",
-      "first_page": 145
+      "first_page": 149
     },
     {
       "number": "31",
       "title": "Fatty liver disease",
-      "first_page": 149
+      "first_page": 153
     },
     {
       "number": "32",
       "title": "Cirrhosis of the liver",
-      "first_page": 154
+      "first_page": 158
     },
     {
       "number": "33",
       "title": "Ulcerative colitis",
-      "first_page": 158
+      "first_page": 162
     },
     {
       "number": "34",
       "title": "Anaemia",
-      "first_page": 162
+      "first_page": 166
     },
     {
       "number": "35",
       "title": "Haemophilia",
-      "first_page": 166
+      "first_page": 170
     },
     {
       "number": "36",
       "title": "HIV infection",
-      "first_page": 170
+      "first_page": 174
     },
     {
       "number": "37",
       "title": "Depression",
-      "first_page": 174
+      "first_page": 178
     },
     {
       "number": "38",
       "title": "Epilepsy",
-      "first_page": 178
+      "first_page": 182
     },
     {
       "number": "39",
       "title": "Rheumatoid arthritis",
-      "first_page": 182
+      "first_page": 186
     },
     {
       "number": "40",
       "title": "Osteoporosis",
-      "first_page": 186
+      "first_page": 191
     },
     {
       "number": "41",
       "title": "Melanoma of the skin",
-      "first_page": 189
+      "first_page": 194
     },
     {
       "number": "42",
       "title": "Glossary",
-      "first_page": 194
+      "first_page": 199
     },
     {
       "number": "43",
       "title": "Public sources",
-      "first_page": 200
+      "first_page": 205
     }
   ],
   "impairments": [
@@ -283,7 +283,7 @@
       "code": "PD",
       "name": "Prediabetes",
       "section": "4",
-      "first_page": 21,
+      "first_page": 22,
       "applies": {
         "basis": "reading",
         "words": "A laboratory HbA1c is on file and no diagnosis of diabetes of either type has been made.",
@@ -347,7 +347,7 @@
       "code": "BMI",
       "name": "Build: underweight and obesity",
       "section": "5",
-      "first_page": 25,
+      "first_page": 26,
       "applies": {
         "basis": "reading",
         "words": "Every applicant: height and weight are on file for all of them.",
@@ -391,7 +391,7 @@
       "code": "LDL",
       "name": "Raised LDL cholesterol",
       "section": "6",
-      "first_page": 31,
+      "first_page": 32,
       "applies": {
         "basis": "reading",
         "words": "An LDL cholesterol result is on file, with or without a diagnosis or treatment.",
@@ -435,7 +435,7 @@
       "code": "TG",
       "name": "Raised triglycerides",
       "section": "7",
-      "first_page": 36,
+      "first_page": 37,
       "applies": {
         "basis": "reading",
         "words": "A fasting triglyceride result is on file.",
@@ -479,7 +479,7 @@
       "code": "GOUT",
       "name": "Gout",
       "section": "8",
-      "first_page": 40,
+      "first_page": 41,
       "applies": {
         "basis": "diagnosis",
         "words": "Gout has been diagnosed. A raised urate in someone who has never had an attack is not gout and meets no rule here.",
@@ -505,7 +505,7 @@
       "code": "THY",
       "name": "Hypothyroidism",
       "section": "9",
-      "first_page": 44,
+      "first_page": 45,
       "applies": {
         "basis": "diagnosis",
         "words": "An underactive thyroid has been diagnosed, treated or not.",
@@ -531,7 +531,7 @@
       "code": "HT",
       "name": "Hypertension",
       "section": "10",
-      "first_page": 48,
+      "first_page": 49,
       "applies": {
         "basis": "reading",
         "words": "Blood pressure readings from the last twelve months are on file, whether or not hypertension has been diagnosed or is treated.",
@@ -603,7 +603,7 @@
       "code": "MI",
       "name": "Myocardial infarction",
       "section": "11",
-      "first_page": 55,
+      "first_page": 57,
       "applies": {
         "basis": "diagnosis",
         "words": "A heart attack is recorded in the history.",
@@ -629,7 +629,7 @@
       "code": "HF",
       "name": "Heart failure",
       "section": "12",
-      "first_page": 60,
+      "first_page": 62,
       "applies": {
         "basis": "diagnosis",
         "words": "Heart failure has been diagnosed.",
@@ -655,7 +655,7 @@
       "code": "AF",
       "name": "Atrial fibrillation",
       "section": "13",
-      "first_page": 65,
+      "first_page": 67,
       "applies": {
         "basis": "diagnosis",
         "words": "Atrial fibrillation or atrial flutter has been recorded on an ECG.",
@@ -681,7 +681,7 @@
       "code": "AS",
       "name": "Aortic stenosis",
       "section": "14",
-      "first_page": 70,
+      "first_page": 72,
       "applies": {
         "basis": "diagnosis",
         "words": "Aortic stenosis has been reported on an echocardiogram.",
@@ -725,7 +725,7 @@
       "code": "HCM",
       "name": "Hypertrophic cardiomyopathy",
       "section": "15",
-      "first_page": 74,
+      "first_page": 77,
       "applies": {
         "basis": "diagnosis",
         "words": "Hypertrophic cardiomyopathy has been diagnosed by a cardiologist.",
@@ -769,7 +769,7 @@
       "code": "AAA",
       "name": "Abdominal aortic aneurysm",
       "section": "16",
-      "first_page": 78,
+      "first_page": 81,
       "applies": {
         "basis": "diagnosis",
         "words": "An abdominal aortic aneurysm has been found on imaging.",
@@ -813,7 +813,7 @@
       "code": "PAD",
       "name": "Peripheral artery disease",
       "section": "17",
-      "first_page": 83,
+      "first_page": 86,
       "applies": {
         "basis": "diagnosis",
         "words": "Peripheral artery disease has been diagnosed or an ankle-brachial index has been measured for leg symptoms.",
@@ -857,7 +857,7 @@
       "code": "CAS",
       "name": "Carotid artery stenosis",
       "section": "18",
-      "first_page": 87,
+      "first_page": 90,
       "applies": {
         "basis": "diagnosis",
         "words": "Narrowing of a carotid artery has been reported on imaging.",
@@ -901,7 +901,7 @@
       "code": "CVA",
       "name": "Stroke",
       "section": "19",
-      "first_page": 91,
+      "first_page": 94,
       "applies": {
         "basis": "diagnosis",
         "words": "A stroke is recorded in the history, with damage shown on brain imaging.",
@@ -927,7 +927,7 @@
       "code": "VTE",
       "name": "Venous thromboembolism",
       "section": "20",
-      "first_page": 96,
+      "first_page": 99,
       "applies": {
         "basis": "diagnosis",
         "words": "A deep vein thrombosis or a pulmonary embolism is recorded in the history.",
@@ -953,7 +953,7 @@
       "code": "TOB",
       "name": "Tobacco use",
       "section": "21",
-      "first_page": 100,
+      "first_page": 103,
       "applies": {
         "basis": "reading",
         "words": "Every applicant: smoking status is recorded for all of them.",
@@ -1038,7 +1038,7 @@
       "code": "ALC",
       "name": "Alcohol use",
       "section": "22",
-      "first_page": 106,
+      "first_page": 109,
       "applies": {
         "basis": "reading",
         "words": "An AUDIT score recorded by a clinician is on file.",
@@ -1082,7 +1082,7 @@
       "code": "OPI",
       "name": "Long-term opioid therapy",
       "section": "23",
-      "first_page": 111,
+      "first_page": 114,
       "applies": {
         "basis": "diagnosis",
         "words": "An opioid medicine has been prescribed for pain, other than cancer pain, for three months or longer.",
@@ -1108,7 +1108,7 @@
       "code": "AST",
       "name": "Asthma",
       "section": "24",
-      "first_page": 116,
+      "first_page": 119,
       "applies": {
         "basis": "diagnosis",
         "words": "Asthma has been diagnosed.",
@@ -1134,7 +1134,7 @@
       "code": "COPD",
       "name": "Chronic obstructive pulmonary disease",
       "section": "25",
-      "first_page": 120,
+      "first_page": 123,
       "applies": {
         "basis": "diagnosis",
         "words": "Chronic obstructive pulmonary disease, chronic bronchitis with obstruction or emphysema has been diagnosed.",
@@ -1160,7 +1160,7 @@
       "code": "OSA",
       "name": "Obstructive sleep apnoea",
       "section": "26",
-      "first_page": 125,
+      "first_page": 129,
       "applies": {
         "basis": "diagnosis",
         "words": "Obstructive sleep apnoea has been diagnosed by a sleep study.",
@@ -1204,7 +1204,7 @@
       "code": "CKD",
       "name": "Chronic kidney disease",
       "section": "27",
-      "first_page": 130,
+      "first_page": 134,
       "applies": {
         "basis": "reading",
         "words": "Two eGFR results at least three months apart are on file.",
@@ -1248,7 +1248,7 @@
       "code": "ALB",
       "name": "Albuminuria",
       "section": "28",
-      "first_page": 136,
+      "first_page": 140,
       "applies": {
         "basis": "reading",
         "words": "A laboratory urine albumin-to-creatinine ratio is on file.",
@@ -1292,7 +1292,7 @@
       "code": "HBV",
       "name": "Chronic hepatitis B",
       "section": "29",
-      "first_page": 140,
+      "first_page": 144,
       "applies": {
         "basis": "diagnosis",
         "words": "Hepatitis B surface antigen has been positive for more than six months.",
@@ -1318,7 +1318,7 @@
       "code": "HCV",
       "name": "Chronic hepatitis C",
       "section": "30",
-      "first_page": 145,
+      "first_page": 149,
       "applies": {
         "basis": "diagnosis",
         "words": "Hepatitis C virus RNA has been detected at any time.",
@@ -1344,7 +1344,7 @@
       "code": "FLD",
       "name": "Fatty liver disease",
       "section": "31",
-      "first_page": 149,
+      "first_page": 153,
       "applies": {
         "basis": "diagnosis",
         "words": "Fatty liver has been reported on imaging or diagnosed by a physician.",
@@ -1370,7 +1370,7 @@
       "code": "CIR",
       "name": "Cirrhosis of the liver",
       "section": "32",
-      "first_page": 154,
+      "first_page": 158,
       "applies": {
         "basis": "diagnosis",
         "words": "Cirrhosis has been diagnosed by biopsy, by a stiffness scan or by a liver specialist.",
@@ -1396,7 +1396,7 @@
       "code": "UC",
       "name": "Ulcerative colitis",
       "section": "33",
-      "first_page": 158,
+      "first_page": 162,
       "applies": {
         "basis": "diagnosis",
         "words": "Ulcerative colitis has been diagnosed at colonoscopy.",
@@ -1422,7 +1422,7 @@
       "code": "ANA",
       "name": "Anaemia",
       "section": "34",
-      "first_page": 162,
+      "first_page": 166,
       "applies": {
         "basis": "reading",
         "words": "A full blood count from the last six months is on file.",
@@ -1466,7 +1466,7 @@
       "code": "HEM",
       "name": "Haemophilia",
       "section": "35",
-      "first_page": 166,
+      "first_page": 170,
       "applies": {
         "basis": "diagnosis",
         "words": "Haemophilia A or B has been diagnosed.",
@@ -1510,7 +1510,7 @@
       "code": "HIV",
       "name": "HIV infection",
       "section": "36",
-      "first_page": 170,
+      "first_page": 174,
       "applies": {
         "basis": "diagnosis",
         "words": "HIV infection has been diagnosed.",
@@ -1536,7 +1536,7 @@
       "code": "DEP",
       "name": "Depression",
       "section": "37",
-      "first_page": 174,
+      "first_page": 178,
       "applies": {
         "basis": "diagnosis",
         "words": "Depression has been diagnosed or treated within the last five years.",
@@ -1562,7 +1562,7 @@
       "code": "EPI",
       "name": "Epilepsy",
       "section": "38",
-      "first_page": 178,
+      "first_page": 182,
       "applies": {
         "basis": "diagnosis",
         "words": "Epilepsy has been diagnosed.",
@@ -1588,7 +1588,7 @@
       "code": "RA",
       "name": "Rheumatoid arthritis",
       "section": "39",
-      "first_page": 182,
+      "first_page": 186,
       "applies": {
         "basis": "diagnosis",
         "words": "Rheumatoid arthritis has been diagnosed by a rheumatologist.",
@@ -1614,7 +1614,7 @@
       "code": "OST",
       "name": "Osteoporosis",
       "section": "40",
-      "first_page": 186,
+      "first_page": 191,
       "applies": {
         "basis": "reading",
         "words": "A bone density scan from the last three years is on file.",
@@ -1658,7 +1658,7 @@
       "code": "MEL",
       "name": "Melanoma of the skin",
       "section": "41",
-      "first_page": 189,
+      "first_page": 194,
       "applies": {
         "basis": "diagnosis",
         "words": "An invasive melanoma of the skin has been removed, with no spread to lymph nodes or beyond.",
@@ -1863,7 +1863,7 @@
       "impairment_id": "type_2_diabetes",
       "impairment": "Type 2 diabetes mellitus",
       "section": "2",
-      "manual_page": 12,
+      "manual_page": 13,
       "edges": [
         {
           "value": "9.0",
@@ -2047,7 +2047,7 @@
       "impairment_id": "type_1_diabetes",
       "impairment": "Type 1 diabetes mellitus",
       "section": "3",
-      "manual_page": 18,
+      "manual_page": 19,
       "edges": [
         {
           "value": "8.0",
@@ -2139,7 +2139,7 @@
       "impairment_id": "prediabetes",
       "impairment": "Prediabetes",
       "section": "4",
-      "manual_page": 23,
+      "manual_page": 24,
       "edges": [
         {
           "value": "5.7",
@@ -2191,7 +2191,7 @@
       "impairment_id": "build",
       "impairment": "Build: underweight and obesity",
       "section": "5",
-      "manual_page": 27,
+      "manual_page": 28,
       "edges": [
         {
           "value": "16.0",
@@ -2239,7 +2239,7 @@
       "impairment_id": "build",
       "impairment": "Build: underweight and obesity",
       "section": "5",
-      "manual_page": 27,
+      "manual_page": 28,
       "edges": [
         {
           "value": "16.0",
@@ -2283,7 +2283,7 @@
       "impairment_id": "build",
       "impairment": "Build: underweight and obesity",
       "section": "5",
-      "manual_page": 28,
+      "manual_page": 29,
       "edges": [
         {
           "value": "35.0",
@@ -2335,7 +2335,7 @@
       "impairment_id": "build",
       "impairment": "Build: underweight and obesity",
       "section": "5",
-      "manual_page": 28,
+      "manual_page": 29,
       "edges": [
         {
           "value": "40.0",
@@ -2383,7 +2383,7 @@
       "impairment_id": "raised_ldl_cholesterol",
       "impairment": "Raised LDL cholesterol",
       "section": "6",
-      "manual_page": 33,
+      "manual_page": 34,
       "edges": [
         {
           "value": "160",
@@ -2435,7 +2435,7 @@
       "impairment_id": "raised_ldl_cholesterol",
       "impairment": "Raised LDL cholesterol",
       "section": "6",
-      "manual_page": 33,
+      "manual_page": 34,
       "edges": [
         {
           "value": "190",
@@ -2483,7 +2483,7 @@
       "impairment_id": "raised_triglycerides",
       "impairment": "Raised triglycerides",
       "section": "7",
-      "manual_page": 38,
+      "manual_page": 39,
       "edges": [
         {
           "value": "175",
@@ -2527,7 +2527,7 @@
       "impairment_id": "raised_triglycerides",
       "impairment": "Raised triglycerides",
       "section": "7",
-      "manual_page": 38,
+      "manual_page": 39,
       "edges": [
         {
           "value": "500",
@@ -2575,7 +2575,7 @@
       "impairment_id": "gout",
       "impairment": "Gout",
       "section": "8",
-      "manual_page": 42,
+      "manual_page": 43,
       "edges": [
         {
           "value": "6.0",
@@ -2615,7 +2615,7 @@
       "impairment_id": "gout",
       "impairment": "Gout",
       "section": "8",
-      "manual_page": 42,
+      "manual_page": 43,
       "edges": [
         {
           "value": "6.0",
@@ -2663,7 +2663,7 @@
       "impairment_id": "hypothyroidism",
       "impairment": "Hypothyroidism",
       "section": "9",
-      "manual_page": 46,
+      "manual_page": 47,
       "edges": [
         {
           "value": "10.0",
@@ -2703,7 +2703,7 @@
       "impairment_id": "hypothyroidism",
       "impairment": "Hypothyroidism",
       "section": "9",
-      "manual_page": 46,
+      "manual_page": 47,
       "edges": [
         {
           "value": "10.0",
@@ -2751,7 +2751,7 @@
       "impairment_id": "hypertension",
       "impairment": "Hypertension",
       "section": "10",
-      "manual_page": 51,
+      "manual_page": 52,
       "edges": [
         {
           "value": "130",
@@ -2795,7 +2795,7 @@
       "impairment_id": "hypertension",
       "impairment": "Hypertension",
       "section": "10",
-      "manual_page": 51,
+      "manual_page": 52,
       "edges": [
         {
           "value": "140",
@@ -2847,7 +2847,7 @@
       "impairment_id": "hypertension",
       "impairment": "Hypertension",
       "section": "10",
-      "manual_page": 51,
+      "manual_page": 52,
       "edges": [
         {
           "value": "160",
@@ -2899,7 +2899,7 @@
       "impairment_id": "hypertension",
       "impairment": "Hypertension",
       "section": "10",
-      "manual_page": 51,
+      "manual_page": 53,
       "edges": [
         {
           "value": "180",
@@ -2947,7 +2947,7 @@
       "impairment_id": "hypertension",
       "impairment": "Hypertension",
       "section": "10",
-      "manual_page": 52,
+      "manual_page": 53,
       "edges": [
         {
           "value": "120",
@@ -2995,7 +2995,7 @@
       "impairment_id": "myocardial_infarction",
       "impairment": "Myocardial infarction",
       "section": "11",
-      "manual_page": 57,
+      "manual_page": 59,
       "edges": [
         {
           "value": "12",
@@ -3035,7 +3035,7 @@
       "impairment_id": "myocardial_infarction",
       "impairment": "Myocardial infarction",
       "section": "11",
-      "manual_page": 57,
+      "manual_page": 59,
       "edges": [
         {
           "value": "12",
@@ -3087,7 +3087,7 @@
       "impairment_id": "myocardial_infarction",
       "impairment": "Myocardial infarction",
       "section": "11",
-      "manual_page": 57,
+      "manual_page": 60,
       "edges": [
         {
           "value": "60",
@@ -3135,7 +3135,7 @@
       "impairment_id": "heart_failure",
       "impairment": "Heart failure",
       "section": "12",
-      "manual_page": 62,
+      "manual_page": 64,
       "edges": [
         {
           "value": "40",
@@ -3175,7 +3175,7 @@
       "impairment_id": "heart_failure",
       "impairment": "Heart failure",
       "section": "12",
-      "manual_page": 62,
+      "manual_page": 64,
       "edges": [
         {
           "value": "40",
@@ -3227,7 +3227,7 @@
       "impairment_id": "heart_failure",
       "impairment": "Heart failure",
       "section": "12",
-      "manual_page": 62,
+      "manual_page": 64,
       "edges": [
         {
           "value": "50",
@@ -3275,7 +3275,7 @@
       "impairment_id": "atrial_fibrillation",
       "impairment": "Atrial fibrillation",
       "section": "13",
-      "manual_page": 67,
+      "manual_page": 69,
       "edges": [
         {
           "value": "2",
@@ -3315,7 +3315,7 @@
       "impairment_id": "atrial_fibrillation",
       "impairment": "Atrial fibrillation",
       "section": "13",
-      "manual_page": 67,
+      "manual_page": 69,
       "edges": [
         {
           "value": "2",
@@ -3367,7 +3367,7 @@
       "impairment_id": "atrial_fibrillation",
       "impairment": "Atrial fibrillation",
       "section": "13",
-      "manual_page": 68,
+      "manual_page": 70,
       "edges": [
         {
           "value": "4",
@@ -3415,7 +3415,7 @@
       "impairment_id": "aortic_stenosis",
       "impairment": "Aortic stenosis",
       "section": "14",
-      "manual_page": 72,
+      "manual_page": 74,
       "edges": [
         {
           "value": "2.0",
@@ -3459,7 +3459,7 @@
       "impairment_id": "aortic_stenosis",
       "impairment": "Aortic stenosis",
       "section": "14",
-      "manual_page": 72,
+      "manual_page": 74,
       "edges": [
         {
           "value": "3.0",
@@ -3511,7 +3511,7 @@
       "impairment_id": "aortic_stenosis",
       "impairment": "Aortic stenosis",
       "section": "14",
-      "manual_page": 72,
+      "manual_page": 74,
       "edges": [
         {
           "value": "4.0",
@@ -3551,7 +3551,7 @@
       "impairment_id": "hypertrophic_cardiomyopathy",
       "impairment": "Hypertrophic cardiomyopathy",
       "section": "15",
-      "manual_page": 76,
+      "manual_page": 79,
       "edges": [
         {
           "value": "15",
@@ -3603,7 +3603,7 @@
       "impairment_id": "hypertrophic_cardiomyopathy",
       "impairment": "Hypertrophic cardiomyopathy",
       "section": "15",
-      "manual_page": 76,
+      "manual_page": 79,
       "edges": [
         {
           "value": "30",
@@ -3643,7 +3643,7 @@
       "impairment_id": "abdominal_aortic_aneurysm",
       "impairment": "Abdominal aortic aneurysm",
       "section": "16",
-      "manual_page": 80,
+      "manual_page": 83,
       "edges": [
         {
           "value": "3.0",
@@ -3695,7 +3695,7 @@
       "impairment_id": "abdominal_aortic_aneurysm",
       "impairment": "Abdominal aortic aneurysm",
       "section": "16",
-      "manual_page": 80,
+      "manual_page": 83,
       "edges": [
         {
           "value": "4.0",
@@ -3747,7 +3747,7 @@
       "impairment_id": "abdominal_aortic_aneurysm",
       "impairment": "Abdominal aortic aneurysm",
       "section": "16",
-      "manual_page": 80,
+      "manual_page": 83,
       "edges": [
         {
           "value": "5.5",
@@ -3787,7 +3787,7 @@
       "impairment_id": "peripheral_artery_disease",
       "impairment": "Peripheral artery disease",
       "section": "17",
-      "manual_page": 85,
+      "manual_page": 88,
       "edges": [
         {
           "value": "0.90",
@@ -3835,7 +3835,7 @@
       "impairment_id": "peripheral_artery_disease",
       "impairment": "Peripheral artery disease",
       "section": "17",
-      "manual_page": 85,
+      "manual_page": 88,
       "edges": [
         {
           "value": "1.40",
@@ -3883,7 +3883,7 @@
       "impairment_id": "carotid_artery_stenosis",
       "impairment": "Carotid artery stenosis",
       "section": "18",
-      "manual_page": 89,
+      "manual_page": 92,
       "edges": [
         {
           "value": "50",
@@ -3935,7 +3935,7 @@
       "impairment_id": "carotid_artery_stenosis",
       "impairment": "Carotid artery stenosis",
       "section": "18",
-      "manual_page": 89,
+      "manual_page": 92,
       "edges": [
         {
           "value": "70",
@@ -3983,7 +3983,7 @@
       "impairment_id": "stroke",
       "impairment": "Stroke",
       "section": "19",
-      "manual_page": 93,
+      "manual_page": 96,
       "edges": [
         {
           "value": "6",
@@ -4031,7 +4031,7 @@
       "impairment_id": "stroke",
       "impairment": "Stroke",
       "section": "19",
-      "manual_page": 93,
+      "manual_page": 96,
       "edges": [
         {
           "value": "6",
@@ -4079,7 +4079,7 @@
       "impairment_id": "venous_thromboembolism",
       "impairment": "Venous thromboembolism",
       "section": "20",
-      "manual_page": 98,
+      "manual_page": 101,
       "edges": [
         {
           "value": "3",
@@ -4119,7 +4119,7 @@
       "impairment_id": "venous_thromboembolism",
       "impairment": "Venous thromboembolism",
       "section": "20",
-      "manual_page": 98,
+      "manual_page": 101,
       "edges": [
         {
           "value": "3",
@@ -4171,7 +4171,7 @@
       "impairment_id": "venous_thromboembolism",
       "impairment": "Venous thromboembolism",
       "section": "20",
-      "manual_page": 98,
+      "manual_page": 101,
       "edges": [
         {
           "value": "12",
@@ -4211,7 +4211,7 @@
       "impairment_id": "tobacco_use",
       "impairment": "Tobacco use",
       "section": "21",
-      "manual_page": 102,
+      "manual_page": 105,
       "edges": [],
       "references": [
         {
@@ -4254,7 +4254,7 @@
       "impairment_id": "tobacco_use",
       "impairment": "Tobacco use",
       "section": "21",
-      "manual_page": 103,
+      "manual_page": 106,
       "edges": [
         {
           "value": "20",
@@ -4302,7 +4302,7 @@
       "impairment_id": "tobacco_use",
       "impairment": "Tobacco use",
       "section": "21",
-      "manual_page": 103,
+      "manual_page": 106,
       "edges": [],
       "references": [
         {
@@ -4345,7 +4345,7 @@
       "impairment_id": "alcohol_use",
       "impairment": "Alcohol use",
       "section": "22",
-      "manual_page": 108,
+      "manual_page": 111,
       "edges": [
         {
           "value": "8",
@@ -4397,7 +4397,7 @@
       "impairment_id": "alcohol_use",
       "impairment": "Alcohol use",
       "section": "22",
-      "manual_page": 108,
+      "manual_page": 111,
       "edges": [
         {
           "value": "16",
@@ -4449,7 +4449,7 @@
       "impairment_id": "alcohol_use",
       "impairment": "Alcohol use",
       "section": "22",
-      "manual_page": 108,
+      "manual_page": 111,
       "edges": [
         {
           "value": "20",
@@ -4497,7 +4497,7 @@
       "impairment_id": "long_term_opioid_therapy",
       "impairment": "Long-term opioid therapy",
       "section": "23",
-      "manual_page": 113,
+      "manual_page": 116,
       "edges": [
         {
           "value": "50",
@@ -4537,7 +4537,7 @@
       "impairment_id": "long_term_opioid_therapy",
       "impairment": "Long-term opioid therapy",
       "section": "23",
-      "manual_page": 113,
+      "manual_page": 116,
       "edges": [
         {
           "value": "50",
@@ -4589,7 +4589,7 @@
       "impairment_id": "long_term_opioid_therapy",
       "impairment": "Long-term opioid therapy",
       "section": "23",
-      "manual_page": 113,
+      "manual_page": 116,
       "edges": [
         {
           "value": "90",
@@ -4637,7 +4637,7 @@
       "impairment_id": "asthma",
       "impairment": "Asthma",
       "section": "24",
-      "manual_page": 117,
+      "manual_page": 120,
       "edges": [
         {
           "value": "60",
@@ -4677,7 +4677,7 @@
       "impairment_id": "asthma",
       "impairment": "Asthma",
       "section": "24",
-      "manual_page": 118,
+      "manual_page": 121,
       "edges": [
         {
           "value": "60",
@@ -4725,7 +4725,7 @@
       "impairment_id": "copd",
       "impairment": "Chronic obstructive pulmonary disease",
       "section": "25",
-      "manual_page": 122,
+      "manual_page": 125,
       "edges": [
         {
           "value": "80",
@@ -4765,7 +4765,7 @@
       "impairment_id": "copd",
       "impairment": "Chronic obstructive pulmonary disease",
       "section": "25",
-      "manual_page": 122,
+      "manual_page": 125,
       "edges": [
         {
           "value": "50",
@@ -4817,7 +4817,7 @@
       "impairment_id": "copd",
       "impairment": "Chronic obstructive pulmonary disease",
       "section": "25",
-      "manual_page": 122,
+      "manual_page": 125,
       "edges": [
         {
           "value": "30",
@@ -4869,7 +4869,7 @@
       "impairment_id": "copd",
       "impairment": "Chronic obstructive pulmonary disease",
       "section": "25",
-      "manual_page": 122,
+      "manual_page": 126,
       "edges": [
         {
           "value": "30",
@@ -4909,7 +4909,7 @@
       "impairment_id": "obstructive_sleep_apnoea",
       "impairment": "Obstructive sleep apnoea",
       "section": "26",
-      "manual_page": 127,
+      "manual_page": 131,
       "edges": [
         {
           "value": "5",
@@ -4953,7 +4953,7 @@
       "impairment_id": "obstructive_sleep_apnoea",
       "impairment": "Obstructive sleep apnoea",
       "section": "26",
-      "manual_page": 127,
+      "manual_page": 131,
       "edges": [
         {
           "value": "15",
@@ -5005,7 +5005,7 @@
       "impairment_id": "obstructive_sleep_apnoea",
       "impairment": "Obstructive sleep apnoea",
       "section": "26",
-      "manual_page": 127,
+      "manual_page": 131,
       "edges": [
         {
           "value": "30",
@@ -5053,7 +5053,7 @@
       "impairment_id": "chronic_kidney_disease",
       "impairment": "Chronic kidney disease",
       "section": "27",
-      "manual_page": 132,
+      "manual_page": 136,
       "edges": [
         {
           "value": "45",
@@ -5105,7 +5105,7 @@
       "impairment_id": "chronic_kidney_disease",
       "impairment": "Chronic kidney disease",
       "section": "27",
-      "manual_page": 132,
+      "manual_page": 136,
       "edges": [
         {
           "value": "30",
@@ -5157,7 +5157,7 @@
       "impairment_id": "chronic_kidney_disease",
       "impairment": "Chronic kidney disease",
       "section": "27",
-      "manual_page": 132,
+      "manual_page": 136,
       "edges": [
         {
           "value": "15",
@@ -5209,7 +5209,7 @@
       "impairment_id": "chronic_kidney_disease",
       "impairment": "Chronic kidney disease",
       "section": "27",
-      "manual_page": 133,
+      "manual_page": 137,
       "edges": [
         {
           "value": "15",
@@ -5249,7 +5249,7 @@
       "impairment_id": "albuminuria",
       "impairment": "Albuminuria",
       "section": "28",
-      "manual_page": 138,
+      "manual_page": 142,
       "edges": [
         {
           "value": "30",
@@ -5301,7 +5301,7 @@
       "impairment_id": "albuminuria",
       "impairment": "Albuminuria",
       "section": "28",
-      "manual_page": 138,
+      "manual_page": 142,
       "edges": [
         {
           "value": "300",
@@ -5349,7 +5349,7 @@
       "impairment_id": "chronic_hepatitis_b",
       "impairment": "Chronic hepatitis B",
       "section": "29",
-      "manual_page": 142,
+      "manual_page": 146,
       "edges": [
         {
           "value": "2000",
@@ -5397,7 +5397,7 @@
       "impairment_id": "chronic_hepatitis_b",
       "impairment": "Chronic hepatitis B",
       "section": "29",
-      "manual_page": 142,
+      "manual_page": 146,
       "edges": [
         {
           "value": "2000",
@@ -5441,7 +5441,7 @@
       "impairment_id": "chronic_hepatitis_b",
       "impairment": "Chronic hepatitis B",
       "section": "29",
-      "manual_page": 142,
+      "manual_page": 146,
       "edges": [
         {
           "value": "20000",
@@ -5489,7 +5489,7 @@
       "impairment_id": "chronic_hepatitis_c",
       "impairment": "Chronic hepatitis C",
       "section": "30",
-      "manual_page": 147,
+      "manual_page": 151,
       "edges": [
         {
           "value": "12",
@@ -5537,7 +5537,7 @@
       "impairment_id": "chronic_hepatitis_c",
       "impairment": "Chronic hepatitis C",
       "section": "30",
-      "manual_page": 147,
+      "manual_page": 151,
       "edges": [
         {
           "value": "12",
@@ -5585,7 +5585,7 @@
       "impairment_id": "fatty_liver_disease",
       "impairment": "Fatty liver disease",
       "section": "31",
-      "manual_page": 151,
+      "manual_page": 155,
       "edges": [
         {
           "value": "1.3",
@@ -5625,7 +5625,7 @@
       "impairment_id": "fatty_liver_disease",
       "impairment": "Fatty liver disease",
       "section": "31",
-      "manual_page": 151,
+      "manual_page": 155,
       "edges": [
         {
           "value": "1.3",
@@ -5677,7 +5677,7 @@
       "impairment_id": "fatty_liver_disease",
       "impairment": "Fatty liver disease",
       "section": "31",
-      "manual_page": 151,
+      "manual_page": 155,
       "edges": [
         {
           "value": "2.67",
@@ -5725,7 +5725,7 @@
       "impairment_id": "cirrhosis",
       "impairment": "Cirrhosis of the liver",
       "section": "32",
-      "manual_page": 156,
+      "manual_page": 160,
       "edges": [
         {
           "value": "15",
@@ -5773,7 +5773,7 @@
       "impairment_id": "cirrhosis",
       "impairment": "Cirrhosis of the liver",
       "section": "32",
-      "manual_page": 156,
+      "manual_page": 160,
       "edges": [
         {
           "value": "15",
@@ -5813,7 +5813,7 @@
       "impairment_id": "ulcerative_colitis",
       "impairment": "Ulcerative colitis",
       "section": "33",
-      "manual_page": 160,
+      "manual_page": 164,
       "edges": [
         {
           "value": "150",
@@ -5853,7 +5853,7 @@
       "impairment_id": "ulcerative_colitis",
       "impairment": "Ulcerative colitis",
       "section": "33",
-      "manual_page": 160,
+      "manual_page": 164,
       "edges": [
         {
           "value": "150",
@@ -5901,7 +5901,7 @@
       "impairment_id": "anaemia",
       "impairment": "Anaemia",
       "section": "34",
-      "manual_page": 164,
+      "manual_page": 168,
       "edges": [
         {
           "value": "8.0",
@@ -5953,7 +5953,7 @@
       "impairment_id": "anaemia",
       "impairment": "Anaemia",
       "section": "34",
-      "manual_page": 164,
+      "manual_page": 168,
       "edges": [
         {
           "value": "8.0",
@@ -5993,7 +5993,7 @@
       "impairment_id": "haemophilia",
       "impairment": "Haemophilia",
       "section": "35",
-      "manual_page": 168,
+      "manual_page": 172,
       "edges": [
         {
           "value": "1",
@@ -6041,7 +6041,7 @@
       "impairment_id": "haemophilia",
       "impairment": "Haemophilia",
       "section": "35",
-      "manual_page": 168,
+      "manual_page": 172,
       "edges": [
         {
           "value": "1",
@@ -6085,7 +6085,7 @@
       "impairment_id": "haemophilia",
       "impairment": "Haemophilia",
       "section": "35",
-      "manual_page": 168,
+      "manual_page": 172,
       "edges": [
         {
           "value": "5",
@@ -6129,7 +6129,7 @@
       "impairment_id": "hiv_infection",
       "impairment": "HIV infection",
       "section": "36",
-      "manual_page": 172,
+      "manual_page": 176,
       "edges": [
         {
           "value": "500",
@@ -6169,7 +6169,7 @@
       "impairment_id": "hiv_infection",
       "impairment": "HIV infection",
       "section": "36",
-      "manual_page": 172,
+      "manual_page": 176,
       "edges": [
         {
           "value": "200",
@@ -6221,7 +6221,7 @@
       "impairment_id": "hiv_infection",
       "impairment": "HIV infection",
       "section": "36",
-      "manual_page": 172,
+      "manual_page": 176,
       "edges": [
         {
           "value": "200",
@@ -6261,7 +6261,7 @@
       "impairment_id": "depression",
       "impairment": "Depression",
       "section": "37",
-      "manual_page": 176,
+      "manual_page": 180,
       "edges": [
         {
           "value": "16",
@@ -6309,7 +6309,7 @@
       "impairment_id": "depression",
       "impairment": "Depression",
       "section": "37",
-      "manual_page": 176,
+      "manual_page": 180,
       "edges": [
         {
           "value": "16",
@@ -6357,7 +6357,7 @@
       "impairment_id": "epilepsy",
       "impairment": "Epilepsy",
       "section": "38",
-      "manual_page": 180,
+      "manual_page": 184,
       "edges": [
         {
           "value": "2",
@@ -6405,7 +6405,7 @@
       "impairment_id": "epilepsy",
       "impairment": "Epilepsy",
       "section": "38",
-      "manual_page": 180,
+      "manual_page": 184,
       "edges": [
         {
           "value": "2",
@@ -6449,7 +6449,7 @@
       "impairment_id": "epilepsy",
       "impairment": "Epilepsy",
       "section": "38",
-      "manual_page": 180,
+      "manual_page": 184,
       "edges": [
         {
           "value": "10",
@@ -6489,7 +6489,7 @@
       "impairment_id": "rheumatoid_arthritis",
       "impairment": "Rheumatoid arthritis",
       "section": "39",
-      "manual_page": 184,
+      "manual_page": 188,
       "edges": [
         {
           "value": "2.6",
@@ -6529,7 +6529,7 @@
       "impairment_id": "rheumatoid_arthritis",
       "impairment": "Rheumatoid arthritis",
       "section": "39",
-      "manual_page": 184,
+      "manual_page": 188,
       "edges": [
         {
           "value": "2.6",
@@ -6573,7 +6573,7 @@
       "impairment_id": "rheumatoid_arthritis",
       "impairment": "Rheumatoid arthritis",
       "section": "39",
-      "manual_page": 184,
+      "manual_page": 188,
       "edges": [
         {
           "value": "3.2",
@@ -6625,7 +6625,7 @@
       "impairment_id": "rheumatoid_arthritis",
       "impairment": "Rheumatoid arthritis",
       "section": "39",
-      "manual_page": 184,
+      "manual_page": 188,
       "edges": [
         {
           "value": "5.1",
@@ -6665,7 +6665,7 @@
       "impairment_id": "osteoporosis",
       "impairment": "Osteoporosis",
       "section": "40",
-      "manual_page": 187,
+      "manual_page": 192,
       "edges": [
         {
           "value": "-2.5",
@@ -6713,7 +6713,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 191,
+      "manual_page": 196,
       "edges": [
         {
           "value": "1.0",
@@ -6753,7 +6753,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 191,
+      "manual_page": 196,
       "edges": [
         {
           "value": "1.0",
@@ -6797,7 +6797,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 191,
+      "manual_page": 196,
       "edges": [
         {
           "value": "2.0",
@@ -6849,7 +6849,7 @@
       "impairment_id": "melanoma",
       "impairment": "Melanoma of the skin",
       "section": "41",
-      "manual_page": 191,
+      "manual_page": 196,
       "edges": [
         {
           "value": "4.0",

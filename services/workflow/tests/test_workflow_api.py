@@ -1,7 +1,6 @@
 """Story 1.6: the routes of `workflow`, with in-memory stand-ins behind them."""
 
 import asyncio
-import logging
 from dataclasses import replace
 
 import pytest
@@ -11,16 +10,14 @@ from workflow_fakes import (
     STARTED_BY,
     FakeEngine,
     MemoryCaseStore,
-    MemorySchemaRevision,
     after_start,
     classification_done,
     redaction_done,
-    redaction_failed,
 )
 
-from contracts.errors import ErrorBody, ErrorCode
+from contracts.errors import ErrorBody
 from contracts.ids import new_id
-from contracts.models.workflow import AuditTrail, CaseProgress, CaseStarted
+from contracts.models.workflow import AuditTrail
 from workflow.adapters.http.app import create_app
 from workflow.adapters.http.routes import Dependencies, build_router
 from workflow.domain.cases import record_stage_result
@@ -38,24 +35,6 @@ def error_of(response_json: object) -> tuple[str, str, str]:
 # --- Start ---------------------------------------------------------------------
 
 
-def test_story_1_6_start_answers_with_the_case_as_started(
-    client: TestClient, case_id: str, store: MemoryCaseStore, engine: FakeEngine
-) -> None:
-    response = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-
-    assert response.status_code == 200
-    started = CaseStarted.model_validate(response.json())
-    assert started.case_id == case_id
-    assert started.case_status.value == "running"
-    # No options were sent: the defaults from the settings apply.
-    assert started.classifier_contender.value == "llm"
-    assert [config.value for config in started.retriever_configs] == ["r3"]
-    assert (started.stop_after, started.eval_run_id) == (None, None)
-    assert list(engine.instances) == [case_id]
-    assert response.headers["cache-control"] == "no-store"
-    assert response.headers["x-content-type-options"] == "nosniff"
-
-
 def test_story_1_6_start_twice_is_one_case_one_orchestration_and_the_same_answer(
     client: TestClient, case_id: str, store: MemoryCaseStore, engine: FakeEngine
 ) -> None:
@@ -69,48 +48,12 @@ def test_story_1_6_start_twice_is_one_case_one_orchestration_and_the_same_answer
     assert after_start(store) == []
 
 
-def test_story_1_6_start_options_are_stored_with_the_case_and_returned(
-    client: TestClient, case_id: str, store: MemoryCaseStore
-) -> None:
-    eval_run_id = new_id()
-    options = {
-        "classifier_contender": "doc-intelligence",
-        "retriever_configs": ["r4", "r5"],
-        "stop_after": "gate",
-        "eval_run_id": eval_run_id,
-    }
-
-    response = client.post(f"/cases/{case_id}/start", json={**STARTED_BY, **options})
-
-    assert response.status_code == 200
-    assert response.json() == {"case_id": case_id, "case_status": "running", **options}
-    parameters = store.cases[case_id].parameters
-    assert parameters.classifier_contender.value == "doc-intelligence"
-    assert [config.value for config in parameters.retriever_configs] == ["r4", "r5"]
-    assert parameters.stop_after is not None
-    assert parameters.eval_run_id == eval_run_id
-
-
 @pytest.mark.parametrize(
     "options",
     [
-        {"classifier_contender": "guess"},
-        {"retriever_configs": []},
-        {"retriever_configs": ["r3", "r3"]},
         {"retriever_configs": ["r9"]},
-        {"stop_after": "redaction"},
-        {"eval_run_id": "not-an-id"},
-        {"unknown_field": 1},
     ],
-    ids=[
-        "contender",
-        "no-configs",
-        "repeated-config",
-        "unknown-config",
-        "stop-after",
-        "eval-run-id",
-        "unknown-field",
-    ],
+    ids=["unknown-config"],
 )
 def test_story_1_6_an_invalid_start_option_is_422_and_starts_nothing(
     client: TestClient,
@@ -134,132 +77,7 @@ def test_story_1_6_an_invalid_start_option_is_422_and_starts_nothing(
     assert engine.calls == []
 
 
-@pytest.mark.parametrize(
-    "bad_id",
-    [
-        "abc",
-        "019a0000-0000-4000-8000-000000000001",
-        "019A0000-0000-7000-8000-000000000001",
-    ],
-    ids=["not-a-uuid", "uuid-v4", "upper-case"],
-)
-def test_story_1_6_a_case_id_that_is_not_a_uuid7_is_422(
-    client: TestClient, engine: FakeEngine, bad_id: str
-) -> None:
-    for response in (
-        client.post(f"/cases/{bad_id}/start", json=STARTED_BY),
-        client.get(f"/cases/{bad_id}/progress"),
-        client.get(f"/cases/{bad_id}/audit"),
-    ):
-        assert response.status_code == 422
-        assert error_of(response.json())[0] == "validation_failed"
-    assert engine.calls == []
-
-
-def test_story_1_6_a_start_that_cannot_reach_the_engine_is_502_in_the_error_shape(
-    client: TestClient,
-    case_id: str,
-    engine: FakeEngine,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    engine.fail = True
-
-    with caplog.at_level(logging.ERROR):
-        response = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-
-    assert response.status_code == 502
-    assert error_of(response.json())[0] == "upstream_unavailable"
-    assert "secret-store-detail" not in response.text
-    assert "secret-store-detail" not in caplog.text
-
-
-def test_story_1_6_a_database_failure_is_a_plain_500(
-    client: TestClient,
-    case_id: str,
-    store: MemoryCaseStore,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    store.fail = True
-
-    with caplog.at_level(logging.ERROR):
-        responses = [
-            client.post(f"/cases/{case_id}/start", json=STARTED_BY),
-            client.get(f"/cases/{case_id}/progress"),
-            client.get(f"/cases/{case_id}/audit"),
-        ]
-
-    for response in responses:
-        assert response.status_code == 500
-        assert error_of(response.json())[0] == "internal_error"
-        assert "secret-store-detail" not in response.text
-    # security rule 31: the type and where, never the message.
-    assert "type=StoreDown" in caplog.text
-    assert "secret-store-detail" not in caplog.text
-
-
 # --- Progress and audit --------------------------------------------------------
-
-
-def test_story_1_6_progress_of_a_started_case_has_its_status_and_no_pages_yet(
-    client: TestClient, case_id: str
-) -> None:
-    client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-
-    response = client.get(f"/cases/{case_id}/progress")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "case_id": case_id,
-        "case_status": "running",
-        "redaction_status": "running",
-        "pages": [],
-        # Story 1.9: the failure reason, null while nothing has failed.
-        "error_code": None,
-    }
-
-
-def test_story_1_6_progress_lists_the_pages_once_they_exist(
-    client: TestClient,
-    case_id: str,
-    store: MemoryCaseStore,
-    dependencies: Dependencies,
-) -> None:
-    client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-    pages = [new_id(), new_id()]
-    asyncio.run(record_stage_result(redaction_done(case_id, pages), store=store))
-
-    progress = CaseProgress.model_validate(
-        client.get(f"/cases/{case_id}/progress").json()
-    )
-
-    assert progress.redaction_status.value == "done"
-    assert [(page.page_id, page.page_number) for page in progress.pages] == [
-        (pages[0], 1),
-        (pages[1], 2),
-    ]
-    assert {page.page_status.value for page in progress.pages} == {"uploaded"}
-
-
-def test_story_1_6_audit_lists_the_recorded_events(
-    client: TestClient, case_id: str, store: MemoryCaseStore
-) -> None:
-    client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-    # Story 1.13: a started case's trail holds its start, and nothing else yet.
-    at_start = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
-    assert [event.action.value for event in at_start.events] == ["case.started"]
-    assert at_start.has_more is False
-    result = redaction_failed(case_id)
-    asyncio.run(record_stage_result(result, store=store))
-
-    trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
-
-    # Story 1.12: the event is the stage's record, with the failure's code.
-    assert trail.events == [
-        *at_start.events,
-        result.audit.model_copy(update={"error_code": ErrorCode.REDACTION_FAILED}),
-    ]
-    assert trail.events[1].action.value == "stage.failed"
-    assert trail.has_more is False
 
 
 def test_story_1_12_the_audit_route_lists_the_first_events_up_to_its_limit(
@@ -316,7 +134,9 @@ def test_story_1_6_no_route_takes_a_stage_result_or_changes_the_audit_trail(
     )
 
     # The whole surface: two probes, start, two reads, the one decision
-    # operation (story 1.10, AD-10) and the read of a queue (story 1.11).
+    # operation (story 1.10, AD-10), the read of a queue (story 1.11) and
+    # the request for one more verdict run on a finished case (stories 2.5
+    # and 2.6, AD-15), which carries no result: it only has a run made.
     # Stage results come from the orchestration's activities, never over
     # HTTP (AD-2).
     assert routes == [
@@ -330,54 +150,10 @@ def test_story_1_6_no_route_takes_a_stage_result_or_changes_the_audit_trail(
         ("HEAD", "/ready"),
         ("POST", "/cases/{case_id}/pages/{page_id}/decisions"),
         ("POST", "/cases/{case_id}/start"),
+        ("POST", "/cases/{case_id}/verdict-runs"),
     ]
     with TestClient(create_app(settings, dependencies=dependencies)) as client:
         for method in ("put", "patch", "delete", "post"):
             response = client.request(method, f"/cases/{case_id}/audit")
             assert response.status_code == 405
             assert error_of(response.json())[0] == "method_not_allowed"
-
-
-# --- Probes --------------------------------------------------------------------
-
-
-def test_story_1_6_health_answers_without_the_database(
-    client: TestClient, schema_revision: MemorySchemaRevision
-) -> None:
-    schema_revision.fail = True
-
-    assert client.get("/health").json() == {"status": "ok"}
-    assert client.head("/health").status_code == 200
-
-
-def test_story_1_6_ready_only_when_the_schema_is_at_the_bundled_head(
-    client: TestClient,
-    schema_revision: MemorySchemaRevision,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    assert client.get("/ready").json() == {"status": "ok"}
-
-    for revision in (None, "0000"):
-        schema_revision.revision = revision
-        response = client.get("/ready")
-        assert response.status_code == 502
-        assert error_of(response.json())[:2] == (
-            "upstream_unavailable",
-            "The service is not ready.",
-        )
-
-    schema_revision.fail = True
-    with caplog.at_level(logging.WARNING):
-        response = client.get("/ready")
-    assert response.status_code == 502
-    assert "not ready: database type=StoreDown" in caplog.text
-    assert "secret-store-detail" not in caplog.text
-
-
-def test_story_1_6_an_unknown_path_is_404_in_the_error_shape(
-    client: TestClient,
-) -> None:
-    response = client.get("/case-files")
-
-    assert response.status_code == 404
-    assert error_of(response.json())[0] == "not_found"

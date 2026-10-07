@@ -24,6 +24,7 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     RunningService,
     ServicesBehindSidecar,
     answer_key,
@@ -69,6 +70,7 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
     tmp_path: Path,
     decision: str,
 ) -> None:
@@ -79,6 +81,7 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     with workflow_service(workflow_service_settings, behind_workflow) as workflow:
@@ -256,4 +259,6 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
         ("classification", "POST", "classifications"),
         # Story 2.4: one command per page that reached `extracting`.
         ("extraction", "POST", "fact-sets"),
+        # Stories 2.5 and 2.6: one run once every page is final.
+        ("verdict", "POST", "verdict-runs"),
     }

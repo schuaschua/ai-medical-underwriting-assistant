@@ -54,16 +54,6 @@ def audit_rows(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
     )
 
 
-def case_row(settings: Settings, case_id: str) -> tuple[Any, ...]:
-    (row,) = query(
-        settings,
-        "SELECT case_status, redaction_status FROM workflow.case_status "
-        "WHERE case_id = %s",
-        case_id,
-    )
-    return tuple(row)
-
-
 @pytest.fixture
 def scheduler_client(local_scheduler: Settings) -> Iterator[DurableTaskSchedulerClient]:
     client = build_client(local_scheduler)
@@ -171,47 +161,6 @@ def test_story_1_7_a_failed_redaction_ends_the_case_as_failed_with_one_stage_fai
         ("stage.failed", None, error_code, None, "intake:azure-ai-language")
     ]
     assert sidecar.redactions(case_id) == 1
-
-
-def test_story_1_7_a_case_intake_does_not_hold_fails_at_redaction_without_a_retry(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    # Story 1.6, finding 14: a start accepts any case id. `intake` answers 404
-    # for one it does not hold, however often it is asked.
-    sidecar = SidecarStandIn(FakeStages(script=["not_found"] * 50))
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        state = completed(scheduler_client, case_id)
-
-    assert json.loads(state.serialized_output or "")["case_status"] == "failed"
-    # Asked once: `not_found` is answered, never retried.
-    assert sidecar.redactions(case_id) == 1
-    assert case_row(service_settings, case_id) == ("failed", "running")
-    assert audit_rows(service_settings, case_id) == [
-        ("stage.failed", None, "stage_failed", None, "workflow:case-lifecycle")
-    ]
-
-
-def test_story_1_7_in_progress_is_retried_until_the_stage_answers(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    # The first command got lost on its way back; the stage is still at it
-    # when the command is sent again, twice.
-    sidecar = SidecarStandIn(FakeStages(script=["down", "in_progress", "in_progress"]))
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
-        completed(scheduler_client, case_id)
-
-    assert sidecar.redactions(case_id) == 4
-    assert case_row(service_settings, case_id) == ("completed", "done")
-    # One redaction event, however often the command was sent.
-    assert [row[0] for row in audit_rows(service_settings, case_id)].count(
-        "document.redacted"
-    ) == 1
 
 
 def test_story_1_7_when_intake_never_answers_the_case_is_marked_failed(

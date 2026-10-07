@@ -51,9 +51,6 @@ def answer(*facts: dict[str, str]) -> str:
     return json.dumps({"facts": list(facts) if facts else [fact()]})
 
 
-NO_FACTS = json.dumps({"facts": []})
-
-
 class StoreDown(Exception):
     """What a failing stand-in raises. Its message must never reach a log or a body."""
 

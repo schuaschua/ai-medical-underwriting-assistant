@@ -11,6 +11,7 @@ locals {
     classification = "ca-${local.foundation.name_suffix}-classification"
     extraction     = "ca-${local.foundation.name_suffix}-extraction"
     retrieval      = "ca-${local.foundation.name_suffix}-retrieval"
+    verdict        = "ca-${local.foundation.name_suffix}-verdict"
     # The one-off job that ingests the manual (spine AD-12); `caj` is the
     # CAF abbreviation for a Container Apps job (azure.md, project names).
     retrieval_ingest = "caj-${local.foundation.name_suffix}-ingest"
@@ -26,6 +27,7 @@ locals {
   classification_identity = local.foundation.runtime_identities["classification"]
   extraction_identity     = local.foundation.runtime_identities["extraction"]
   retrieval_identity      = local.foundation.runtime_identities["retrieval"]
+  verdict_identity        = local.foundation.runtime_identities["verdict"]
 
   # The blob containers intake owns (spine AD-4): the uploaded originals, and
   # the redacted PDFs and thumbnails.
@@ -49,8 +51,12 @@ locals {
   # extraction is held at exactly 1 replica for the same reason: its own
   # limit on model calls (var.extraction_model_max_concurrent_calls) is then
   # the limit for the environment, on the chat deployment it shares with
-  # classification and, later, the verdict agent (spine AD-16).
+  # classification and the verdict agent (spine AD-16).
   extraction_replicas = 1
+  # verdict is held at exactly 1 replica for the same reason: its own limit
+  # on model calls (var.verdict_model_max_concurrent_calls) is then the limit
+  # for the environment, on the same chat deployment.
+  verdict_replicas = 1
   # retrieval is held at exactly 1 replica for the same reason: from story 2.3
   # on it embeds every search query on the one embedding deployment.
   retrieval_replicas = 1
@@ -68,6 +74,7 @@ locals {
     classification = "${local.foundation.container_registry_login_server}/classification"
     extraction     = "${local.foundation.container_registry_login_server}/extraction"
     retrieval      = "${local.foundation.container_registry_login_server}/retrieval"
+    verdict        = "${local.foundation.container_registry_login_server}/verdict"
   }
 
   # What the retrieval service and its ingestion job are both given: one
@@ -107,5 +114,34 @@ locals {
     # The job's own deadline: under the platform's limit on one execution
     # (var.ingest_timeout_seconds), so that the job ends itself and says why.
     { name = "RETRIEVAL_INGEST_DEADLINE_SECONDS", value = tostring(var.ingest_deadline_seconds) },
+  ]
+
+  # What the verdict service is given. No password and no model key: the
+  # database and the chat deployment are reached with the service identity
+  # (azure.md rule 7). The model endpoint is the Foundry account's and the
+  # deployment name comes from the foundation stack (spine AD-16); the local
+  # stand-in exists only on a developer machine. The service is given no
+  # address of `extraction` or `retrieval`: it calls them by app id through
+  # its own sidecar (AD-3).
+  verdict_env = [
+    { name = "VERDICT_HOST", value = "0.0.0.0" },
+    { name = "VERDICT_PORT", value = tostring(var.verdict_port) },
+    { name = "VERDICT_AZURE_CLIENT_ID", value = local.verdict_identity.client_id },
+    { name = "VERDICT_OTEL_SAMPLING_RATIO", value = tostring(var.otel_sampling_ratio) },
+    { name = "VERDICT_APPLICATIONINSIGHTS_CONNECTION_STRING", secret_name = local.appi_secret_name },
+    { name = "VERDICT_DATABASE_HOST", value = local.foundation.postgresql_fqdn },
+    { name = "VERDICT_DATABASE_NAME", value = local.foundation.postgresql_database_name },
+    { name = "VERDICT_DATABASE_USER", value = local.verdict_identity.name },
+    { name = "VERDICT_DATABASE_ENTRA_AUTH", value = "true" },
+    { name = "VERDICT_DAPR_HTTP_PORT", value = tostring(var.dapr_http_port) },
+    { name = "VERDICT_MODEL_ENDPOINT", value = local.foundation.foundry_endpoint },
+    { name = "VERDICT_MODEL_ENTRA_AUTH", value = "true" },
+    { name = "VERDICT_CHAT_DEPLOYMENT", value = local.foundation.model_deployment_names["chat"] },
+    { name = "VERDICT_MODEL_MAX_CONCURRENT_CALLS", value = tostring(var.verdict_model_max_concurrent_calls) },
+    { name = "VERDICT_MODEL_MAX_RETRIES", value = tostring(var.model_max_retries) },
+    # Spine AD-15: the most tool calls one run of the agent may make, and
+    # the confidence under which a run refers its case.
+    { name = "VERDICT_STEP_LIMIT", value = tostring(var.verdict_step_limit) },
+    { name = "VERDICT_CONFIDENCE_FLOOR", value = tostring(var.verdict_confidence_floor) },
   ]
 }

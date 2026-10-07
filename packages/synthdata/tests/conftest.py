@@ -25,6 +25,7 @@ from synthdata_stack import (
     LocalExtraction,
     LocalIntake,
     LocalRetrieval,
+    LocalVerdict,
 )
 from workflow_local import as_service
 
@@ -49,6 +50,11 @@ from synthdata.foundry_standin import (
 from synthdata.language_standin import DEFAULT_PORT, EMULATOR, LanguageStandIn
 from synthdata.layout_standin import DEFAULT_PORT as LAYOUT_PORT
 from synthdata.layout_standin import LayoutStandIn
+from verdict.adapters.local_role import (
+    ensure_local_service_role as ensure_verdict_service_role,
+)
+from verdict.adapters.migrations import alembic_config as verdict_alembic_config
+from verdict.settings import Settings as VerdictSettings
 from workflow.adapters.local_role import ensure_local_service_role
 from workflow.adapters.migrations import alembic_config as workflow_alembic_config
 from workflow.adapters.scheduler import build_client
@@ -326,3 +332,170 @@ def ingested_manual(retrieval: LocalRetrieval) -> LocalRetrieval:
     """The project's manual, ingested: one `smart` chunk per rule, in this test's database."""
     assert retrieval.ingest() == 0
     return retrieval
+
+
+# --- verdict, over the real extraction and retrieval (stories 2.5 and 2.6) -----------
+
+# The tables the ingestion job fills, in the order they are copied.
+_MANUAL_TABLES = ("retrieval.chunk", "retrieval.ingest_run")
+
+
+def _copy_out(settings: RetrievalSettings, table: str) -> bytes:
+    with (
+        psycopg.connect(
+            host=settings.database_host,
+            port=settings.database_port,
+            dbname=settings.database_name,
+            user=settings.database_user,
+        ) as connection,
+        connection.cursor() as cursor,
+        # A fixed table name of this module, never a value.
+        cursor.copy(f"COPY {table} TO STDOUT") as copy,
+    ):
+        return b"".join(bytes(block) for block in copy)
+
+
+def _copy_in(settings: RetrievalSettings, table: str, rows: bytes) -> None:
+    with (
+        psycopg.connect(
+            host=settings.database_host,
+            port=settings.database_port,
+            dbname=settings.database_name,
+            user=settings.database_user,
+        ) as connection,
+        connection.cursor() as cursor,
+    ):
+        with cursor.copy(f"COPY {table} FROM STDIN") as copy:
+            copy.write(rows)
+        connection.commit()
+
+
+@pytest.fixture(scope="session")
+def manual_index() -> dict[str, bytes]:
+    """The project's manual, ingested once for the whole run: the rows of the index it made.
+
+    The ingestion job runs as it really runs, into a database of its own,
+    with stand-ins of its own. Its rows are kept and the database dropped:
+    every test that needs the manual gets a copy of them (`verdict_manual`),
+    which is the same index and costs no second ingestion.
+    """
+    name = f"aiuw_test_{secrets.token_hex(6)}"
+    container = f"manual-test-{secrets.token_hex(6)}"
+    base = RetrievalSettings(
+        applicationinsights_connection_string=None,
+        blob_connection_string=SecretStr(EMULATOR),
+        manual_container=container,
+        layout_endpoint=f"http://127.0.0.1:{LAYOUT_PORT}",
+        model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
+        chat_deployment=LOCAL_DEPLOYMENT,
+        embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+        model_retry_seconds=0.01,
+        layout_poll_seconds=0.01,
+    )
+    if not _listening(base.database_host, base.database_port) or not _listening(
+        "127.0.0.1", 10000
+    ):
+        pytest.fail(NEEDS_CONTAINERS, pytrace=False)
+    admin = (
+        f"host={base.database_host} port={base.database_port} "
+        f"dbname={base.database_name} user={base.database_user}"
+    )
+    with psycopg.connect(admin, autocommit=True) as connection:
+        connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    settings = base.model_copy(update={"database_name": name})
+    try:
+        command.upgrade(retrieval_alembic_config(settings), "head")
+        job = LocalRetrieval(settings, LayoutStandIn(), FoundryStandIn())
+        job.upload()
+        assert job.ingest() == 0
+        return {table: _copy_out(settings, table) for table in _MANUAL_TABLES}
+    finally:
+        with contextlib.suppress(ResourceNotFoundError):
+            build_retrieval_blobs(settings).delete_container(container)
+        with psycopg.connect(admin, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    sql.Identifier(name)
+                )
+            )
+
+
+@pytest.fixture
+def verdict_manual(
+    migrated_database: IntakeSettings, manual_index: dict[str, bytes]
+) -> LocalRetrieval:
+    """`retrieval` on this test's database, holding the ingested manual, with a model stand-in of its own."""
+    settings = RetrievalSettings(
+        applicationinsights_connection_string=None,
+        database_name=migrated_database.database_name,
+        model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
+        chat_deployment=LOCAL_DEPLOYMENT,
+        embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+        model_retry_seconds=0.01,
+    )
+    command.upgrade(retrieval_alembic_config(settings), "head")
+    for table in _MANUAL_TABLES:
+        _copy_in(settings, table, manual_index[table])
+    return LocalRetrieval(settings, LayoutStandIn(), FoundryStandIn())
+
+
+@pytest.fixture
+def verdict_model_stand_in() -> FoundryStandIn:
+    """The stand-in the verdict agent talks to: its own, so its calls are counted apart."""
+    return FoundryStandIn()
+
+
+@pytest.fixture
+def verdict_settings(migrated_database: IntakeSettings) -> Iterator[VerdictSettings]:
+    """`verdict`'s settings for the same database, migrated, signed in as a role of its own."""
+    role = f"verdict_test_{secrets.token_hex(6)}"
+    admin = VerdictSettings(
+        applicationinsights_connection_string=None,
+        database_name=migrated_database.database_name,
+        database_service_role=role,
+        # Where the stand-in listens when it runs as a process. The tests
+        # hand the app a transport to it and never use the network.
+        model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
+        chat_deployment=LOCAL_DEPLOYMENT,
+        # A throttled call, and a tool's call that got no answer, are sent
+        # again at once.
+        model_retry_seconds=0.01,
+        upstream_retry_seconds=0.01,
+    )
+    ensure_verdict_service_role(admin)
+    command.upgrade(verdict_alembic_config(admin), "head")
+    try:
+        # The service signs in as its own role: the step log is append-only for it.
+        yield admin.model_copy(
+            update={"database_user": role, "database_service_role": None}
+        )
+    finally:
+        # Its rights go with the database; the role is dropped once that is gone.
+        with psycopg.connect(
+            host=admin.database_host,
+            port=admin.database_port,
+            dbname=VerdictSettings().database_name,
+            user=admin.database_user,
+            autocommit=True,
+        ) as connection:
+            connection.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    sql.Identifier(admin.database_name)
+                )
+            )
+            connection.execute(
+                sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role))
+            )
+
+
+@pytest.fixture
+def verdict(
+    verdict_settings: VerdictSettings,
+    verdict_model_stand_in: FoundryStandIn,
+    extraction: LocalExtraction,
+    verdict_manual: LocalRetrieval,
+) -> LocalVerdict:
+    """`verdict` on this test's database, with the real `extraction` and `retrieval` behind it."""
+    return LocalVerdict(
+        verdict_settings, verdict_model_stand_in, extraction, verdict_manual
+    )

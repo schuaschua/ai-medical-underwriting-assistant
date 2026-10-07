@@ -21,6 +21,7 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     RunningService,
     ServicesBehindSidecar,
     answer_key,
@@ -64,6 +65,7 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_is_started_complet
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
     tmp_path: Path,
 ) -> None:
     # The stand-in's runs differ on every page: each is classified at 0.6,
@@ -74,6 +76,7 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_is_started_complet
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
     eval_run_id = new_id()
     started: list[str] = []
@@ -143,7 +146,9 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_is_started_complet
     actions = [event.action.value for event in trail.events]
     assert (actions[0], actions[-1]) == ("case.started", "case.completed")
     assert (actions.count("case.started"), actions.count("case.completed")) == (1, 1)
-    assert actions[-2] == "page.denied"
+    # Stories 2.5 and 2.6: the verdict run comes after the last decision,
+    # and the completion after the run.
+    assert actions[-3:-1] == ["page.denied", "verdict.suggested"]
     started_event, completed_event = trail.events[0], trail.events[-1]
     assert (started_event.actor_kind.value, started_event.actor) == (
         "human",

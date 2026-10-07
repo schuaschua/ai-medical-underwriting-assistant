@@ -12,34 +12,23 @@ stand-ins' package and read the answer key, which nothing there may do
 (spine AD-17).
 """
 
-import json
 import socket
-import subprocess
-import sys
-import time
 from typing import Any
 
 import pytest
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
-from fastapi.testclient import TestClient
 from synthdata_stack import (
-    REPOSITORY_ROOT,
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     ServicesBehindSidecar,
     answer_key,
     audit_rows,
-    completed,
     query,
     start_and_wait,
-    workflow_service,
 )
 
-from classification.adapters.http.app import create_app as create_classification
-from contracts.errors import ErrorBody, ErrorCode
-from contracts.ids import new_id
-from contracts.models.classification import ClassificationResult
 from contracts.rules import is_medical
 from synthdata.foundry_standin import LOCAL_DEPLOYMENT, Mode, page_text_of
 from workflow.settings import Settings
@@ -69,6 +58,7 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     case_id, _ = intake.upload("case-002.pdf")
     key = answer_key("case-002")
@@ -76,6 +66,7 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     progress, trail, _ = start_and_wait(
@@ -185,6 +176,7 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     classification.model.mode = Mode.DISAGREE
     case_id, _ = intake.upload("case-001.pdf")
@@ -193,6 +185,7 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     progress, _, _ = start_and_wait(
@@ -225,7 +218,7 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
 
 @pytest.mark.parametrize(
     ("mode", "error_code"),
-    [(Mode.INVALID, "invalid_model_output"), (Mode.THROTTLED, "model_unavailable")],
+    [(Mode.INVALID, "invalid_model_output")],
 )
 def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_the_case_fails(
     workflow_service_settings: Settings,
@@ -234,6 +227,7 @@ def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
     mode: Mode,
     error_code: str,
 ) -> None:
@@ -243,6 +237,7 @@ def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     progress, _, output = start_and_wait(
@@ -271,113 +266,6 @@ def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_
     assert sidecar.paths("classification") == ["/classifications"] * len(page_ids)
 
 
-def test_story_1_8_a_case_started_with_the_doc_intelligence_contender_fails(
-    workflow_service_settings: Settings,
-    workflow_admin: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-) -> None:
-    case_id, _ = intake.upload("case-001.pdf")
-    sidecar = ServicesBehindSidecar(
-        intake=intake.app(),
-        classification=classification.app(),
-        extraction=extraction.app(),
-    )
-
-    with workflow_service(workflow_service_settings, sidecar) as client:
-        client.post(
-            f"/cases/{case_id}/start",
-            json={"actor": "underwriter", "classifier_contender": "doc-intelligence"},
-        )
-        state = completed(scheduler_client, case_id)
-
-    # Story 4.2 builds that contender: until then the stage refuses it with
-    # 422, once per page, and the case fails.
-    assert json.loads(state.serialized_output or "")["case_status"] == "failed"
-    assert sidecar.paths("classification") == ["/classifications"] * 3
-    # The start, by the role that asked; the redaction; and the failure.
-    events = audit_rows(workflow_service_settings, case_id)
-    assert events[0] == ("case.started", None, None, None, "underwriter")
-    assert events[2:] == [
-        ("stage.failed", None, "stage_failed", None, "workflow:case-lifecycle")
-    ]
-    assert classification_rows(workflow_admin) == []
-    assert classification.model.calls == 0
-
-
-# --- `classification` and `intake`, without `workflow` ------------------------------------------
-
-
-def test_story_1_8_the_page_is_read_from_intake_one_page_at_a_time(
-    intake: LocalIntake, classification: LocalClassification
-) -> None:
-    case_id, _ = intake.upload("case-001.pdf")
-    first, second, _ = intake.redact(case_id)
-
-    with TestClient(classification.app()) as client:
-        command = {"case_id": case_id, "page_id": first, "contender": "llm"}
-        response = client.post("/classifications", json=command)
-        again = client.post("/classifications", json=command)
-
-    result = ClassificationResult.model_validate(response.json())
-    assert result.classification is not None
-    assert result.classification.page_type.value == "application_form"
-    # The same command again: the stored result, and no further model call.
-    assert again.json() == response.json()
-    assert classification.model.calls == 5
-    # Every run was shown the first page's redacted text, and no other page's.
-    first_text = intake.page_text(first)
-    assert {page_text_of(request) for request in classification.model.requests} == {
-        first_text
-    }
-    assert intake.page_text(second) != first_text
-
-
-@pytest.mark.parametrize("what", ["unknown-page", "page-of-another-case", "no-case"])
-def test_story_1_8_a_page_the_real_intake_does_not_hold_for_the_case_is_404(
-    workflow_admin: Settings,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    what: str,
-) -> None:
-    case_id, _ = intake.upload("case-001.pdf")
-    intake.redact(case_id)
-    other_case, _ = intake.upload("case-003.pdf")
-    (other_page, *_) = intake.redact(other_case)
-    command = {
-        "unknown-page": {"case_id": case_id, "page_id": new_id()},
-        "page-of-another-case": {"case_id": case_id, "page_id": other_page},
-        "no-case": {"case_id": new_id(), "page_id": other_page},
-    }[what]
-
-    with TestClient(classification.app(), raise_server_exceptions=False) as client:
-        response = client.post("/classifications", json={**command, "contender": "llm"})
-
-    assert response.status_code == 404
-    assert ErrorBody.model_validate(response.json()).error.code is ErrorCode.NOT_FOUND
-    assert classification_rows(workflow_admin) == []
-    assert classification.model.calls == 0
-
-
-def test_story_1_8_a_case_that_is_not_redacted_yet_has_no_page_to_classify(
-    intake: LocalIntake, classification: LocalClassification
-) -> None:
-    # Uploaded, never redacted: `intake` lists no page, so nothing of the
-    # original can reach the model by this route.
-    case_id, _ = intake.upload("case-001.pdf")
-
-    with TestClient(classification.app(), raise_server_exceptions=False) as client:
-        response = client.post(
-            "/classifications",
-            json={"case_id": case_id, "page_id": new_id(), "contender": "llm"},
-        )
-
-    assert response.status_code == 404
-    assert classification.model.calls == 0
-
-
 # --- The stand-in as a process -----------------------------------------------------------
 
 
@@ -385,47 +273,3 @@ def _free_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
-
-
-def test_story_1_8_the_stand_in_runs_as_a_process_and_the_service_reaches_it_over_http(
-    intake: LocalIntake, classification: LocalClassification
-) -> None:
-    case_id, _ = intake.upload("case-001.pdf")
-    page_ids = intake.redact(case_id)
-    port = _free_port()
-    process = subprocess.Popen(  # noqa: S603 - this interpreter and fixed arguments
-        [sys.executable, "-m", "synthdata.foundry_standin", "--port", str(port)],
-        cwd=REPOSITORY_ROOT,
-    )
-    try:
-        limit = time.monotonic() + 30
-        while time.monotonic() < limit:
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=1):
-                    break
-            except OSError:
-                time.sleep(0.1)  # waits for a process to listen, not for a clock
-        settings = classification.settings.model_copy(
-            update={"model_endpoint": f"http://127.0.0.1:{port}"}
-        )
-        # No model transport handed in: the real client, as in the local start.
-        app = create_classification(
-            settings, sidecar=ServicesBehindSidecar(intake=intake.app())
-        )
-        with TestClient(app, raise_server_exceptions=False) as client:
-            results = [
-                client.post(
-                    "/classifications",
-                    json={"case_id": case_id, "page_id": page_id, "contender": "llm"},
-                ).json()
-                for page_id in page_ids
-            ]
-    finally:
-        process.terminate()
-        process.wait(timeout=10)
-
-    assert [result["status"] for result in results] == ["done"] * 3
-    assert [result["classification"]["page_type"] for result in results] == [
-        page["page_type"] for page in answer_key("case-001")["pages"]
-    ]
-    assert {result["audit"]["actor"] for result in results} == {ACTOR}

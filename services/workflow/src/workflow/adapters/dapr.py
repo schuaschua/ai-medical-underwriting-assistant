@@ -13,12 +13,13 @@ from opentelemetry import propagate, trace
 from pydantic import ValidationError
 
 from contracts.base import ContractModel
-from contracts.enums import ClassifierContender, Service
+from contracts.enums import ClassifierContender, RetrieverConfig, Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
 from contracts.models._stage import StageResult
 from contracts.models.classification import ClassificationResult, ClassifyCommand
 from contracts.models.extraction import ExtractFactsCommand, FactSetResult
 from contracts.models.intake import RedactionCommand, RedactionResult
+from contracts.models.verdict import VerdictRunCommand, VerdictRunResult
 from contracts.operations import Operation, get_operation
 from workflow.adapters.telemetry import adapter_span
 from workflow.settings import APP_ID, Settings
@@ -29,6 +30,7 @@ tracer = trace.get_tracer(APP_ID)
 UPSTREAM_UNAVAILABLE_MESSAGE = "A stage service is not available right now."
 WRONG_CASE_MESSAGE = "The stage answered about another case."
 WRONG_PAGE_MESSAGE = "The stage answered about another page or classifier."
+WRONG_RUN_MESSAGE = "The stage answered about another retriever configuration."
 
 # What a stage may say that is an answer in itself, passed on with its code:
 # the stage is still working on the same command (AD-6), or it does not hold
@@ -39,6 +41,8 @@ _STAGE_ANSWERS = frozenset(
         ErrorCode.NOT_FOUND,
         # The stage will refuse the same command every time: not retried.
         ErrorCode.VALIDATION_FAILED,
+        # AD-11: `verdict` cannot run with that ladder row in this build.
+        ErrorCode.RETRIEVER_NOT_AVAILABLE,
     }
 )
 
@@ -183,6 +187,41 @@ class StageClient:
         if result.page_id != page_id:
             # Recording it would move another page.
             raise DomainError(ErrorCode.VALIDATION_FAILED, WRONG_PAGE_MESSAGE)
+        return result
+
+    async def run_verdict(
+        self,
+        case_id: str,
+        retriever_config: RetrieverConfig,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> VerdictRunResult:
+        """`POST /verdict-runs` on `verdict` (AD-15): one run for a case and a retriever row.
+
+        Idempotent on the case and the retriever configuration. The answer
+        is the stored result, done or failed. `in_progress` and
+        `retriever_not_available` (the row is not built) are raised with
+        their own codes; any other failure of the call is
+        `upstream_unavailable`.
+        """
+        operation = get_operation("run_verdict")
+        result = await self._command(
+            operation,
+            operation.path,
+            # Ids only (AD-6): the stage reads the facts and the manual itself.
+            VerdictRunCommand(
+                case_id=case_id,
+                retriever_config=retriever_config,
+                eval_run_id=eval_run_id,
+            ),
+            VerdictRunResult,
+            case_id,
+            trace_context,
+        )
+        if result.retriever_config is not retriever_config:
+            # Recording it would count another row's run as this one's.
+            raise DomainError(ErrorCode.VALIDATION_FAILED, WRONG_RUN_MESSAGE)
         return result
 
     async def _command[R: StageResult](

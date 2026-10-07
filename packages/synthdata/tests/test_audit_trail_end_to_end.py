@@ -22,6 +22,7 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     RunningService,
     ServicesBehindSidecar,
     answer_key,
@@ -83,6 +84,7 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
     tmp_path: Path,
 ) -> None:
     # The stand-in's runs differ on laboratory reports and identity documents
@@ -100,6 +102,7 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
     started: list[str] = []
 
@@ -212,7 +215,15 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         ("facts.extracted", page_id, ActorKind.AI, EXTRACTION_ACTOR)
         for page_id in (page_ids[0], page_ids[1], invoice)
     ]
-    assert sorted(events[2:-1]) == sorted(ai_page_events + decisions + extractions)
+    assert sorted(events[2:-2]) == sorted(ai_page_events + decisions + extractions)
+    # Stories 2.5 and 2.6: once every page is final the case gets its
+    # verdict run, a case-level event, and is completed only after it.
+    assert events[-2] == (
+        "verdict.suggested",
+        None,
+        ActorKind.AI,
+        f"verdict:{LOCAL_DEPLOYMENT}",
+    )
     # The decisions are in the order they were made.
     assert [event for event in events[1:] if event[2] is ActorKind.HUMAN] == decisions
     # Causal order, page by page: its classification, its route, then what
@@ -253,7 +264,8 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
     # (the redaction's event), the events lead each page, by allowed changes
     # only, to the status the case's progress reports for it.
     walked = {page_id: [PageStatus.UPLOADED] for page_id in page_ids}
-    for event in trail.events[2:-1]:
+    # The last two events are the case's: its verdict run and its completion.
+    for event in trail.events[2:-2]:
         assert event.page_id is not None
         history = walked[event.page_id]
         after = status_after(event)

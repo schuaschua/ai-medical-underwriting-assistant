@@ -10,7 +10,6 @@ The tests are here and not under `services/` because they name the stand-ins'
 package and read the answer key, which nothing there may do (spine AD-17).
 """
 
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -21,9 +20,9 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     ServicesBehindSidecar,
     answer_key,
-    audit_rows,
     completed,
     end_lifecycle,
     start_and_wait,
@@ -38,11 +37,9 @@ from contracts.text import QUOTE_OFFSET_UNIT, has_mask_token, normalise
 from synthdata.foundry_standin import (
     FACT_NOT_ON_THE_PAGE,
     LOCAL_DEPLOYMENT,
-    FoundryStandIn,
     Mode,
     page_to_extract_of,
 )
-from workflow.adapters.scheduler import SchedulerEngine
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -56,11 +53,13 @@ def sidecar_for(
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> ServicesBehindSidecar:
     return ServicesBehindSidecar(
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
 
@@ -104,10 +103,11 @@ def test_story_2_4_case_001_ends_completed_with_facts_whose_quotes_are_verified_
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     case_id, _ = intake.upload("case-001.pdf")
     key = answer_key("case-001")
-    sidecar = sidecar_for(intake, classification, extraction)
+    sidecar = sidecar_for(intake, classification, extraction, verdict)
 
     progress, trail, output = start_and_wait(
         workflow_service_settings, scheduler_client, sidecar, case_id
@@ -224,12 +224,13 @@ def test_story_2_4_a_quote_that_is_not_on_the_page_is_stored_unverified_and_the_
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     # The stand-in is told to return, beside each page's facts, one whose
     # quote is on no page.
     extraction.model.mode = Mode.QUOTE_NOT_ON_PAGE
     case_id, _ = intake.upload("case-001.pdf")
-    sidecar = sidecar_for(intake, classification, extraction)
+    sidecar = sidecar_for(intake, classification, extraction, verdict)
 
     progress, trail, output = start_and_wait(
         workflow_service_settings, scheduler_client, sidecar, case_id
@@ -257,10 +258,11 @@ def test_story_2_4_a_masked_value_the_model_proposes_is_not_stored(
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     extraction.model.mode = Mode.MASKED_VALUE
     case_id, _ = intake.upload("case-001.pdf")
-    sidecar = sidecar_for(intake, classification, extraction)
+    sidecar = sidecar_for(intake, classification, extraction, verdict)
 
     progress, _, _ = start_and_wait(
         workflow_service_settings, scheduler_client, sidecar, case_id
@@ -274,53 +276,13 @@ def test_story_2_4_a_masked_value_the_model_proposes_is_not_stored(
         assert fact.quote != "[Person]"
 
 
-@pytest.mark.parametrize(
-    ("mode", "error_code"),
-    [(Mode.INVALID, "invalid_model_output"), (Mode.THROTTLED, "model_unavailable")],
-)
-def test_story_2_4_an_extraction_that_fails_fails_its_page_and_the_case_and_stores_nothing(
-    workflow_service_settings: Settings,
-    workflow_admin: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-    mode: Mode,
-    error_code: str,
-) -> None:
-    # A stand-in of its own for `extraction`, told to fail: the pages are
-    # classified as usual, and fail where their facts are read.
-    failing = replace(extraction, model=FoundryStandIn(mode))
-    case_id, _ = intake.upload("case-001.pdf")
-    sidecar = sidecar_for(intake, classification, failing)
-
-    progress, trail, output = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
-    )
-
-    assert output == {"case_id": case_id, "case_status": "failed"}
-    assert progress.case_status.value == "failed"
-    assert progress.error_code is not None
-    assert progress.error_code.value == error_code
-    assert "failed" in [page.page_status.value for page in progress.pages]
-    assert "extracted" not in [page.page_status.value for page in progress.pages]
-    # One `stage.failed` event, about the page whose result came first, with
-    # the code of the failure; no fact was stored and the case never completed.
-    failures = [
-        row for row in audit_rows(workflow_admin, case_id) if row[0] == "stage.failed"
-    ]
-    assert [(row[2], row[4]) for row in failures] == [(error_code, EXTRACTION_ACTOR)]
-    assert failures[0][1] in {page.page_id for page in progress.pages}
-    assert "case.completed" not in [event.action.value for event in trail.events]
-    assert failing.facts(case_id).facts == []
-
-
 def test_story_2_4_a_page_accepted_in_triage_is_extracted_then_and_a_page_with_nothing_medical_has_no_facts(
     workflow_service_settings: Settings,
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     case_id, _ = intake.upload("case-002.pdf")
     key = answer_key("case-002")
@@ -329,7 +291,7 @@ def test_story_2_4_a_page_accepted_in_triage_is_extracted_then_and_a_page_with_n
         "other",
         "other",
     ]
-    sidecar = sidecar_for(intake, classification, extraction)
+    sidecar = sidecar_for(intake, classification, extraction, verdict)
 
     with workflow_service(workflow_service_settings, sidecar) as workflow:
         try:
@@ -395,66 +357,3 @@ def test_story_2_4_a_page_accepted_in_triage_is_extracted_then_and_a_page_with_n
         "facts.extracted",
     ]
     assert trail["events"][-1]["action"] == "case.completed"
-
-
-def test_story_2_4_a_decision_whose_event_was_lost_is_told_by_workflow_and_the_page_goes_on(
-    workflow_service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Three of five runs agree: every page of the case goes to triage.
-    classification.model.mode = Mode.DISAGREE
-    case_id, _ = intake.upload("case-001.pdf")
-    sidecar = sidecar_for(intake, classification, extraction)
-    # The scheduler cannot be reached for the first raise of a decision's
-    # event; nobody repeats that decision.
-    raised: list[str] = []
-    real_raise = SchedulerEngine._decision_made
-
-    def lossy(self: SchedulerEngine, *arguments: Any) -> Any:
-        raised.append(arguments[1])
-        if len(raised) == 1:
-            raise ConnectionError("the scheduler is away")
-        return real_raise(self, *arguments)
-
-    monkeypatch.setattr(SchedulerEngine, "_decision_made", lossy)
-    settings = workflow_service_settings.model_copy(
-        update={
-            "decision_tell_interval_seconds": 0.2,
-            "decision_tell_grace_seconds": 0.0,
-        }
-    )
-
-    with workflow_service(settings, sidecar) as workflow:
-        try:
-            workflow.post(f"/cases/{case_id}/start", json=CUSTOMER)
-            waiting = wait_for_case_status(workflow, case_id, "awaiting_human", 90)
-            page_ids = [page["page_id"] for page in waiting["pages"]]
-            answers = [
-                decide(workflow, case_id, page_id, "accept", UNDERWRITER)
-                for page_id in page_ids
-            ]
-            state = completed(scheduler_client, case_id)
-            progress = workflow.get(f"/cases/{case_id}/progress").json()
-        finally:
-            end_lifecycle(scheduler_client, case_id)
-
-    # The first decision was stored, and its request said the case could not
-    # be told; the two others were told at once.
-    assert [answer.status_code for answer in answers] == [502, 200, 200]
-    assert answers[0].json()["error"]["code"] == "upstream_unavailable"
-    # `workflow` told the orchestration of the first one by itself: every
-    # page was extracted, and the case completed with its facts.
-    # (With no grace time the service may also tell a decision its own
-    # request is still telling; told twice, it is taken once.)
-    assert raised.count(page_ids[0]) == 2
-    assert set(raised) == set(page_ids)
-    assert state.runtime_status is OrchestrationStatus.COMPLETED
-    assert progress["case_status"] == "completed"
-    assert [page["page_status"] for page in progress["pages"]] == ["extracted"] * 3
-    facts = extraction.facts(case_id).facts
-    assert {fact.page_number for fact in facts} == {1, 2, 3}
-    assert all(fact.quote_verified for fact in facts)

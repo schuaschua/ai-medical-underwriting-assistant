@@ -110,6 +110,8 @@ STEP = {
     "arguments": {"query": "HbA1c 8.2%", "fact_id": FACT},
     "fact_id": FACT,
     "rule_ids": ["UW-DM-003", "UW-HTN-120"],
+    "outcome": "done",
+    "error_code": None,
     "latency_ms": 412,
     "occurred_at": "2026-10-06T12:00:01.250000Z",
 }
@@ -152,6 +154,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
     },
     "AuditRecord": audit("page.kept", actor_kind="human", actor="customer"),
     "RouteDetail": ROUTE_DETAIL,
+    "VerdictDetail": {"retriever_config": "r3"},
     "CaseCreated": {"case_id": CASE, "document_id": DOCUMENT},
     "Health": {"status": "ok"},
     "Me": {"role": "customer"},
@@ -250,6 +253,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "case_id": CASE,
         "retriever_config": "r5",
         "status": "running",
+        "verdict_run_id": None,
+        "error_code": None,
     },
     "PageProgress": {
         "page_id": PAGE,
@@ -388,17 +393,25 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "status": "done",
         "error_code": None,
         "audit": audit(
-            "verdict.suggested", actor="verdict:chat-main", page_id=None, ref=RUN
+            "verdict.suggested",
+            actor="verdict:chat-main",
+            page_id=None,
+            ref=RUN,
+            detail={"retriever_config": "r3"},
         ),
         "verdict_run_id": RUN,
         "retriever_config": "r3",
         "verdict": "loaded",
     },
     "VerdictRun": VERDICT_RUN,
-    "VerdictRunList": {"case_id": CASE, "verdict_runs": [VERDICT_RUN]},
+    "VerdictRunList": {
+        "case_id": CASE,
+        "verdict_runs": [VERDICT_RUN],
+        "has_more": False,
+    },
     "AgentStep": STEP,
     "AgentStepQuery": {"tool": "read_rule", "rule_id": "UW-DM-003"},
-    "AgentStepList": {"steps": [STEP]},
+    "AgentStepList": {"steps": [STEP], "has_more": False},
 }
 
 # Bases that only exist to be extended; they are no payload of their own.
@@ -415,33 +428,28 @@ def all_models() -> list[type[ContractModel]]:
             if child not in found:
                 found.add(child)
                 pending.append(child)
-    return sorted(found - ABSTRACT, key=lambda model: model.__name__)
+    # Other packages extend the base too (synthdata does); only the models of
+    # this package are contracts, whatever else has been imported by now.
+    own = {model for model in found if model.__module__.startswith("contracts.")}
+    return sorted(own - ABSTRACT, key=lambda model: model.__name__)
 
 
-MODELS = all_models()
+def test_story_1_1_every_model_round_trips_its_sample_and_rejects_unknown_fields() -> (
+    None
+):
+    models = all_models()
 
+    assert {model.__name__ for model in models} == set(SAMPLES)
+    for model in models:
+        name = model.__name__
+        payload = SAMPLES[name]
 
-def test_story_1_1_every_model_has_a_sample_payload() -> None:
-    assert {model.__name__ for model in MODELS} == set(SAMPLES)
+        parsed = model.model_validate_json(json.dumps(payload))
 
-
-@pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
-def test_story_1_1_round_trip_is_lossless(model: type[ContractModel]) -> None:
-    payload = SAMPLES[model.__name__]
-
-    parsed = model.model_validate_json(json.dumps(payload))
-
-    assert json.loads(parsed.model_dump_json()) == payload
-    assert parsed.model_dump(mode="json") == payload
-
-
-@pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
-def test_story_1_1_field_names_are_snake_case(model: type[ContractModel]) -> None:
-    for name in model.model_fields:
-        assert name == name.lower() and name.isidentifier() and not name.startswith("_")
-
-
-@pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
-def test_story_1_1_unknown_fields_are_rejected(model: type[ContractModel]) -> None:
-    with pytest.raises(ValueError, match="extra"):
-        model.model_validate({**SAMPLES[model.__name__], "surprise": 1})
+        assert json.loads(parsed.model_dump_json()) == payload, name
+        assert parsed.model_dump(mode="json") == payload, name
+        for field in model.model_fields:
+            assert field == field.lower() and field.isidentifier(), name
+            assert not field.startswith("_"), name
+        with pytest.raises(ValueError, match="extra"):
+            model.model_validate({**payload, "surprise": 1})

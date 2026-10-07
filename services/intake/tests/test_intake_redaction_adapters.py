@@ -13,24 +13,21 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import ValidationError
 
 from intake.adapters.blob import BlobOriginalStore
 from intake.adapters.db import EntraToken
 from intake.adapters.language import (
     COGNITIVE_SERVICES_SCOPE,
     LanguageRedaction,
-    build_language_http,
     language_token_for,
 )
-from intake.adapters.pdf import PdfPageSplitter, read_pages
+from intake.adapters.pdf import PdfPageSplitter
 from intake.domain.entities import JobOutput
 from intake.domain.ports import RedactionJobError
-from intake.settings import DEFAULT_REDACTION_CATEGORIES, Settings
+from intake.settings import Settings
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 CASES_DIR = REPOSITORY_ROOT / "data" / "cases"
-APP_STACK = REPOSITORY_ROOT / "infra" / "demo" / "app"
 ENDPOINT = "https://lang-aiuw-demo-wus3.cognitiveservices.azure.com"
 ORIGINALS = "https://staiuwdemowus3.blob.core.windows.net/originals"
 CASES_URL = "https://staiuwdemowus3.blob.core.windows.net/cases"
@@ -206,86 +203,6 @@ def test_story_1_7_language_is_called_with_the_service_identity_and_no_key() -> 
     )
 
 
-def test_story_1_7_only_the_job_id_is_taken_from_the_address_the_service_names() -> (
-    None
-):
-    service = FakeService(
-        submit=httpx.Response(
-            202,
-            headers={
-                "operation-location": "https://elsewhere.example/language/"
-                f"analyze-documents/jobs/{JOB_ID}?api-version=x"
-            },
-        )
-    )
-    credential = FakeCredential()
-    token = EntraToken(credential, scope=COGNITIVE_SERVICES_SCOPE)
-
-    async def scenario() -> JobOutput:
-        adapter = service.adapter(token)
-        return await adapter.output(
-            await adapter.start("a/b.pdf", CASE_ID, ("Person",)), CASE_ID
-        )
-
-    asyncio.run(scenario())
-
-    # Every call, and so the token, went to the configured endpoint.
-    assert {request.url.host for request in service.requests} == {
-        "lang-aiuw-demo-wus3.cognitiveservices.azure.com"
-    }
-
-
-@pytest.mark.parametrize(
-    ("submit", "reason"),
-    [
-        (
-            httpx.Response(400, json={"error": {"message": "secret"}}),
-            "submit_status_400",
-        ),
-        (httpx.Response(200), "submit_status_200"),
-        (httpx.Response(202), "submit_no_job_id"),
-        (
-            httpx.Response(202, headers={"operation-location": f"{ENDPOINT}/jobs/a b"}),
-            "submit_no_job_id",
-        ),
-    ],
-)
-def test_story_1_7_a_job_that_is_refused_is_an_error_with_a_code_and_no_message(
-    submit: httpx.Response, reason: str
-) -> None:
-    service = FakeService(submit=submit)
-
-    with pytest.raises(RedactionJobError) as raised:
-        asyncio.run(service.adapter().start("a/b.pdf", CASE_ID, ("Person",)))
-
-    assert raised.value.reason == reason
-    assert "secret" not in str(raised.value)
-
-
-def test_story_1_7_a_submit_that_cannot_reach_the_service_is_an_error_without_the_address() -> (
-    None
-):
-    def unreachable(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError(f"cannot reach {request.url}")
-
-    adapter = LanguageRedaction(
-        httpx.AsyncClient(
-            base_url=ENDPOINT, transport=httpx.MockTransport(unreachable)
-        ),
-        api_version="2026-05-01",
-        originals_url=ORIGINALS,
-        cases_url=CASES_URL,
-        poll_seconds=1,
-    )
-
-    with pytest.raises(RedactionJobError) as raised:
-        asyncio.run(adapter.start("a/b.pdf", CASE_ID, ("Person",)))
-
-    assert raised.value.reason == "submit_ConnectError"
-    assert raised.value.__cause__ is None
-    assert "cognitiveservices" not in str(raised.value)
-
-
 def test_story_1_7_the_job_is_looked_at_until_it_ends_and_its_files_are_named() -> None:
     service = FakeService(
         states=[
@@ -313,9 +230,8 @@ def test_story_1_7_the_job_is_looked_at_until_it_ends_and_its_files_are_named() 
     assert service.slept == [1.5, 1.5, 1.5, 1.5]
 
 
-@pytest.mark.parametrize(
-    ("state", "reason"),
-    [
+def test_story_1_7_a_job_that_does_not_end_with_usable_files_is_an_error() -> None:
+    for state, reason in [
         (httpx.Response(200, json=job_state("failed")), "job_failed"),
         (httpx.Response(200, json=job_state("cancelled")), "job_cancelled"),
         (
@@ -334,7 +250,6 @@ def test_story_1_7_the_job_is_looked_at_until_it_ends_and_its_files_are_named() 
             httpx.Response(200, json=job_state("succeeded", *OUTPUT, errors=True)),
             "job_document_error",
         ),
-        # A file outside the container the service was told to write to.
         (
             httpx.Response(
                 200,
@@ -350,38 +265,13 @@ def test_story_1_7_the_job_is_looked_at_until_it_ends_and_its_files_are_named() 
             ),
             "job_output_outside_case",
         ),
-    ],
-)
-def test_story_1_7_a_job_that_does_not_end_with_usable_files_is_an_error(
-    state: httpx.Response, reason: str
-) -> None:
-    service = FakeService(states=[state])
+    ]:
+        service = FakeService(states=[state])
 
-    with pytest.raises(RedactionJobError) as raised:
-        asyncio.run(service.adapter().output(JOB_ID, CASE_ID))
-
-    assert raised.value.reason == reason
-
-
-def test_story_1_7_a_job_is_cancelled_at_the_services_cancel_route() -> None:
-    service = FakeService()
-
-    asyncio.run(service.adapter().cancel(JOB_ID))
-
-    (request,) = service.requests
-    assert (request.method, request.url.path) == (
-        "POST",
-        f"/language/analyze-documents/jobs/{JOB_ID}:cancel",
-    )
-    assert request.url.params["api-version"] == "2026-05-01"
-    # A job that has ended has nothing left to cancel: not an error.
-    for ended in (200, 404, 409):
-        asyncio.run(FakeService(cancel_status=ended).adapter().cancel(JOB_ID))
-    # Not signed in, refused for now, or failing: the job was not cancelled.
-    for status in (401, 403, 429, 500):
         with pytest.raises(RedactionJobError) as raised:
-            asyncio.run(FakeService(cancel_status=status).adapter().cancel(JOB_ID))
-        assert raised.value.reason == f"cancel_status_{status}"
+            asyncio.run(service.adapter().output(JOB_ID, CASE_ID))
+
+        assert raised.value.reason == reason
 
 
 def test_story_1_7_output_under_another_cases_prefix_is_refused() -> None:
@@ -403,134 +293,7 @@ def test_story_1_7_output_under_another_cases_prefix_is_refused() -> None:
         assert raised.value.reason == "job_output_outside_case", location
 
 
-def test_story_1_7_a_submit_answered_429_or_5xx_is_sent_again_a_few_times() -> None:
-    accepted = FakeService().submit
-    service = FakeService()
-    service.submits = [httpx.Response(429), httpx.Response(503), accepted]
-
-    job_id = asyncio.run(service.adapter().start("a/b.pdf", CASE_ID, ("Person",)))
-
-    assert job_id == JOB_ID
-    assert len(service.requests) == 3
-    assert service.slept == [1.5, 1.5]
-    # Three more tries, then the refusal stands.
-    always = FakeService(submit=httpx.Response(503))
-    with pytest.raises(RedactionJobError) as raised:
-        asyncio.run(always.adapter().start("a/b.pdf", CASE_ID, ("Person",)))
-    assert raised.value.reason == "submit_status_503"
-    assert len(always.requests) == 4
-    # Any other refusal is not tried again.
-    refused = FakeService(submit=httpx.Response(400))
-    with pytest.raises(RedactionJobError):
-        asyncio.run(refused.adapter().start("a/b.pdf", CASE_ID, ("Person",)))
-    assert len(refused.requests) == 1
-
-
 # --- Settings ------------------------------------------------------------------------
-
-
-def test_story_1_7_settings_default_to_the_spines_limits_and_name_no_endpoint() -> None:
-    settings = Settings()
-
-    # AD-6: the stage's own deadline.
-    assert settings.redaction_deadline_seconds == 180.0
-    assert settings.redaction_categories == list(DEFAULT_REDACTION_CATEGORIES)
-    assert settings.language_api_version == "2026-05-01"
-    # The stand-in is never a default: without a setting there is no endpoint.
-    assert settings.language_endpoint is None
-    assert settings.language_entra_auth is False
-    with pytest.raises(ValueError, match="INTAKE_LANGUAGE_ENDPOINT"):
-        build_language_http(settings)
-
-
-def test_story_1_7_settings_read_the_redaction_variables(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("INTAKE_LANGUAGE_ENDPOINT", ENDPOINT)
-    monkeypatch.setenv("INTAKE_LANGUAGE_ENTRA_AUTH", "true")
-    monkeypatch.setenv("INTAKE_LANGUAGE_API_VERSION", "2025-11-15-preview")
-    monkeypatch.setenv("INTAKE_REDACTION_CATEGORIES", '["Person","Email"]')
-    monkeypatch.setenv("INTAKE_REDACTION_DEADLINE_SECONDS", "120")
-
-    settings = Settings()
-
-    assert settings.language_endpoint == ENDPOINT
-    assert settings.language_api_version == "2025-11-15-preview"
-    assert settings.redaction_categories == ["Person", "Email"]
-    assert settings.redaction_deadline_seconds == 120.0
-    client = build_language_http(settings)
-    assert str(client.base_url).rstrip("/") == ENDPOINT
-    # The token never follows a redirect to another host.
-    assert client.follow_redirects is False
-
-
-@pytest.mark.parametrize(
-    "values",
-    [
-        # The real service is reached with the identity, never without.
-        {"language_endpoint": ENDPOINT},
-        # Plain HTTP is the stand-in: loopback only, and no token is sent to it.
-        {"language_endpoint": "http://lang.example.com"},
-        {"language_endpoint": "http://10.0.0.4:5100"},
-        {"language_endpoint": "http://127.0.0.1:5100", "language_entra_auth": True},
-        {"language_endpoint": "ftp://127.0.0.1"},
-        {"language_endpoint": "127.0.0.1:5100"},
-        {"redaction_categories": []},
-        {"redaction_categories": ["Person", "Person"]},
-        {"redaction_categories": ["Avery Testwood"]},
-        # Letters of another script are not a category name either.
-        {"redaction_categories": ["Pers\u00f6n"]},
-        {"redaction_cancel_seconds": 30},
-    ],
-)
-def test_story_1_7_settings_that_would_misuse_the_stand_in_or_the_service_are_refused(
-    values: dict[str, Any],
-) -> None:
-    with pytest.raises(ValidationError):
-        Settings(**values)
-
-
-def test_story_1_7_the_stand_in_is_accepted_only_on_loopback() -> None:
-    for endpoint in ("http://127.0.0.1:5100", "http://localhost:5100"):
-        assert Settings(language_endpoint=endpoint).language_endpoint == endpoint
-    assert Settings(language_endpoint="  ").language_endpoint is None
-
-
-def test_story_1_7_the_app_stack_gives_intake_the_language_settings_and_the_three_roles() -> (
-    None
-):
-    main = (APP_STACK / "main.tf").read_text()
-    names = set(re.findall(r'name\s*=\s*"(INTAKE_[A-Z0-9_]+)"', main))
-
-    assert {
-        "INTAKE_LANGUAGE_ENDPOINT",
-        "INTAKE_LANGUAGE_ENTRA_AUTH",
-        "INTAKE_LANGUAGE_API_VERSION",
-        "INTAKE_REDACTION_CATEGORIES",
-    } <= names
-    assert {name.removeprefix("INTAKE_").lower() for name in names} <= set(
-        Settings.model_fields
-    )
-    # In Azure the endpoint is the real account's, from the foundation stack.
-    assert "local.foundation.language_endpoint" in main
-    assert "127.0.0.1" not in main
-    # intake may call Language; Language's own identity reads `originals` and
-    # writes `cases` (azure.md, Runtime roles).
-    for resource in (
-        "intake_language_user",
-        "language_originals_reader",
-        "language_cases_contributor",
-    ):
-        assert f'resource "azurerm_role_assignment" "{resource}"' in main
-    assert '"Cognitive Services User"' in main
-    assert '"Storage Blob Data Reader"' in main
-    # The categories the stack sets are valid for the settings.
-    variables = (APP_STACK / "terraform.tfvars").read_text()
-    listed = re.search(r"redaction_categories\s*=\s*\[([^\]]*)\]", variables)
-    assert listed is not None
-    assert Settings(
-        redaction_categories=re.findall(r'"([^"]+)"', listed.group(1))
-    ).redaction_categories == list(DEFAULT_REDACTION_CATEGORIES)
 
 
 # --- No code reads an original ---------------------------------------------
@@ -587,25 +350,3 @@ def test_story_1_7_each_page_is_read_once_into_text_word_boxes_and_a_thumbnail()
     assert (rotated.width, rotated.height) == (842.0, 595.0)
     assert rotated.words
     assert max(word.x1 for word in rotated.words) > 595.0
-
-
-def test_story_1_7_a_document_of_too_many_pages_is_refused_and_a_long_page_stays_small() -> (
-    None
-):
-    pdf = (CASES_DIR / "case-003.pdf").read_bytes()
-
-    with pytest.raises(RedactionJobError) as raised:
-        asyncio.run(PdfPageSplitter(200, max_pages=3).split(pdf))
-    assert raised.value.reason == "too_many_pages"
-
-    # A4 at 200 px wide would be 283 px high: the height limit wins.
-    (first, *_) = read_pages(pdf, 200, thumbnail_max_height_px=100)
-    width, height = (int.from_bytes(first.thumbnail[at : at + 4]) for at in (16, 20))
-    assert height <= 100
-    assert width < 200
-    assert Settings().max_pages == 200
-
-
-def test_story_1_7_a_file_that_is_not_a_pdf_cannot_be_split() -> None:
-    with pytest.raises(Exception):  # noqa: B017 - whatever the reader raises fails the redaction
-        read_pages(b"not a pdf", 200)

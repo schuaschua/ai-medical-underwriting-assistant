@@ -28,6 +28,9 @@ retrieval_ready_path          = "/ready"
 extraction_port               = 8005
 extraction_health_path        = "/health"
 extraction_ready_path         = "/ready"
+verdict_port                  = 8006
+verdict_health_path           = "/health"
+verdict_ready_path            = "/ready"
 otel_sampling_ratio           = 1
 dapr_http_max_request_size_mb = 16
 dapr_http_port                = 3500
@@ -67,6 +70,15 @@ model_max_retries              = 3
 # limit is hit; the first real numbers come from the final Azure test session
 # (deferred-work.md).
 extraction_model_max_concurrent_calls = 5
+
+# Verdict (spine AD-15): the agent's runs, on the same chat deployment; each
+# turn of a run is one model call. Lower the first value if the deployment's
+# token rate limit is hit. A run stops at the step limit, and a run whose
+# agent is less confident than the floor refers its case. The first real
+# numbers come from the final Azure test session (deferred-work.md).
+verdict_model_max_concurrent_calls = 5
+verdict_step_limit                 = 30
+verdict_confidence_floor           = 0.70
 
 # Retrieval (spine AD-12). The ingestion job reads this blob from the `manual`
 # container, has Document Intelligence's layout model parse it, and stores one

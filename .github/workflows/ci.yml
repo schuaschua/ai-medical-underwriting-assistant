@@ -53,9 +53,9 @@ jobs:
         # Azure: where `intake` would call Azure AI Language, the tests run
         # its stand-in (packages/synthdata, a dev dependency that `uv sync`
         # installed) over the blob emulator, in the test process and once as
-        # a process of its own. Where `classification` and `extraction` would
-        # call the Foundry chat deployment, they run that package's stand-in
-        # for it, in the test process. `retrieval`'s ingestion job is run the same way over
+        # a process of its own. Where `classification`, `extraction` and
+        # `verdict` would call the Foundry chat deployment, they run that
+        # package's stand-in for it, in the test process. `retrieval`'s ingestion job is run the same way over
         # the manual in the blob emulator, with the stand-ins for Document
         # Intelligence's layout model and for the Foundry deployments.
         run: docker compose up --detach --wait postgres azurite scheduler
@@ -140,6 +140,9 @@ jobs:
       EXTRACTION_IMAGE: aiuw-extraction:ci
       EXTRACTION_CONTAINER: aiuw-extraction-ci
       EXTRACTION_URL: http://127.0.0.1:18085
+      VERDICT_IMAGE: aiuw-verdict:ci
+      VERDICT_CONTAINER: aiuw-verdict-ci
+      VERDICT_URL: http://127.0.0.1:18086
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,6 +166,9 @@ jobs:
 
       - name: Build extraction
         run: docker build --file services/extraction/Dockerfile --tag "$EXTRACTION_IMAGE" .
+
+      - name: Build verdict
+        run: docker build --file services/verdict/Dockerfile --tag "$VERDICT_IMAGE" .
 
       - name: Run web
         run: docker run --detach --publish 127.0.0.1:18080:8000 --name "$WEB_CONTAINER" "$WEB_IMAGE"
@@ -210,6 +216,16 @@ jobs:
             --env EXTRACTION_MODEL_ENDPOINT=http://127.0.0.1:5101 \
             --env EXTRACTION_CHAT_DEPLOYMENT=local-stand-in \
             --name "$EXTRACTION_CONTAINER" "$EXTRACTION_IMAGE"
+
+      - name: Run verdict
+        # No database is given to it. The first value is the place of the
+        # model stand-in and the second a deployment name; nothing is
+        # listening there and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18086:8006 \
+            --env VERDICT_MODEL_ENDPOINT=http://127.0.0.1:5101 \
+            --env VERDICT_CHAT_DEPLOYMENT=local-stand-in \
+            --name "$VERDICT_CONTAINER" "$VERDICT_IMAGE"
 
       - name: Check web's health, the SPA page and the user
         run: |
@@ -412,6 +428,41 @@ jobs:
             exit 1
           fi
 
+      - name: Check verdict's health, its readiness and the user
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${VERDICT_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/verdict-ready.json" --write-out '%{http_code}' \
+            "${VERDICT_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::verdict's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/verdict-ready.json" > /dev/null; then
+            echo "::error::verdict's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$VERDICT_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The verdict container runs as root."
+            exit 1
+          fi
+          # The image carries the agent's prompt (stories 2.5 and 2.6), and
+          # it never holds the model stand-in, which is a dev tool.
+          docker exec "$VERDICT_CONTAINER" python -c \
+            "from verdict.prompts import SUGGEST_VERDICT, load_prompt; assert load_prompt(SUGGEST_VERDICT)"
+          if docker exec "$VERDICT_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The verdict image holds the model stand-in."
+            exit 1
+          fi
+
       - name: Show the containers' logs
         if: ${{ failure() }}
         # Each on its own: a container that never started must not hide the other's log.
@@ -422,6 +473,7 @@ jobs:
           docker logs "$CLASSIFICATION_CONTAINER" || true
           docker logs "$RETRIEVAL_CONTAINER" || true
           docker logs "$EXTRACTION_CONTAINER" || true
+          docker logs "$VERDICT_CONTAINER" || true
 
       - name: Remove the containers
         if: ${{ always() }}
@@ -432,6 +484,7 @@ jobs:
           docker rm --force "$CLASSIFICATION_CONTAINER" || true
           docker rm --force "$RETRIEVAL_CONTAINER" || true
           docker rm --force "$EXTRACTION_CONTAINER" || true
+          docker rm --force "$VERDICT_CONTAINER" || true
 
   dependency-scan:
     # security.md rule 28: any known vulnerability in a locked Python package,

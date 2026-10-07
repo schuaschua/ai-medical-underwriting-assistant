@@ -2,14 +2,13 @@
 
 from typing import Annotated, ClassVar, Literal, Self
 
-from pydantic import Field, JsonValue, model_validator
+from pydantic import Field, JsonValue, StringConstraints, model_validator
 
-from contracts.audit import AuditAction
+from contracts.audit import AuditAction, VerdictDetail
 from contracts.base import (
     Confidence,
     ContractModel,
     Milliseconds,
-    NonEmptyStr,
     Percent,
     UtcDatetime,
 )
@@ -17,6 +16,7 @@ from contracts.enums import (
     ReasonEffect,
     RetrieverConfig,
     StageStatus,
+    StepOutcome,
     SystemReason,
     ToolName,
     Verdict,
@@ -24,6 +24,7 @@ from contracts.enums import (
 from contracts.errors import ErrorCode
 from contracts.ids import CaseId, FactId, VerdictRunId
 from contracts.models._stage import StageCommand, StageResult
+from contracts.models.retrieval import MAX_QUERY_CHARS
 from contracts.rules import RuleId
 
 # AD-10: the exact label every verdict payload and the result screen carry.
@@ -62,7 +63,8 @@ class VerdictOutput(ContractModel):
 class SearchRulesArguments(ContractModel):
     """Arguments of the agent tool `search_rules`."""
 
-    query: NonEmptyStr
+    # Not blank, and no longer than a search takes (`SearchRequest.query`).
+    query: Annotated[str, StringConstraints(pattern=r"\S", max_length=MAX_QUERY_CHARS)]
     fact_id: FactId
 
 
@@ -91,6 +93,11 @@ class VerdictRunResult(StageResult):
     def _verdict_when_done(self) -> Self:
         if (self.status is StageStatus.DONE) != (self.verdict is not None):
             raise ValueError("verdict is set when, and only when, status is done")
+        detail = self.audit.detail
+        if isinstance(detail, VerdictDetail) and (
+            detail.retriever_config is not self.retriever_config
+        ):
+            raise ValueError("the audit record must name the run's retriever_config")
         return self
 
 
@@ -102,10 +109,13 @@ class VerdictRun(ContractModel):
     retriever_config: RetrieverConfig
     status: StageStatus
     label: Literal["AI suggestion, not a decision"] = SUGGESTION_LABEL
-    # `verdict` and `confidence` are null until the run is done.
+    # Null until the run is done.
     verdict: Verdict | None
     # Set when, and only when, the verdict is `loaded`.
     loading_pct: Percent | None
+    # The agent's own figure. Null until the run is done, and for a done run
+    # in which the agent gave no answer: a case without facts, or a run the
+    # step limit stopped.
     confidence: Confidence | None
     reasons: list[Reason]
     system_reasons: list[SystemReason]
@@ -114,9 +124,15 @@ class VerdictRun(ContractModel):
     @model_validator(mode="after")
     def _shape_follows_status(self) -> Self:
         done = self.status is StageStatus.DONE
-        if done != (self.verdict is not None) or done != (self.confidence is not None):
+        if done != (self.verdict is not None):
+            raise ValueError("verdict is set when, and only when, status is done")
+        if not done and self.confidence is not None:
+            raise ValueError("confidence is set only when status is done")
+        if not done and (self.reasons or self.system_reasons):
+            raise ValueError("only a done run has reasons")
+        if (self.verdict is Verdict.REFER) != bool(self.system_reasons):
             raise ValueError(
-                "verdict and confidence are set when, and only when, status is done"
+                "system_reasons are set when, and only when, the verdict is refer"
             )
         if (self.status is StageStatus.FAILED) != (self.error_code is not None):
             raise ValueError("error_code is set when, and only when, status is failed")
@@ -128,10 +144,15 @@ class VerdictRun(ContractModel):
 
 
 class VerdictRunList(ContractModel):
-    """Response of `GET /cases/{case_id}/verdict-runs`."""
+    """Response of `GET /cases/{case_id}/verdict-runs`: the case's runs, oldest first.
+
+    The answer is bounded: `has_more` says that the case has more runs than
+    are listed.
+    """
 
     case_id: CaseId
     verdict_runs: list[VerdictRun]
+    has_more: bool
 
 
 class AgentStep(ContractModel):
@@ -145,8 +166,22 @@ class AgentStep(ContractModel):
     fact_id: FactId | None
     # The rules the call returned or read.
     rule_ids: list[RuleId]
+    outcome: StepOutcome
+    # Set when, and only when, the call was refused or failed: why, from the
+    # error catalogue (`rule_not_seen` for a `read_rule` the run may not make).
+    error_code: ErrorCode | None
     latency_ms: Milliseconds
     occurred_at: UtcDatetime
+
+    @model_validator(mode="after")
+    def _error_code_follows_outcome(self) -> Self:
+        if (self.outcome is StepOutcome.DONE) != (self.error_code is None):
+            raise ValueError(
+                "error_code is set when, and only when, the call was refused or failed"
+            )
+        if self.outcome is not StepOutcome.DONE and self.rule_ids:
+            raise ValueError("a call that was refused or failed returned no rules")
+        return self
 
 
 class AgentStepQuery(ContractModel):
@@ -157,6 +192,12 @@ class AgentStepQuery(ContractModel):
 
 
 class AgentStepList(ContractModel):
-    """Response of both agent log reads, in step order."""
+    """Response of both agent log reads: the steps in the order they were made.
+
+    Within a run by step number; across the runs of a case, run after run.
+    The answer is bounded: `has_more` says that more steps exist than are
+    listed.
+    """
 
     steps: list[AgentStep]
+    has_more: bool

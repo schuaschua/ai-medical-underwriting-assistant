@@ -24,6 +24,16 @@
           "title": "Case Id",
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "fact_id": {
           "anyOf": [
             {
@@ -45,6 +55,9 @@
           "format": "date-time",
           "title": "Occurred At",
           "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/StepOutcome"
         },
         "rule_ids": {
           "items": {
@@ -76,6 +89,8 @@
         "arguments",
         "fact_id",
         "rule_ids",
+        "outcome",
+        "error_code",
         "latency_ms",
         "occurred_at"
       ],
@@ -84,8 +99,12 @@
     },
     "AgentStepList": {
       "additionalProperties": false,
-      "description": "Response of both agent log reads, in step order.",
+      "description": "Response of both agent log reads: the steps in the order they were made.\n\nWithin a run by step number; across the runs of a case, run after run.\nThe answer is bounded: `has_more` says that more steps exist than are\nlisted.",
       "properties": {
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        },
         "steps": {
           "items": {
             "$ref": "#/$defs/AgentStep"
@@ -95,7 +114,8 @@
         }
       },
       "required": [
-        "steps"
+        "steps",
+        "has_more"
       ],
       "title": "AgentStepList",
       "type": "object"
@@ -183,6 +203,9 @@
             },
             {
               "$ref": "#/$defs/RouteDetail"
+            },
+            {
+              "$ref": "#/$defs/VerdictDetail"
             },
             {
               "type": "null"
@@ -811,6 +834,7 @@
         "not_awaiting_decision",
         "pages_not_terminal",
         "rule_not_seen",
+        "step_limit",
         "retriever_not_available",
         "stage_timeout",
         "stage_failed",
@@ -1828,6 +1852,7 @@
           "type": "string"
         },
         "query": {
+          "maxLength": 2000,
           "pattern": "\\S",
           "title": "Query",
           "type": "string"
@@ -1993,6 +2018,16 @@
       },
       "title": "StartCaseRequest",
       "type": "object"
+    },
+    "StepOutcome": {
+      "description": "How one tool call of the verdict agent ended (AD-15).",
+      "enum": [
+        "done",
+        "refused",
+        "failed"
+      ],
+      "title": "StepOutcome",
+      "type": "string"
     },
     "StopAfter": {
       "description": "Where a case may be told to stop early (AD-17: the classifier bake-off).",
@@ -2174,6 +2209,20 @@
       "title": "Verdict",
       "type": "string"
     },
+    "VerdictDetail": {
+      "additionalProperties": false,
+      "description": "Detail of `verdict.suggested`: the retriever configuration the run was made with (AD-15).\n\nA case gets one run per configuration it was started with, and each is\nan event of its own: the detail says which.",
+      "properties": {
+        "retriever_config": {
+          "$ref": "#/$defs/RetrieverConfig"
+        }
+      },
+      "required": [
+        "retriever_config"
+      ],
+      "title": "VerdictDetail",
+      "type": "object"
+    },
     "VerdictOutput": {
       "additionalProperties": false,
       "description": "What the verdict agent must return; `verdict`'s domain code finishes it (AD-15).",
@@ -2347,12 +2396,16 @@
     },
     "VerdictRunList": {
       "additionalProperties": false,
-      "description": "Response of `GET /cases/{case_id}/verdict-runs`.",
+      "description": "Response of `GET /cases/{case_id}/verdict-runs`: the case's runs, oldest first.\n\nThe answer is bounded: `has_more` says that the case has more runs than\nare listed.",
       "properties": {
         "case_id": {
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "title": "Case Id",
           "type": "string"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
         },
         "verdict_runs": {
           "items": {
@@ -2364,7 +2417,8 @@
       },
       "required": [
         "case_id",
-        "verdict_runs"
+        "verdict_runs",
+        "has_more"
       ],
       "title": "VerdictRunList",
       "type": "object"
@@ -2385,24 +2439,48 @@
     },
     "VerdictRunRequested": {
       "additionalProperties": false,
-      "description": "The requested run's state; the run itself is read from `verdict`.",
+      "description": "The requested run's state; the run itself is read from `verdict`.\n\n`running` while the run is under way, then `done` or `failed`.",
       "properties": {
         "case_id": {
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
           "title": "Case Id",
           "type": "string"
         },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "retriever_config": {
           "$ref": "#/$defs/RetrieverConfig"
         },
         "status": {
           "$ref": "#/$defs/StageStatus"
+        },
+        "verdict_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Verdict Run Id"
         }
       },
       "required": [
         "case_id",
         "retriever_config",
-        "status"
+        "status",
+        "verdict_run_id"
       ],
       "title": "VerdictRunRequested",
       "type": "object"

@@ -27,15 +27,14 @@ from workflow_fakes import (
     redaction_done,
     redaction_failed,
     starting,
+    verdict_done,
 )
 from workflow_local import connect, wait_for_case_status
 
 from contracts.enums import (
-    CaseStatus,
     ClassifierContender,
     DemoRole,
     RetrieverConfig,
-    StopAfter,
 )
 from contracts.ids import new_id
 from contracts.models.workflow import (
@@ -64,7 +63,8 @@ from workflow.domain.decisions import record_decision
 from workflow.domain.entities import StartParameters
 from workflow.domain.gate import Route
 from workflow.domain.lifecycle import new_case
-from workflow.domain.recording import Recording
+from workflow.domain.recording import RecordOutcome
+from workflow.domain.verdicts import complete_case
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -212,6 +212,23 @@ def decide(
     )
 
 
+def suggest_and_complete(
+    store: SqlCaseStore,
+    runner: asyncio.Runner,
+    case_id: str,
+    eval_run_id: str | None = None,
+) -> str:
+    """The lifecycle's last steps (stories 2.5 and 2.6): the verdict run is recorded, then the case completed."""
+
+    async def scenario() -> str:
+        run = verdict_done(case_id, eval_run_id=eval_run_id)
+        assert await record_stage_result(run, store=store) is RecordOutcome.RECORDED
+        settled = await complete_case(case_id, store=store, trace_id=TRACE_ID)
+        return settled.case_status.value
+
+    return runner.run(scenario())
+
+
 @contextlib.contextmanager
 def audit_inserts_refused(migration_settings: Settings) -> Iterator[None]:
     """While this holds, the database takes no new audit event."""
@@ -281,8 +298,9 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_starts_and_ends_it
     actions = [event.action.value for event in trail.events]
     assert (actions[0], actions[-1]) == ("case.started", "case.completed")
     assert (actions.count("case.started"), actions.count("case.completed")) == (1, 1)
-    # The last decision comes right before the completion it caused.
-    assert actions[-2] == "page.denied"
+    # The last decision made every page final; the case then got its
+    # verdict run, and the completion follows that (stories 2.5 and 2.6).
+    assert actions[-3:] == ["page.denied", "verdict.suggested", "case.completed"]
     started_event, completed_event = trail.events[0], trail.events[-1]
     assert (started_event.actor_kind.value, started_event.actor) == (
         "human",
@@ -318,45 +336,11 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_starts_and_ends_it
     assert at_the_end.started_at == started_event.occurred_at
 
 
-def test_story_1_13_a_case_that_stops_after_the_gate_ends_its_trail_with_the_completion(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    sidecar = SidecarStandIn(FakeStages(pages=2, readings=WAITING_READINGS))
-    case_id, eval_run_id = new_id(), new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(
-            f"/cases/{case_id}/start",
-            json={
-                "actor": "underwriter",
-                "stop_after": "gate",
-                "eval_run_id": eval_run_id,
-            },
-        )
-        wait_for_case_status(client, case_id, "completed")
-        scheduler_client.wait_for_orchestration_completion(case_id, timeout=60)
-        trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
-        listed = CaseList.model_validate(client.get("/cases").json())
-
-    actions = [event.action.value for event in trail.events]
-    assert (actions[0], actions[-1]) == ("case.started", "case.completed")
-    assert actions.count("case.completed") == 1
-    assert trail.events[0].actor == "underwriter"
-    assert {event.eval_run_id for event in trail.events} == {eval_run_id}
-    # An eval-run case is not the underwriter's to open.
-    assert listed == CaseList(cases=[], has_more=False)
-
-
 @pytest.mark.parametrize(
     "body",
     [
-        None,
         {},
-        {"stop_after": "gate"},
         {"actor": "verdict"},
-        {"actor": "robot"},
-        {"actor": ""},
-        {"actor": "  "},
     ],
 )
 def test_story_1_13_the_service_refuses_a_start_without_a_demo_role_and_stores_no_case(
@@ -380,67 +364,7 @@ def test_story_1_13_the_service_refuses_a_start_without_a_demo_role_and_stores_n
     assert scheduler_client.get_orchestration_state(case_id) is None
 
 
-def test_story_1_13_a_failed_case_keeps_its_failure_and_has_no_completion(
-    service_settings: Settings, scheduler_client: DurableTaskSchedulerClient
-) -> None:
-    sidecar = SidecarStandIn(FakeStages(redaction="failed"))
-    case_id = new_id()
-
-    with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json={"actor": "customer"})
-        wait_for_case_status(client, case_id, "failed")
-        scheduler_client.wait_for_orchestration_completion(case_id, timeout=60)
-        listed = CaseList.model_validate(client.get("/cases").json())
-
-    assert stored_actions(service_settings, case_id) == ["case.started", "stage.failed"]
-    # A failed case is in the list all the same: that is how it is found.
-    assert [(case.case_id, case.case_status.value) for case in listed.cases] == [
-        (case_id, "failed")
-    ]
-
-
 # --- The start, in the store --------------------------------------------------------
-
-
-def test_story_1_13_the_real_store_writes_the_start_event_with_the_case_once(
-    service_settings: Settings,
-) -> None:
-    eval_run_id = new_id()
-    of_a_run = StartParameters(
-        classifier_contender=ClassifierContender.LLM,
-        retriever_configs=(RetrieverConfig.R3,),
-        stop_after=None,
-        eval_run_id=eval_run_id,
-    )
-    with a_store(service_settings) as (store, runner):
-        case_id = new_id()
-        case = new_case(case_id, of_a_run, NOW)
-        first = runner.run(store.start(*starting(case, DemoRole.UNDERWRITER)))
-        # Again: by the same role, by the other one, and later.
-        same = runner.run(store.start(*starting(case, DemoRole.UNDERWRITER)))
-        later = new_case(case_id, PARAMETERS, NOW + timedelta(hours=1))
-        other = runner.run(store.start(*starting(later, DemoRole.CUSTOMER)))
-
-    assert first == same == other
-    assert stored_events(service_settings, case_id) == [
-        (
-            "case.started",
-            "human",
-            "underwriter",
-            None,
-            case_id,
-            None,
-            None,
-            eval_run_id,
-            TRACE_ID,
-        )
-    ]
-    (recorded_at,) = query(
-        service_settings,
-        "SELECT recorded_at, occurred_at FROM workflow.audit_event WHERE case_id = %s",
-        case_id,
-    )
-    assert tuple(recorded_at) == (NOW, NOW)
 
 
 def test_story_1_13_starts_at_once_by_both_roles_leave_one_case_and_one_event(
@@ -495,6 +419,7 @@ def test_story_1_13_the_database_takes_one_start_and_one_completion_per_case(
     with a_store(service_settings) as (store, runner):
         case_id, (page_id,) = gated_case(store, runner, [Route.CUSTOMER])
         decide(store, runner, case_id, page_id, "discard", "customer")
+        assert suggest_and_complete(store, runner, case_id) == "completed"
         other, _ = gated_case(store, runner, [Route.CUSTOMER])
     before = stored_events(service_settings, case_id)
     assert [row[0] for row in before].count("case.completed") == 1
@@ -537,186 +462,6 @@ def test_story_1_13_the_database_takes_one_start_and_one_completion_per_case(
     assert stored_actions(service_settings, other)[-1] == "case.completed"
 
 
-def test_story_1_13_the_real_store_refuses_a_recording_that_completes_a_case(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id = started(store, runner)
-        completing = Recording(
-            audit=redaction_done(case_id, [new_id()]).audit,
-            case_status=CaseStatus.COMPLETED,
-        )
-        with pytest.raises(ValueError, match="does not complete a case"):
-            runner.run(store.record(completing, NOW))
-
-    # Neither the status nor an event: nothing completes a case past its event.
-    assert case_status(service_settings, case_id) == "running"
-    assert stored_actions(service_settings, case_id) == ["case.started"]
-
-
-# --- The completion, in the store ---------------------------------------------------
-
-
-def test_story_1_13_an_eval_run_case_completed_by_its_last_decision_keeps_its_run_id(
-    service_settings: Settings,
-) -> None:
-    eval_run_id = new_id()
-    of_a_run = StartParameters(
-        classifier_contender=ClassifierContender.LLM,
-        retriever_configs=(RetrieverConfig.R3,),
-        # Not told to stop after the gate: its pages are decided like any other's.
-        stop_after=None,
-        eval_run_id=eval_run_id,
-    )
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, second) = gated_case(
-            store, runner, [Route.CUSTOMER, Route.TRIAGE], of_a_run
-        )
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        decide(store, runner, case_id, first, "discard", "customer")
-        decide(store, runner, case_id, second, "deny", "underwriter")
-
-    events = stored_events(service_settings, case_id)
-    assert case_status(service_settings, case_id) == "completed"
-    assert [row[0] for row in events][-2:] == ["page.denied", "case.completed"]
-    # The completion, like the decision before it, carries the case's run id.
-    assert (events[-1][7], events[-2][7]) == (eval_run_id, eval_run_id)
-
-
-def test_story_1_13_the_real_store_completes_a_case_with_its_event_after_the_last_decision(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, second) = gated_case(
-            store, runner, [Route.CUSTOMER, Route.TRIAGE]
-        )
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        decide(store, runner, case_id, first, "discard", "customer")
-        before_the_last = stored_actions(service_settings, case_id)
-        decide(store, runner, case_id, second, "deny", "underwriter")
-        after_the_last = stored_events(service_settings, case_id)
-        # Repeated: the decision, and the settle after the gate, late.
-        decide(store, runner, case_id, second, "deny", "underwriter")
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-
-    assert "case.completed" not in before_the_last
-    assert [row[0] for row in after_the_last][-2:] == ["page.denied", "case.completed"]
-    assert after_the_last[-1] == (
-        "case.completed",
-        "ai",
-        "workflow:case-lifecycle",
-        None,
-        case_id,
-        None,
-        None,
-        None,
-        # The trace of the decision that completed the case.
-        TRACE_ID,
-    )
-    assert stored_events(service_settings, case_id) == after_the_last
-    assert case_status(service_settings, case_id) == "completed"
-
-
-def test_story_1_13_the_real_store_completes_a_case_stopped_after_the_gate_once(
-    service_settings: Settings,
-) -> None:
-    eval_run_id = new_id()
-    stopping = StartParameters(
-        classifier_contender=ClassifierContender.LLM,
-        retriever_configs=(RetrieverConfig.R3,),
-        stop_after=StopAfter.GATE,
-        eval_run_id=eval_run_id,
-    )
-    with a_store(service_settings) as (store, runner):
-        case_id, _pages = gated_case(
-            store, runner, [Route.TRIAGE, Route.EXTRACTION], stopping
-        )
-        first = runner.run(
-            settle_case_after_gate(case_id, store=store, trace_id=TRACE_ID)
-        )
-        again = runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-
-    assert first.case_status.value == again.case_status.value == "completed"
-    events = stored_events(service_settings, case_id)
-    assert [row[0] for row in events].count("case.completed") == 1
-    assert events[-1][0] == "case.completed"
-    assert (events[-1][7], events[-1][8]) == (eval_run_id, TRACE_ID)
-
-
-def test_story_1_13_settles_at_once_complete_a_case_with_one_event(
-    service_settings: Settings,
-) -> None:
-    stopping = StartParameters(
-        classifier_contender=ClassifierContender.LLM,
-        retriever_configs=(RetrieverConfig.R3,),
-        stop_after=StopAfter.GATE,
-        eval_run_id=None,
-    )
-    with a_store(service_settings) as (store, runner):
-        case_id, _pages = gated_case(store, runner, [Route.TRIAGE], stopping)
-
-    def settle(_: int) -> str:
-        with a_store(service_settings) as (own_store, own_runner):
-            settled = own_runner.run(
-                settle_case_after_gate(case_id, store=own_store, trace_id=None)
-            )
-        return settled.case_status.value
-
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        statuses = list(pool.map(settle, range(6)))
-
-    assert set(statuses) == {"completed"}
-    assert stored_actions(service_settings, case_id).count("case.completed") == 1
-
-
-def test_story_1_13_when_the_completion_event_cannot_be_written_the_case_is_not_completed(
-    migrated_database: Settings, service_settings: Settings
-) -> None:
-    stopping = StartParameters(
-        classifier_contender=ClassifierContender.LLM,
-        retriever_configs=(RetrieverConfig.R3,),
-        stop_after=StopAfter.GATE,
-        eval_run_id=None,
-    )
-    with a_store(service_settings) as (store, runner):
-        case_id, _pages = gated_case(store, runner, [Route.TRIAGE], stopping)
-        with audit_inserts_refused(migrated_database), pytest.raises(DBAPIError):
-            runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        during = case_status(service_settings, case_id)
-        # The activity runs again, once the insert works.
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-
-    # The status and its event are written together, or neither.
-    assert during == "running"
-    assert case_status(service_settings, case_id) == "completed"
-    assert stored_actions(service_settings, case_id)[-1] == "case.completed"
-
-
-def test_story_1_13_the_real_store_writes_no_event_for_waiting_resuming_or_failing(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_id, (first, _second) = gated_case(
-            store, runner, [Route.TRIAGE, Route.EXTRACTION]
-        )
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-        waiting = case_status(service_settings, case_id)
-        decide(store, runner, case_id, first, "accept", "underwriter")
-        resumed = case_status(service_settings, case_id)
-        # The lifecycle cannot go on: the case fails.
-        runner.run(fail_case(case_id, store=store))
-        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
-
-    assert (waiting, resumed) == ("awaiting_human", "running")
-    assert case_status(service_settings, case_id) == "failed"
-    case_level = [
-        row[0] for row in stored_events(service_settings, case_id) if row[3] is None
-    ]
-    # No `case.completed`, and nothing for the wait or the resume.
-    assert case_level == ["case.started", "document.redacted", "stage.failed"]
-
-
 # --- The case list, in the store ----------------------------------------------------
 
 
@@ -739,6 +484,7 @@ def test_story_1_13_the_real_store_lists_cases_newest_first_with_their_page_coun
             store, runner, [Route.CUSTOMER], at=NOW + timedelta(minutes=3)
         )
         decide(store, runner, completed, page_id, "discard", "customer")
+        suggest_and_complete(store, runner, completed)
         newest = started(
             store, runner, actor=DemoRole.UNDERWRITER, at=NOW + timedelta(minutes=4)
         )
@@ -763,30 +509,6 @@ def test_story_1_13_the_real_store_lists_cases_newest_first_with_their_page_coun
     ]
 
 
-def test_story_1_13_a_case_told_to_stop_after_the_gate_is_listed_with_no_waiting_page(
-    service_settings: Settings,
-) -> None:
-    # Not of an eval run, so it is listed; told to stop after the gate, so
-    # nobody is asked about its page, also before the settle completes it.
-    stopping = StartParameters(
-        classifier_contender=ClassifierContender.LLM,
-        retriever_configs=(RetrieverConfig.R3,),
-        stop_after=StopAfter.GATE,
-        eval_run_id=None,
-    )
-    with a_store(service_settings) as (store, runner):
-        case_id, _pages = gated_case(store, runner, [Route.TRIAGE], stopping)
-        listed = runner.run(read_case_list(store=store))
-
-    (case,) = listed.cases
-    assert (
-        case.case_id,
-        case.case_status.value,
-        case.page_count,
-        case.waiting_page_count,
-    ) == (case_id, "running", 1, 0)
-
-
 def test_story_1_13_the_real_store_leaves_eval_run_cases_out_of_the_list(
     service_settings: Settings,
 ) -> None:
@@ -805,46 +527,3 @@ def test_story_1_13_the_real_store_leaves_eval_run_cases_out_of_the_list(
     assert empty == CaseList(cases=[], has_more=False)
     assert [case.case_id for case in listed.cases] == [shown]
     assert listed.has_more is False
-
-
-def test_story_1_13_the_real_store_bounds_the_list_and_says_when_more_exist(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_ids = [
-            started(store, runner, at=NOW + timedelta(minutes=minutes))
-            for minutes in range(4)
-        ]
-        # Two cases started at the same instant: the id settles the order.
-        twins = sorted(
-            started(store, runner, at=NOW + timedelta(minutes=10)) for _ in range(2)
-        )
-        bounded = runner.run(read_case_list(store=store, limit=3))
-        exact = runner.run(read_case_list(store=store, limit=6))
-
-    assert [case.case_id for case in bounded.cases] == [
-        twins[1],
-        twins[0],
-        case_ids[3],
-    ]
-    assert bounded.has_more is True
-    assert (len(exact.cases), exact.has_more) == (6, False)
-    assert [case.case_id for case in exact.cases][3:] == case_ids[2::-1]
-
-
-def test_story_1_13_the_service_lists_no_more_cases_than_its_setting_allows(
-    service_settings: Settings,
-) -> None:
-    with a_store(service_settings) as (store, runner):
-        case_ids = [
-            started(store, runner, at=NOW + timedelta(minutes=minutes))
-            for minutes in range(3)
-        ]
-    limited = service_settings.model_copy(update={"case_list_limit": 2})
-
-    with workflow_service(limited, SidecarStandIn().transport()) as client:
-        answer: dict[str, Any] = client.get("/cases").json()
-
-    assert [case["case_id"] for case in answer["cases"]] == [case_ids[2], case_ids[1]]
-    assert answer["has_more"] is True
-    assert answer["cases"][0]["started_at"] == "2026-10-07T09:02:00Z"

@@ -1,15 +1,25 @@
 """What the lifecycle needs from the outside world; adapters provide it."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
 from contracts.audit import AuditRecord, RouteDetail
-from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
+from contracts.enums import (
+    CaseStatus,
+    ClassifierContender,
+    Decision,
+    PageStatus,
+    RetrieverConfig,
+    StageStatus,
+)
+from contracts.errors import ErrorCode
 from contracts.models.classification import ClassificationResult
 from contracts.models.extraction import FactSetResult
 from contracts.models.intake import RedactionResult
+from contracts.models.verdict import VerdictRunResult
 from contracts.models.workflow import AuditTrail, CaseList, CaseProgress, PageQueue
 from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
 from workflow.domain.recording import Decided, Recording, RecordOutcome
@@ -31,17 +41,38 @@ class CaseStore(Protocol):
         """The case's status, or None if the case is unknown."""
         ...
 
+    async def case(self, case_id: str) -> CaseRecord | None:
+        """The case as it is stored, with what it was started with; None if it is unknown."""
+        ...
+
+    async def complete_case(
+        self, case_id: str, completed_at: datetime, trace_id: str | None
+    ) -> SettledCase | None:
+        """Complete a case whose pages are final and whose verdict runs are recorded (AD-15).
+
+        In one transaction, under the lock on the case's row: the case is
+        moved to `completed`, with its `case.completed` event, only if every
+        page is final, the trail holds a `verdict.suggested` event for each
+        retriever configuration the case was started with, and the status
+        may follow the one the case has (`domain/transitions.py`). Otherwise
+        nothing is written. Asking again changes nothing. The answer holds
+        the status the case has afterwards and its pages as that
+        transaction read them. None if the case is unknown.
+        """
+        ...
+
     async def record(
         self, recording: Recording, recorded_at: datetime
     ) -> RecordOutcome:
         """Write the status changes and the audit event in one transaction, or neither.
 
         A recording never names `completed` as the case status: one that
-        does is a `ValueError`. A case is completed only where its pages are
-        followed and the `case.completed` event is written with the status:
-        in `decide`, in `settle_case`, and here for a recording that
-        `follows_pages` (a done page stage result), after its own event, so
-        that `case.completed` is the trail's last.
+        does is a `ValueError`. A case is completed only where the
+        `case.completed` event is written with the status: in
+        `complete_case`, once its verdict runs are recorded, and in
+        `settle_case` for a case told to stop after the gate. A recording
+        that `follows_pages` (a done page stage result) gives the case the
+        status its pages give it, which is never `completed`.
         A recording whose audit event is already in the trail writes nothing,
         and neither does one whose status change may not follow the current
         status (`domain/transitions.py`); the outcome says which.
@@ -61,8 +92,8 @@ class CaseStore(Protocol):
         Together: the decision's row, the page's new status (only from the
         status the decision needs), the case status its pages then give
         (`domain/case_status.py`) and the audit event, which takes the case's
-        eval run id. If that status is `completed`, the case's
-        `case.completed` event is written too, after the decision's. A page
+        eval run id. A decision never completes a case: one that makes the
+        last page final leaves the case `running`, for its verdict runs. A page
         that holds the same decision already is answered
         with that one and nothing is written. A page that is in another
         status, or whose case takes no decision
@@ -79,8 +110,9 @@ class CaseStore(Protocol):
         that sets it (`domain/case_status.py`), so asking again, however
         late, never undoes what a decision has changed since. A status that
         may not follow the one the case has (`domain/transitions.py`) is not
-        set. A case moved to `completed` gets its `case.completed` event in
-        the same transaction, once. The answer holds the status the case
+        set. Only a case told to stop after the gate is completed here, with
+        its `case.completed` event in the same transaction, once: every
+        other case has its verdict runs first. The answer holds the status the case
         has and the statuses of its pages as that transaction read them.
         None if the case is unknown.
         """
@@ -173,6 +205,18 @@ class Told(StrEnum):
         return self in (Told.MISSING, Told.DEAD)
 
 
+@dataclass(frozen=True, slots=True)
+class VerdictRunState:
+    """What the engine holds for a verdict run that was asked for on a finished case."""
+
+    # `running` while its orchestration is under way; then what it ended with.
+    status: StageStatus
+    # The run's id at `verdict`, once the orchestration has its result.
+    verdict_run_id: str | None = None
+    # For a failed run: why, as the orchestration's output names it.
+    error_code: ErrorCode | None = None
+
+
 class LifecycleEngine(Protocol):
     """The orchestration engine (AD-5)."""
 
@@ -193,6 +237,21 @@ class LifecycleEngine(Protocol):
         twice does no harm. Answers whether there was an orchestration to
         tell: one that has ended, is missing or is dead is told nothing,
         and the answer says which. Raises if the engine could not be reached.
+        """
+        ...
+
+    async def ensure_verdict_run(
+        self, case: CaseRecord, retriever_config: RetrieverConfig
+    ) -> VerdictRunState:
+        """Make sure the asked-for verdict run has its one orchestration; say what state it is in.
+
+        The orchestration's instance id is `<case_id>:verdict:<retriever_config>`
+        (AD-15): one per case and configuration, whatever is repeated. One
+        that runs, or that ended with a run stored at `verdict` (done or
+        failed), is left as it is, and its state is answered. One that ended
+        without a stored run (it died, or the stage never answered) is
+        replaced by a new one: the fault may have passed. Raises if the
+        engine could not be reached.
         """
         ...
 
@@ -241,4 +300,19 @@ class StageServices(Protocol):
         trace_context: Mapping[str, str],
     ) -> FactSetResult:
         """AD-14: have `extraction` read the facts of one page that reached `extracting`."""
+        ...
+
+    async def run_verdict(
+        self,
+        case_id: str,
+        retriever_config: RetrieverConfig,
+        *,
+        eval_run_id: str | None,
+        trace_context: Mapping[str, str],
+    ) -> VerdictRunResult:
+        """AD-15: have `verdict` suggest a verdict for a case whose pages are final, with one retriever row.
+
+        Besides the errors above it raises `retriever_not_available` when
+        the row is not built; like `not_found`, no repeat mends it.
+        """
         ...

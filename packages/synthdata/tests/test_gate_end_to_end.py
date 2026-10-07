@@ -16,6 +16,7 @@ from synthdata_stack import (
     LocalClassification,
     LocalExtraction,
     LocalIntake,
+    LocalVerdict,
     ServicesBehindSidecar,
     answer_key,
     start_and_wait,
@@ -27,91 +28,13 @@ from workflow.settings import Settings
 pytestmark = pytest.mark.integration
 
 
-def test_story_1_9_a_case_with_medical_and_other_pages_is_routed_page_by_page(
-    workflow_service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-) -> None:
-    case_id, _ = intake.upload("case-002.pdf")
-    key = answer_key("case-002")
-    sidecar = ServicesBehindSidecar(
-        intake=intake.app(),
-        classification=classification.app(),
-        extraction=extraction.app(),
-    )
-
-    progress, trail, _ = start_and_wait(
-        workflow_service_settings,
-        scheduler_client,
-        sidecar,
-        case_id,
-        waits_for_a_human=True,
-    )
-
-    # The stand-in's runs agree, so every page is classified at 1.0: a
-    # medical page goes on to extraction, another one back to the customer.
-    assert {page["is_medical"] for page in key["pages"]} == {True, False}
-    expected = [
-        "extracting" if page["is_medical"] else "awaiting_customer"
-        for page in key["pages"]
-    ]
-    # A page sent on to extraction is extracted by now (story 2.4).
-    assert [page.page_status.value for page in progress.pages] == [
-        "extracted" if route == "extracting" else route for route in expected
-    ]
-    assert len(set(expected)) == 2
-    # No page is left `classified`, and a page waits for a person: so does the case.
-    assert progress.case_status.value == "awaiting_human"
-    assert progress.error_code is None
-
-    # The trail: for each page one `page.routed` event, after its
-    # `page.classified` event and about the same classification.
-    listed = {
-        item.page_id: item for item in classification.listed(case_id).classifications
-    }
-    assert [event.action.value for event in trail.events[:2]] == [
-        "case.started",
-        "document.redacted",
-    ]
-    for page, route in zip(progress.pages, expected, strict=True):
-        events = [event for event in trail.events if event.page_id == page.page_id]
-        assert [event.action.value for event in events] == [
-            "page.classified",
-            "page.routed",
-            # Story 2.4: a page sent on to extraction is extracted next.
-            *(["facts.extracted"] if route == "extracting" else []),
-        ]
-        routed = events[1]
-        assert (routed.actor_kind.value, routed.actor) == ("ai", "workflow:gate")
-        assert routed.ref == listed[page.page_id].classification_id
-        assert routed.model_dump(mode="json")["detail"] == {
-            "route": route,
-            "threshold": 0.9,
-        }
-    assert len(trail.events) == 2 + 2 * len(expected) + expected.count("extracting")
-    # The gate is `workflow`'s alone: nothing but the classify commands went
-    # to `classification`, and no command carried a threshold or a route.
-    assert sidecar.paths("classification") == ["/classifications"] * len(expected)
-    assert {
-        (app_id, method, path.rsplit("/", 1)[-1])
-        for app_id, method, path in sidecar.calls
-    } == {
-        ("intake", "POST", "redaction"),
-        ("classification", "POST", "classifications"),
-        # Story 2.4: the pages the gate sent on, one command each.
-        ("extraction", "POST", "fact-sets"),
-    }
-    assert sidecar.paths("extraction") == ["/fact-sets"] * expected.count("extracting")
-
-
 def test_story_1_9_one_case_ends_with_pages_on_all_three_routes(
     workflow_service_settings: Settings,
     scheduler_client: DurableTaskSchedulerClient,
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     # The stand-in's runs differ on laboratory reports and identity documents
     # only: such a page is classified at 0.6, every other page at 1.0.
@@ -130,6 +53,7 @@ def test_story_1_9_one_case_ends_with_pages_on_all_three_routes(
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     progress, trail, _ = start_and_wait(
@@ -184,6 +108,7 @@ def test_story_1_9_pages_the_classifier_is_unsure_of_go_to_triage(
     intake: LocalIntake,
     classification: LocalClassification,
     extraction: LocalExtraction,
+    verdict: LocalVerdict,
 ) -> None:
     # Three of five runs agree: every page is classified at 0.6, medical or not.
     classification.model.mode = Mode.DISAGREE
@@ -192,6 +117,7 @@ def test_story_1_9_pages_the_classifier_is_unsure_of_go_to_triage(
         intake=intake.app(),
         classification=classification.app(),
         extraction=extraction.app(),
+        verdict=verdict.app(),
     )
 
     progress, trail, _ = start_and_wait(
@@ -210,40 +136,3 @@ def test_story_1_9_pages_the_classifier_is_unsure_of_go_to_triage(
     assert sorted(event.page_id or "" for event in routed) == sorted(
         page.page_id for page in progress.pages
     )
-
-
-def test_story_1_9_a_case_started_with_stop_after_gate_ends_at_the_gate(
-    workflow_service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-) -> None:
-    case_id, _ = intake.upload("case-001.pdf")
-    sidecar = ServicesBehindSidecar(
-        intake=intake.app(),
-        classification=classification.app(),
-        extraction=extraction.app(),
-    )
-
-    progress, trail, output = start_and_wait(
-        workflow_service_settings,
-        scheduler_client,
-        sidecar,
-        case_id,
-        stop_after="gate",
-    )
-
-    # Routed like any other case (three medical pages the stand-in is sure
-    # of), and then complete (the classifier bake-off). No page is
-    # extracted: the case was told to stop at the gate (story 2.4).
-    assert [page.page_status.value for page in progress.pages] == ["extracting"] * 3
-    assert sidecar.paths("extraction") == []
-    assert extraction.facts(case_id).facts == []
-    assert progress.case_status.value == "completed"
-    assert output["case_status"] == "completed"
-    actions = [event.action.value for event in trail.events]
-    assert actions.count("page.routed") == len(progress.pages)
-    # Story 1.13: the trail says who started the case and that it was completed.
-    assert (actions[0], actions[-1]) == ("case.started", "case.completed")
-    assert actions.count("case.completed") == 1

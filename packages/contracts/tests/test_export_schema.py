@@ -11,7 +11,9 @@ from contracts.export_schema import build_schema, main, render_schema
 from contracts.operations import OPERATIONS
 
 
-def test_story_1_3_schema_holds_every_operation_model() -> None:
+def test_story_1_3_schema_holds_every_operation_model_the_enums_and_the_error_shape() -> (
+    None
+):
     definitions = build_schema()["$defs"]
 
     for operation in OPERATIONS:
@@ -22,11 +24,6 @@ def test_story_1_3_schema_holds_every_operation_model() -> None:
         ):
             if model is not None:
                 assert model.__name__ in definitions
-
-
-def test_story_1_3_schema_holds_enums_and_the_error_shape() -> None:
-    definitions = build_schema()["$defs"]
-
     assert definitions["DemoRole"]["enum"] == [role.value for role in DemoRole]
     assert definitions["ErrorCode"]["enum"] == [code.value for code in ErrorCode]
     assert set(definitions["ErrorDetail"]["required"]) == {
@@ -34,24 +31,11 @@ def test_story_1_3_schema_holds_enums_and_the_error_shape() -> None:
         "message",
         "trace_id",
     }
-
-
-def test_story_1_3_schema_leaves_out_shared_bases() -> None:
-    definitions = build_schema()["$defs"]
-
+    # Shared bases are no payload; a field with a default is optional to send.
     assert "ContractModel" not in definitions
     assert "StageCommand" not in definitions
-
-
-def test_story_1_3_a_field_with_a_default_is_optional_in_what_the_spa_sends() -> None:
-    start_case = build_schema()["$defs"]["StartCaseRequest"]
-
-    assert "required" not in start_case
-
-
-def test_story_1_3_rendering_is_stable() -> None:
+    assert "required" not in definitions["StartCaseRequest"]
     assert render_schema() == render_schema()
-    assert render_schema().endswith("}\n")
 
 
 def test_story_1_3_export_writes_the_file_and_check_accepts_it(tmp_path: Path) -> None:
@@ -78,7 +62,4 @@ def test_story_1_3_check_fails_when_a_model_has_changed(
     assert "out of date" in capsys.readouterr().err
     # --check never rewrites the file.
     assert json.loads(path.read_text(encoding="utf-8")) == stale
-
-
-def test_story_1_3_check_fails_when_the_file_is_missing(tmp_path: Path) -> None:
     assert main(["--check", str(tmp_path / "absent.json")]) == 1

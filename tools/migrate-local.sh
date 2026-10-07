@@ -2,7 +2,7 @@
 # Brings the local containers of compose.yaml to what the services expect:
 #   1. every service's database schema at its newest migration;
 #   2. the blob containers, in the emulator;
-#   3. the database role `workflow` runs as;
+#   3. the database roles `workflow` and `verdict` run as;
 #   4. the underwriting manual, in the emulator's `manual` container.
 # Safe to run again. It only ever touches this machine: the settings below
 # point at loopback, whatever the environment says.
@@ -75,3 +75,19 @@ unset RETRIEVAL_BLOB_ACCOUNT_URL
 
 uv run alembic -c services/retrieval/alembic.ini upgrade head
 uv run python -m retrieval.local_setup data/manual/underwriting-manual.pdf
+
+# verdict (schema `verdict`). As for workflow: the migrations run as the
+# container's own user and grant the service's role its rights; the role is
+# made first. The service then signs in as that role (dapr.yaml), so it cannot
+# update or delete a step of the agent's log here either. In Azure the role is
+# the one mapped to the service identity (infra/bootstrap/README.md,
+# section 9).
+export VERDICT_DATABASE_HOST=127.0.0.1
+export VERDICT_DATABASE_PORT=5432
+export VERDICT_DATABASE_NAME=aiuw
+export VERDICT_DATABASE_USER=aiuw
+export VERDICT_DATABASE_SERVICE_ROLE=verdict
+export VERDICT_DATABASE_ENTRA_AUTH=false
+
+uv run python -m verdict.local_setup
+uv run alembic -c services/verdict/alembic.ini upgrade head
