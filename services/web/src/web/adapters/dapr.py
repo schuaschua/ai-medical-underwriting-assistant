@@ -19,7 +19,12 @@ from contracts.models.classification import ClassificationList
 from contracts.models.extraction import FactList
 from contracts.models.intake import CaseCreated, PageBoxes, PageBoxesQuery, PageList
 from contracts.models.retrieval import RuleText
-from contracts.models.verdict import VerdictRunList
+from contracts.models.verdict import (
+    AgentStepList,
+    AgentStepQuery,
+    RunStepQuery,
+    VerdictRunList,
+)
 from contracts.models.workflow import (
     AuditTrail,
     CaseList,
@@ -75,8 +80,9 @@ _DECISION_REFUSALS = frozenset(
 # it is the user's: whatever `workflow` refuses is this service's fault.
 _NO_REFUSAL: frozenset[ErrorCode] = frozenset()
 # What an owner may say about a read of one of its resources (a page's
-# thumbnail, and the reads of the result view of story 2.7): the case, rule,
-# page or document is unknown to it, or the request is not valid. For the
+# thumbnail, the reads of the result view of story 2.7 and of the agent's log
+# of story 2.8): the case, rule, page, document or run is unknown to it, or
+# the request is not valid. For the
 # document also that there is no redacted file yet (AD-21).
 _UNKNOWN_RESOURCE = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
 _NO_FILE = _UNKNOWN_RESOURCE | {ErrorCode.NOT_REDACTED}
@@ -115,6 +121,14 @@ def trace_headers(traceparent: str | None) -> dict[str, str]:
     if "traceparent" not in headers and is_traceparent(traceparent):
         headers["traceparent"] = str(traceparent)
     return headers
+
+
+def _asked(query: ContractModel) -> dict[str, str]:
+    """A checked query as it is sent on: only the fields that were asked for."""
+    return {
+        name: str(value)
+        for name, value in query.model_dump(mode="json", exclude_none=True).items()
+    }
 
 
 def _unavailable() -> DomainError:
@@ -327,6 +341,32 @@ class ServiceClient:
             traceparent=traceparent,
         )
 
+    async def list_run_steps(
+        self, verdict_run_id: str, query: RunStepQuery, *, traceparent: str | None
+    ) -> AgentStepList:
+        """`GET /verdict-runs/{verdict_run_id}/steps` on `verdict`: one run's tool calls in order (AD-15)."""
+        return await self._call(
+            get_operation("list_run_steps"),
+            {"verdict_run_id": verdict_run_id},
+            AgentStepList,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+            query=_asked(query),
+        )
+
+    async def list_case_agent_steps(
+        self, case_id: str, query: AgentStepQuery, *, traceparent: str | None
+    ) -> AgentStepList:
+        """`GET /cases/{case_id}/agent-steps` on `verdict`: the tool calls of every run of a case (AD-15)."""
+        return await self._call(
+            get_operation("list_case_agent_steps"),
+            {"case_id": case_id},
+            AgentStepList,
+            passed_on=_UNKNOWN_RESOURCE,
+            traceparent=traceparent,
+            query=_asked(query),
+        )
+
     async def read_rule(self, rule_id: str, *, traceparent: str | None) -> RuleText:
         """`GET /rules/{rule_id}` on `retrieval`: the manual's text of one rule."""
         return await self._call(
@@ -358,10 +398,7 @@ class ServiceClient:
             passed_on=_UNKNOWN_RESOURCE,
             traceparent=traceparent,
             # Only the range that was asked for is sent on.
-            query={
-                name: str(value)
-                for name, value in query.model_dump(exclude_none=True).items()
-            },
+            query=_asked(query),
         )
 
     async def read_document_file(

@@ -4,6 +4,7 @@ import { parseCaseId } from "../audit/auditPath";
 import { getRole } from "../role/roleStore";
 import { strings } from "../strings";
 import type {
+  AgentStepList,
   AuditTrail,
   CaseList,
   CaseProgress,
@@ -20,6 +21,7 @@ import type {
   PageDecisionRequest,
   PageList,
   RuleText,
+  ToolName,
   TriageQueue,
   UploadedCase,
   VerdictRunList,
@@ -660,6 +662,86 @@ export async function getVerdictRuns(caseId: string): Promise<VerdictRunList> {
     throw new ApiError(200, null, "The answer was not verdict runs.", null);
   }
   return listed as unknown as VerdictRunList;
+}
+
+// --- The agent's log (story 2.8) ----------------------------------------------
+
+/** How a read of a run's steps is narrowed; null means "not by this". The server does the narrowing. */
+export interface StepNarrowing {
+  tool: ToolName | null;
+  ruleId: string | null;
+}
+
+/** Whether a value has what a step of that run is shown with. */
+function isStepOf(runId: string): (value: unknown) => boolean {
+  return (value) =>
+    isRecord(value) &&
+    value.verdict_run_id === runId &&
+    isPageNumber(value.step_no) &&
+    isText(value.tool) &&
+    isRecord(value.arguments) &&
+    !Array.isArray(value.arguments) &&
+    (value.fact_id === null || isText(value.fact_id)) &&
+    Array.isArray(value.rule_ids) &&
+    value.rule_ids.every(isText) &&
+    isText(value.outcome) &&
+    (value.error_code === null || isText(value.error_code)) &&
+    isAmount(value.latency_ms) &&
+    isText(value.occurred_at);
+}
+
+/**
+ * Read the tool calls of one verdict run, in the order the agent made them
+ * (AD-15): only that tool's, and only those that returned or read that
+ * rule, when asked so, and only those after the step number last seen.
+ * `has_more` says that the run has more than this answer lists. Only the
+ * underwriter role may. 404 `not_found` for a run the server does not hold.
+ */
+export async function getRunSteps(
+  runId: string,
+  narrowing: StepNarrowing,
+  afterStepNo: number | null,
+): Promise<AgentStepList> {
+  if (!ID.test(runId)) {
+    throw new ApiError(200, null, "That was not a run's id.", null);
+  }
+  const asked = new URLSearchParams();
+  if (narrowing.tool !== null) {
+    asked.set("tool", narrowing.tool);
+  }
+  if (narrowing.ruleId !== null) {
+    asked.set("rule_id", narrowing.ruleId);
+  }
+  if (afterStepNo !== null) {
+    asked.set("after_step_no", String(afterStepNo));
+  }
+  const query = asked.toString();
+  const listed = await request<unknown>(
+    "GET",
+    `/verdict-runs/${runId}/steps${query === "" ? "" : `?${query}`}`,
+  );
+  if (
+    !isRecord(listed) ||
+    !Array.isArray(listed.steps) ||
+    !listed.steps.every(isStepOf(runId)) ||
+    typeof listed.has_more !== "boolean" ||
+    // "More" with nothing listed would be asked for again without end.
+    (listed.has_more && listed.steps.length === 0) ||
+    // Each step comes after the one before it, and the first after the
+    // cursor: a step listed again would be shown twice.
+    !(listed.steps as { step_no: number }[]).every(
+      (step, place, steps) =>
+        step.step_no > (steps[place - 1]?.step_no ?? afterStepNo ?? 0),
+    )
+  ) {
+    throw new ApiError(200, null, "The answer was not agent steps.", null);
+  }
+  return listed as unknown as AgentStepList;
+}
+
+/** Whether text is a rule's id as the manual prints it. A convenience: the server checks it again. */
+export function isRuleId(text: string): boolean {
+  return RULE_ID.test(text);
 }
 
 /** Read the manual's text of one rule. 404 `not_found` if the manual has no such rule. */

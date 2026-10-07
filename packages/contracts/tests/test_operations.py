@@ -66,7 +66,19 @@ REGISTERED = SPINE_TABLE + APPROVED_ADDITIONS
 # The query strings the table prints, by path.
 SPINE_QUERY_FIELDS = {
     ("workflow", "/pages"): {"status"},
-    ("verdict", "/cases/{case_id}/agent-steps"): {"tool", "rule_id"},
+    # Story 2.8 added the cursor to both step reads, and the two filters to
+    # the read by run (deferred-work.md).
+    ("verdict", "/verdict-runs/{verdict_run_id}/steps"): {
+        "tool",
+        "rule_id",
+        "after_step_no",
+    },
+    ("verdict", "/cases/{case_id}/agent-steps"): {
+        "tool",
+        "rule_id",
+        "after_verdict_run_id",
+        "after_step_no",
+    },
     ("retrieval", "/rules/{rule_id}"): {"retriever_config"},
 }
 
@@ -250,7 +262,7 @@ EXPECTED_MODELS: dict[str, tuple[str, str, str, Model, Model, Model]] = {
         "verdict",
         "/verdict-runs/{verdict_run_id}/steps",
         None,
-        None,
+        verdict.RunStepQuery,
         verdict.AgentStepList,
     ),
     "list_case_agent_steps": (

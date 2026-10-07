@@ -160,8 +160,20 @@ class RunRepository(Protocol):
         """Whether a run of that id is stored."""
         ...
 
-    async def steps_of_run(self, verdict_run_id: str, limit: int) -> list[AgentStep]:
-        """The run's steps by step number, at most `limit`."""
+    async def steps_of_run(
+        self,
+        verdict_run_id: str,
+        tool: ToolName | None,
+        rule_id: str | None,
+        after_step_no: int | None,
+        limit: int,
+    ) -> list[AgentStep]:
+        """The run's steps by step number, at most `limit`.
+
+        With `tool`, only that tool's calls; with `rule_id`, only calls that
+        returned or read that rule; with `after_step_no`, only steps of a
+        higher number.
+        """
         ...
 
     async def steps_of_case(
@@ -169,11 +181,14 @@ class RunRepository(Protocol):
         case_id: str,
         tool: ToolName | None,
         rule_id: str | None,
+        after: tuple[str, int] | None,
         limit: int,
     ) -> list[AgentStep]:
         """The steps of every run of the case, in the order they were logged, at most `limit`.
 
         With `tool`, only that tool's calls; with `rule_id`, only calls that
-        returned or read that rule.
+        returned or read that rule; with `after` (a run and a step number of
+        it), only steps logged after that one, and none when the case has no
+        such step.
         """
         ...

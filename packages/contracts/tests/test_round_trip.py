@@ -410,7 +410,13 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "has_more": False,
     },
     "AgentStep": STEP,
-    "AgentStepQuery": {"tool": "read_rule", "rule_id": "UW-DM-003"},
+    "RunStepQuery": {"tool": "read_rule", "rule_id": "UW-DM-003", "after_step_no": 4},
+    "AgentStepQuery": {
+        "tool": "read_rule",
+        "rule_id": "UW-DM-003",
+        "after_verdict_run_id": RUN,
+        "after_step_no": 4,
+    },
     "AgentStepList": {"steps": [STEP], "has_more": False},
 }
 

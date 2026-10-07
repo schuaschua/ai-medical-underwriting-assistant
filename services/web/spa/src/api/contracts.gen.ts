@@ -181,6 +181,7 @@ export interface Contracts {
   RouteDetail: RouteDetail;
   RuleReadQuery: RuleReadQuery;
   RuleText: RuleText;
+  RunStepQuery: RunStepQuery;
   SearchItem: SearchItem;
   SearchRequest: SearchRequest;
   SearchResponse: SearchResponse;
@@ -230,16 +231,23 @@ export interface AgentStep {
  *
  * Within a run by step number; across the runs of a case, run after run.
  * The answer is bounded: `has_more` says that more steps exist than are
- * listed.
+ * listed; they are read by asking again with the last step listed as the
+ * cursor.
  */
 export interface AgentStepList {
   has_more: boolean;
   steps: AgentStep[];
 }
 /**
- * Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; both filters are optional.
+ * Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; every field is optional.
+ *
+ * The cursor names the last step seen. A case's steps span its runs, and a
+ * step number is one run's own, so the cursor is that step's run and its
+ * number, given together.
  */
 export interface AgentStepQuery {
+  after_step_no?: number | null;
+  after_verdict_run_id?: string | null;
   rule_id?: string | null;
   tool?: ToolName | null;
 }
@@ -632,6 +640,18 @@ export interface RuleText {
   reference_rule_ids: string[];
   rule_id: string;
   text: string;
+}
+/**
+ * Query of `GET /verdict-runs/{verdict_run_id}/steps`; every field is optional.
+ *
+ * `tool` and `rule_id` narrow the run's steps as they narrow a case's.
+ * `after_step_no` is the cursor: the last step number seen, so that the
+ * steps beyond one answer's limit can be read.
+ */
+export interface RunStepQuery {
+  after_step_no?: number | null;
+  rule_id?: string | null;
+  tool?: ToolName | null;
 }
 export interface SearchItem {
   chunk_id: string;

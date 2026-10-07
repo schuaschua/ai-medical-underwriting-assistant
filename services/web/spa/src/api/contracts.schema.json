@@ -68,6 +68,7 @@
           "type": "array"
         },
         "step_no": {
+          "maximum": 2147483647,
           "minimum": 1,
           "title": "Step No",
           "type": "integer"
@@ -99,7 +100,7 @@
     },
     "AgentStepList": {
       "additionalProperties": false,
-      "description": "Response of both agent log reads: the steps in the order they were made.\n\nWithin a run by step number; across the runs of a case, run after run.\nThe answer is bounded: `has_more` says that more steps exist than are\nlisted.",
+      "description": "Response of both agent log reads: the steps in the order they were made.\n\nWithin a run by step number; across the runs of a case, run after run.\nThe answer is bounded: `has_more` says that more steps exist than are\nlisted; they are read by asking again with the last step listed as the\ncursor.",
       "properties": {
         "has_more": {
           "title": "Has More",
@@ -122,8 +123,35 @@
     },
     "AgentStepQuery": {
       "additionalProperties": false,
-      "description": "Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; both filters are optional.",
+      "description": "Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; every field is optional.\n\nThe cursor names the last step seen. A case's steps span its runs, and a\nstep number is one run's own, so the cursor is that step's run and its\nnumber, given together.",
       "properties": {
+        "after_step_no": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Step No"
+        },
+        "after_verdict_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Verdict Run Id"
+        },
         "rule_id": {
           "anyOf": [
             {
@@ -1731,6 +1759,52 @@
         "reference_rule_ids"
       ],
       "title": "RuleText",
+      "type": "object"
+    },
+    "RunStepQuery": {
+      "additionalProperties": false,
+      "description": "Query of `GET /verdict-runs/{verdict_run_id}/steps`; every field is optional.\n\n`tool` and `rule_id` narrow the run's steps as they narrow a case's.\n`after_step_no` is the cursor: the last step number seen, so that the\nsteps beyond one answer's limit can be read.",
+      "properties": {
+        "after_step_no": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Step No"
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "pattern": "^UW-[A-Z]{2,4}-[0-9]{3}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rule Id"
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "RunStepQuery",
       "type": "object"
     },
     "SearchItem": {

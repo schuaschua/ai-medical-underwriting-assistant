@@ -16,6 +16,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Column,
+    ColumnElement,
     DateTime,
     Engine,
     Float,
@@ -569,12 +570,25 @@ class SqlRunRepository:
                 )
                 return found.first() is not None
 
-    async def steps_of_run(self, verdict_run_id: str, limit: int) -> list[AgentStep]:
+    async def steps_of_run(
+        self,
+        verdict_run_id: str,
+        tool: ToolName | None,
+        rule_id: str | None,
+        after_step_no: int | None,
+        limit: int,
+    ) -> list[AgentStep]:
+        only = [
+            agent_step_table.c.verdict_run_id == verdict_run_id,
+            *_matching(tool, rule_id),
+        ]
+        if after_step_no is not None:
+            only.append(agent_step_table.c.step_no > after_step_no)
         with adapter_span(tracer, "verdict.db.steps_of_run"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
                     select(agent_step_table)
-                    .where(agent_step_table.c.verdict_run_id == verdict_run_id)
+                    .where(*only)
                     .order_by(agent_step_table.c.step_no)
                     .limit(limit)
                 )
@@ -585,14 +599,24 @@ class SqlRunRepository:
         case_id: str,
         tool: ToolName | None,
         rule_id: str | None,
+        after: tuple[str, int] | None,
         limit: int,
     ) -> list[AgentStep]:
-        only = [agent_step_table.c.case_id == case_id]
-        if tool is not None:
-            only.append(agent_step_table.c.tool == tool.value)
-        if rule_id is not None:
-            # The rule is among those the call returned or read.
-            only.append(agent_step_table.c.rule_ids.contains([rule_id]))
+        only = [agent_step_table.c.case_id == case_id, *_matching(tool, rule_id)]
+        if after is not None:
+            # The place in the log of the step the cursor names. A step the
+            # case does not have gives no place, and then nothing is listed.
+            after_run, after_step_no = after
+            only.append(
+                agent_step_table.c.agent_step_seq
+                > select(agent_step_table.c.agent_step_seq)
+                .where(
+                    agent_step_table.c.case_id == case_id,
+                    agent_step_table.c.verdict_run_id == after_run,
+                    agent_step_table.c.step_no == after_step_no,
+                )
+                .scalar_subquery()
+            )
         with adapter_span(tracer, "verdict.db.steps_of_case"):
             async with self._database.connect() as connection:
                 result = await connection.execute(
@@ -602,6 +626,17 @@ class SqlRunRepository:
                     .limit(limit)
                 )
                 return [_step(row) for row in result]
+
+
+def _matching(tool: ToolName | None, rule_id: str | None) -> list[ColumnElement[bool]]:
+    """The two filters of the step reads, as conditions on the step log."""
+    only: list[ColumnElement[bool]] = []
+    if tool is not None:
+        only.append(agent_step_table.c.tool == tool.value)
+    if rule_id is not None:
+        # The rule is among those the call returned or read.
+        only.append(agent_step_table.c.rule_ids.contains([rule_id]))
+    return only
 
 
 async def _find(connection: AsyncConnection, key: RunKey) -> KeyRow | None:

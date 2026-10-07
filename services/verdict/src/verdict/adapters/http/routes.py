@@ -19,6 +19,7 @@ from contracts.ids import UUID7_PATTERN
 from contracts.models.verdict import (
     AgentStepList,
     AgentStepQuery,
+    RunStepQuery,
     VerdictRunCommand,
     VerdictRunList,
     VerdictRunResult,
@@ -131,18 +132,24 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             limit=dependencies.run_list_limit,
         )
 
-    # AD-15: the agent's log by run. A run that is not stored is 404.
+    # AD-15: the agent's log by run, with the same two filters as by case
+    # and the cursor (the last step number seen). A run that is not stored
+    # is 404; a query that is not valid is 422 before anything is read.
     @router.get(run_steps_operation.path)
-    async def list_run_steps_route(verdict_run_id: IdPath) -> AgentStepList:
+    async def list_run_steps_route(
+        verdict_run_id: IdPath, query: Annotated[RunStepQuery, Query()]
+    ) -> AgentStepList:
         return await list_run_steps(
             verdict_run_id,
+            query,
             repository=dependencies.run.repository,
             limit=dependencies.step_list_limit,
         )
 
     # AD-15: the agent's log by case, with the optional `tool` and `rule_id`
-    # filters. An unknown tool, a rule id of another form, or any other
-    # query parameter is refused with 422 before anything is read.
+    # filters and the cursor (the last step seen: its run and step number).
+    # An unknown tool, a rule id of another form, half a cursor, or any
+    # other query parameter is refused with 422 before anything is read.
     @router.get(case_steps_operation.path)
     async def list_case_agent_steps_route(
         case_id: IdPath, query: Annotated[AgentStepQuery, Query()]

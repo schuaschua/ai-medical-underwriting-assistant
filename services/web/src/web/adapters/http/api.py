@@ -17,6 +17,9 @@ routes, each one operation of the service that owns the data: the facts
 (`extraction`), the verdict runs (`verdict`), a rule's text (`retrieval`),
 and the page list, a page's word boxes and the document file (`intake`).
 
+The agent's log (story 2.8) is read through two more, both `verdict`'s: the
+steps of a run, and the steps of a case. `web` never writes to that log.
+
 The uploaded original is never served by any service (AD-21). The one
 document file served is the redacted PDF, and the one image a page's
 thumbnail, which `intake` makes from that PDF.
@@ -34,7 +37,12 @@ from contracts.models.classification import ClassificationList
 from contracts.models.extraction import FactList
 from contracts.models.intake import PageBoxes, PageBoxesQuery, PageList
 from contracts.models.retrieval import RuleText
-from contracts.models.verdict import VerdictRunList
+from contracts.models.verdict import (
+    AgentStepList,
+    AgentStepQuery,
+    RunStepQuery,
+    VerdictRunList,
+)
 from contracts.models.web import (
     Health,
     Me,
@@ -80,6 +88,7 @@ START_OPTIONS_MESSAGE = "Start options are not open to your role."
 CaseIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 PageIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 DocumentIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
+RunIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 # A rule is named as the manual prints it (AD-12), or the call is not made.
 RuleIdPath = Annotated[str, Path(pattern=rf"^{RULE_ID_PATTERN}$")]
 OffsetQuery = Annotated[int | None, Query(ge=0)]
@@ -330,6 +339,39 @@ async def read_document_file(
     )
     return Response(
         content, media_type=get_operation("read_document_file").response_media_type
+    )
+
+
+# --- The agent's log (story 2.8) ------------------------------------------------------
+#
+# AD-15: the searches and rule reads behind a suggestion, for the underwriter
+# only (AD-9). Two reads of `verdict`'s log, passed on as they are: the
+# narrowing by tool and rule and the cursor are `verdict`'s work. The query
+# is checked here against the contract first, so a value that is not a tool,
+# not a well-formed rule id or not a cursor is 422 and `verdict` is not asked.
+
+
+@role_checked.get(get_operation("list_run_steps").path)
+async def list_run_steps(
+    verdict_run_id: RunIdPath,
+    query: Annotated[RunStepQuery, Query()],
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> AgentStepList:
+    return await _services(request).list_run_steps(
+        verdict_run_id, query, traceparent=request.headers.get("traceparent")
+    )
+
+
+@role_checked.get(get_operation("list_case_agent_steps").path)
+async def list_case_agent_steps(
+    case_id: CaseIdPath,
+    query: Annotated[AgentStepQuery, Query()],
+    request: Request,
+    _role: Annotated[DemoRole, Depends(underwriter_only)],
+) -> AgentStepList:
+    return await _services(request).list_case_agent_steps(
+        case_id, query, traceparent=request.headers.get("traceparent")
     )
 
 

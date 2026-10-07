@@ -1,8 +1,9 @@
-import { useId, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { CASE_PARAMETER, parseCaseId } from "../audit/auditPath";
 import { useAuditTrail } from "../audit/auditTrail";
 import { isFinalStatus } from "../cases/caseProgress";
+import { AgentSteps } from "../components/AgentSteps";
 import { AuditEventRow } from "../components/AuditEventRow";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { resultPath } from "../result/resultPath";
@@ -11,6 +12,10 @@ import { strings } from "../strings";
 /** The trail of one case, as the server answers it and in its order (AD-8, AD-19). */
 function Trail({ caseId }: { caseId: string }) {
   const { state, refresh } = useAuditTrail(caseId);
+  // Story 2.8: the run whose steps are open under the trail, if any.
+  const [openRun, setOpenRun] = useState<string | null>(null);
+  // The control the steps were opened with: focus returns to it.
+  const opener = useRef<HTMLButtonElement | null>(null);
   const checkAgain = (
     <p>
       <button type="button" onClick={refresh}>
@@ -84,12 +89,31 @@ function Trail({ caseId }: { caseId: string }) {
                 key={`${event.action}:${event.page_id ?? ""}:${event.ref}`}
                 event={event}
                 pages={progress.pages}
+                stepsOpen={
+                  event.action === "verdict.suggested" && event.ref === openRun
+                }
+                onToggleSteps={(runId, button) => {
+                  opener.current = button;
+                  setOpenRun((open) => (open === runId ? null : runId));
+                }}
               />
             ))}
           </tbody>
         </table>
       )}
       {trail.has_more && <p>{strings.audit.more}</p>}
+      {openRun !== null && (
+        // A new run is a new log: nothing of the one before it stays.
+        <AgentSteps
+          key={openRun}
+          runId={openRun}
+          headingLevel={3}
+          onClose={() => {
+            setOpenRun(null);
+            opener.current?.focus();
+          }}
+        />
+      )}
     </>
   );
 }

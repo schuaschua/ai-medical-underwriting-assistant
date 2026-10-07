@@ -32,7 +32,10 @@ SUGGESTION_LABEL: Literal["AI suggestion, not a decision"] = (
     "AI suggestion, not a decision"
 )
 
-StepNumber = Annotated[int, Field(ge=1)]
+# A step number is stored in a 4-byte integer column: a larger one names no
+# step, and as a cursor it is refused, not handed to the database.
+MAX_STEP_NUMBER = 2**31 - 1
+StepNumber = Annotated[int, Field(ge=1, le=MAX_STEP_NUMBER)]
 
 
 class Reason(ContractModel):
@@ -184,11 +187,39 @@ class AgentStep(ContractModel):
         return self
 
 
-class AgentStepQuery(ContractModel):
-    """Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; both filters are optional."""
+class RunStepQuery(ContractModel):
+    """Query of `GET /verdict-runs/{verdict_run_id}/steps`; every field is optional.
+
+    `tool` and `rule_id` narrow the run's steps as they narrow a case's.
+    `after_step_no` is the cursor: the last step number seen, so that the
+    steps beyond one answer's limit can be read.
+    """
 
     tool: ToolName | None = None
     rule_id: RuleId | None = None
+    after_step_no: StepNumber | None = None
+
+
+class AgentStepQuery(ContractModel):
+    """Query of `GET /cases/{case_id}/agent-steps?tool=&rule_id=`; every field is optional.
+
+    The cursor names the last step seen. A case's steps span its runs, and a
+    step number is one run's own, so the cursor is that step's run and its
+    number, given together.
+    """
+
+    tool: ToolName | None = None
+    rule_id: RuleId | None = None
+    after_verdict_run_id: VerdictRunId | None = None
+    after_step_no: StepNumber | None = None
+
+    @model_validator(mode="after")
+    def _cursor_is_whole(self) -> Self:
+        if (self.after_verdict_run_id is None) != (self.after_step_no is None):
+            raise ValueError(
+                "after_verdict_run_id and after_step_no are given together"
+            )
+        return self
 
 
 class AgentStepList(ContractModel):
@@ -196,7 +227,8 @@ class AgentStepList(ContractModel):
 
     Within a run by step number; across the runs of a case, run after run.
     The answer is bounded: `has_more` says that more steps exist than are
-    listed.
+    listed; they are read by asking again with the last step listed as the
+    cursor.
     """
 
     steps: list[AgentStep]

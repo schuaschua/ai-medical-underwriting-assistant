@@ -1,4 +1,4 @@
-"""Story 2.7: `web` passes the result view's six reads on to the services that own them.
+"""Stories 2.7 and 2.8: `web` passes the result view's six reads, and the two reads of the agent's log, on to the services that own them.
 
 The Dapr sidecar is a fake here: a transport that records what `web` sent and
 answers as `extraction`, `verdict`, `retrieval` and `intake` would.
@@ -46,10 +46,34 @@ class Result:
     document_id: str = field(default_factory=new_id)
     page_id: str = field(default_factory=new_id)
     fact_id: str = field(default_factory=new_id)
+    run_id: str = field(default_factory=new_id)
+
+    def steps(self) -> dict[str, Any]:
+        """The agent's log as `verdict` answers it: a refused read of a rule, and more to come."""
+        return {
+            "steps": [
+                {
+                    "verdict_run_id": self.run_id,
+                    "case_id": self.case_id,
+                    "step_no": 3,
+                    "tool": "read_rule",
+                    "arguments": {"rule_id": RULE_ID},
+                    "fact_id": None,
+                    "rule_ids": [],
+                    "outcome": "refused",
+                    "error_code": "rule_not_seen",
+                    "latency_ms": 2,
+                    "occurred_at": "2026-10-08T09:00:00Z",
+                }
+            ],
+            "has_more": True,
+        }
 
     def answers(self) -> dict[tuple[str, str], Any]:
         """What each owner answers, by app id and path."""
         return {
+            ("verdict", f"/verdict-runs/{self.run_id}/steps"): self.steps(),
+            ("verdict", f"/cases/{self.case_id}/agent-steps"): self.steps(),
             ("extraction", f"/cases/{self.case_id}/facts"): {
                 "case_id": self.case_id,
                 "facts": [
@@ -70,7 +94,7 @@ class Result:
                 "case_id": self.case_id,
                 "verdict_runs": [
                     {
-                        "verdict_run_id": new_id(),
+                        "verdict_run_id": self.run_id,
                         "case_id": self.case_id,
                         "retriever_config": "r3",
                         "status": "done",
@@ -190,6 +214,15 @@ def routes(result: Result) -> dict[tuple[str, str], str]:
         ),
         ("intake", f"/documents/{result.document_id}/file"): (
             f"/api/documents/{result.document_id}/file"
+        ),
+        # Story 2.8: the agent's log, with its filters and its cursor.
+        ("verdict", f"/verdict-runs/{result.run_id}/steps"): (
+            f"/api/verdict-runs/{result.run_id}/steps"
+            f"?tool=read_rule&rule_id={RULE_ID}&after_step_no=2"
+        ),
+        ("verdict", f"/cases/{result.case_id}/agent-steps"): (
+            f"/api/cases/{result.case_id}/agent-steps?tool=search_rules"
+            f"&after_verdict_run_id={result.run_id}&after_step_no=2"
         ),
     }
 
@@ -325,6 +358,16 @@ def test_story_2_7_an_owners_refusal_of_the_request_is_passed_on_and_anything_el
         f"/api/pages/{result.page_id}/boxes?quote_start=5",
         f"/api/pages/{result.page_id}/boxes?quote_start=9&quote_end=5",
         f"/api/pages/{result.page_id}/boxes?quote_start=-1&quote_end=5",
+        # Story 2.8: not a run, not a tool, not a rule id, not a cursor.
+        "/api/verdict-runs/not-a-run/steps",
+        f"/api/verdict-runs/{result.run_id}/steps?tool=delete_rule",
+        f"/api/verdict-runs/{result.run_id}/steps?after_step_no=0",
+        # Beyond what a step number can be: refused, not asked of the database.
+        f"/api/verdict-runs/{result.run_id}/steps?after_step_no=2147483648",
+        f"/api/cases/{result.case_id}/agent-steps?tool=delete_rule",
+        f"/api/cases/{result.case_id}/agent-steps?rule_id=UW-dm-2",
+        f"/api/cases/{result.case_id}/agent-steps?after_step_no=2",
+        f"/api/cases/{result.case_id}/agent-steps?run=x",
     ):
         status, code = error_of(client.get(path, headers=UNDERWRITER))
         assert (status, code) in ((422, "validation_failed"), (404, "not_found")), path

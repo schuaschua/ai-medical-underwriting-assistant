@@ -659,8 +659,9 @@ describe("1.12 the audit trail of a case", () => {
 
     openTrail();
 
+    // Story 2.8: the row also offers its run's steps.
     expect((await rows()).map((cells) => cells[4])).toEqual([
-      "Made with retrieval row r3.",
+      "Made with retrieval row r3. Show the agent's steps",
     ]);
   });
 

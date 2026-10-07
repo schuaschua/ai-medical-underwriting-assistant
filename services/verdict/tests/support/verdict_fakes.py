@@ -234,8 +234,22 @@ class MemoryRepository:
     async def run_exists(self, verdict_run_id: str) -> bool:
         return self._row(verdict_run_id) is not None
 
-    async def steps_of_run(self, verdict_run_id: str, limit: int) -> list[AgentStep]:
-        steps = [step for step in self.steps if step.verdict_run_id == verdict_run_id]
+    async def steps_of_run(
+        self,
+        verdict_run_id: str,
+        tool: ToolName | None,
+        rule_id: str | None,
+        after_step_no: int | None,
+        limit: int,
+    ) -> list[AgentStep]:
+        steps = [
+            step
+            for step in self.steps
+            if step.verdict_run_id == verdict_run_id
+            and (tool is None or step.tool is tool)
+            and (rule_id is None or rule_id in step.rule_ids)
+            and (after_step_no is None or step.step_no > after_step_no)
+        ]
         return sorted(steps, key=lambda step: step.step_no)[:limit]
 
     async def steps_of_case(
@@ -243,13 +257,21 @@ class MemoryRepository:
         case_id: str,
         tool: ToolName | None,
         rule_id: str | None,
+        after: tuple[str, int] | None,
         limit: int,
     ) -> list[AgentStep]:
+        steps = [step for step in self.steps if step.case_id == case_id]
+        if after is not None:
+            places = [
+                place
+                for place, step in enumerate(steps)
+                if (step.verdict_run_id, step.step_no) == after
+            ]
+            steps = steps[places[0] + 1 :] if places else []
         return [
             step
-            for step in self.steps
-            if step.case_id == case_id
-            and (tool is None or step.tool is tool)
+            for step in steps
+            if (tool is None or step.tool is tool)
             and (rule_id is None or rule_id in step.rule_ids)
         ][:limit]
 

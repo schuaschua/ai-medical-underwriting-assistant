@@ -114,6 +114,8 @@ interface Held {
   file: () => Response;
   boxes: () => Response;
   rule: () => Response;
+  /** Story 2.8: the steps of the run on screen. */
+  steps: () => Response;
 }
 
 /** A stand-in for the server that holds one case's result; it can change while the screen is open. */
@@ -142,6 +144,7 @@ function resultServer(changes: Partial<Held> = {}) {
         impairment: "Type 2 diabetes mellitus",
         reference_rule_ids: [],
       }),
+    steps: () => json(200, { steps: [], has_more: false }),
     ...changes,
   };
   const server = fakeServer((call) => {
@@ -202,6 +205,9 @@ function resultServer(changes: Partial<Held> = {}) {
     }
     if (path?.startsWith("/api/rules/")) {
       return held.rule();
+    }
+    if (path?.startsWith("/api/verdict-runs/")) {
+      return held.steps();
     }
     return undefined;
   });
@@ -386,6 +392,8 @@ describe("2.7 the underwriter's result view", () => {
       .map((control) => control.textContent);
     expect(controls).toEqual([
       "Check again",
+      // Story 2.8: opens the agent's steps, which are only read.
+      "How was this reached?",
       "Rule UW-DM-002",
       "Page 3",
       "Rule UW-TOB-001",
@@ -871,9 +879,71 @@ describe("2.7 the underwriter's result view", () => {
     ).toBeVisible();
   });
 
+  it("2.8 opens the steps of the run on screen from “How was this reached?”, each fact by its statement", async () => {
+    const runId = run().verdict_run_id;
+    const server = resultServer({
+      steps: () =>
+        json(200, {
+          steps: [
+            {
+              verdict_run_id: runId,
+              case_id: CASE,
+              step_no: 1,
+              tool: "search_rules",
+              arguments: { query: "HbA1c 7.4 %", fact_id: factId(2) },
+              fact_id: factId(2),
+              rule_ids: [RULE, "UW-DM-001"],
+              outcome: "done",
+              error_code: null,
+              latency_ms: 19,
+              occurred_at: "2026-10-08T09:00:00Z",
+            },
+          ],
+          has_more: false,
+        }),
+    });
+    const user = userEvent.setup();
+    openResult();
+    const verdict = await verdictPane();
+    const opener = await verdict.findByRole("button", {
+      name: "How was this reached?",
+    });
+    expect(opener).toHaveAttribute("aria-expanded", "false");
+    expect(callsTo(server, `/api/verdict-runs/${runId}/steps`)).toHaveLength(0);
+
+    await user.click(opener);
+
+    const table = await verdict.findByRole("table", {
+      name: `Agent steps of run ${runId}`,
+    });
+    expect(
+      within(within(table).getAllByRole("row")[1]!)
+        .getAllByRole("cell")
+        .slice(0, 5)
+        .map((cell) => cell.textContent),
+    ).toEqual([
+      "Search the manual",
+      `query: HbA1c 7.4 %fact_id: ${factId(2)}`,
+      // The fact it was about, as the facts on this screen word it.
+      "HbA1c 7.4 %",
+      "UW-DM-002, UW-DM-001",
+      "Done",
+    ]);
+    const asked = callsTo(server, `/api/verdict-runs/${runId}/steps`);
+    expect(asked.map((call) => [call.path, call.method, call.role])).toEqual([
+      [`/api/verdict-runs/${runId}/steps`, "GET", "underwriter"],
+    ]);
+
+    await user.click(verdict.getByRole("button", { name: "Close the steps" }));
+
+    expect(verdict.queryByRole("table", { name: /Agent steps/ })).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
   it("works out no verdict, loading or verification in the browser, and renders no text as HTML", () => {
     const sources = [
       "src/screens/ResultView.tsx",
+      "src/components/AgentSteps.tsx",
       "src/components/PdfDocument.tsx",
       "src/result/result.ts",
       "src/result/resultPath.ts",

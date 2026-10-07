@@ -22,6 +22,7 @@ import {
   parseCaseId,
 } from "../audit/auditPath";
 import { CASE_LIST_PATH } from "../cases/caseList";
+import { AgentSteps } from "../components/AgentSteps";
 import { ErrorMessage } from "../components/ErrorMessage";
 import {
   CitationStatus,
@@ -367,12 +368,25 @@ function RunOnScreen({
   const [openRule, setOpenRule] = useState<string | null>(null);
   // The control the open rule was chosen with: focus returns to it.
   const opener = useRef<HTMLButtonElement | null>(null);
+  // Story 2.8: whether the agent's steps of this run are open under it.
+  const [stepsOpen, setStepsOpen] = useState(false);
+  const stepsOpener = useRef<HTMLButtonElement | null>(null);
   return (
     <>
       <p>{strings.result.madeWith(run.retriever_config)}</p>
       {/* AD-10: the label, exactly as the run's payload carries it. */}
       <p>
         <strong>{run.label}</strong>
+      </p>
+      <p>
+        <button
+          type="button"
+          ref={stepsOpener}
+          aria-expanded={stepsOpen}
+          onClick={() => setStepsOpen((open) => !open)}
+        >
+          {strings.steps.openFromResult}
+        </button>
       </p>
       {run.status === "running" && (
         <p role="status">{strings.result.runRunning}</p>
@@ -442,6 +456,18 @@ function RunOnScreen({
             </div>
           )}
         </>
+      )}
+      {stepsOpen && (
+        // AD-15: the searches and rule reads behind this run, read only.
+        <AgentSteps
+          runId={run.verdict_run_id}
+          facts={facts}
+          headingLevel={4}
+          onClose={() => {
+            setStepsOpen(false);
+            stepsOpener.current?.focus();
+          }}
+        />
       )}
     </>
   );

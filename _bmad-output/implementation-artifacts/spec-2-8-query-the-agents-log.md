@@ -2,9 +2,10 @@
 title: "Story 2.8: Query the agent's log"
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: 'e3ebaaee5df32e6126f03055b8e74aaec3961c07'
 context:
   - '{project-root}/CLAUDE.md'
   - '{project-root}/_bmad-output/implementation-artifacts/epic-2-context.md'
@@ -64,11 +65,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `packages/contracts/`, `services/verdict/` -- the cursor on both step reads; schema and SPA types regenerated
-- [ ] `services/web/` -- the two routes and client calls, underwriter only, filters validated and passed on
-- [ ] `services/web/spa/` -- the steps drill-down (table of steps, the two filters, "more"), opened from the audit trail's "verdict suggested" row and from the result view; client functions with shape checks; strings
-- [ ] Tests, within the budgets of `CLAUDE.md`: one whole-path test through `web` (a run's steps in order, the two filters, the cursor, the customer refused), and SPA tests for the drill-down opening, a refused step being shown, and the filters asking the server
-- [ ] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; mark the cursor item done
+- [x] `packages/contracts/`, `services/verdict/` -- the cursor on both step reads; schema and SPA types regenerated
+- [x] `services/web/` -- the two routes and client calls, underwriter only, filters validated and passed on
+- [x] `services/web/spa/` -- the steps drill-down (table of steps, the two filters, "more"), opened from the audit trail's "verdict suggested" row and from the result view; client functions with shape checks; strings
+- [x] Tests, within the budgets of `CLAUDE.md`: one whole-path test through `web` (a run's steps in order, the two filters, the cursor, the customer refused), and SPA tests for the drill-down opening, a refused step being shown, and the filters asking the server
+- [x] `README.md`, `_bmad-output/implementation-artifacts/deferred-work.md` -- what changed; mark the cursor item done
 
 **Acceptance Criteria:**
 - Given a case run to its verdict on the local stack, when the underwriter selects its "verdict suggested" event, then the run's steps open in order with tool, arguments, fact, rules, outcome, latency and time, and narrowing by tool or rule shows only matching steps.
@@ -76,13 +77,30 @@ context:
 
 ## Implementation Notes
 
+- Contracts: new `RunStepQuery` (`tool`, `rule_id`, `after_step_no`) as the query of `GET /verdict-runs/{verdict_run_id}/steps`; `AgentStepQuery` gains the cursor `after_verdict_run_id` with `after_step_no`, given together. A step number is one run's own, so the cursor of the read by case names the step's run too.
+- Beyond the spec's wording: the read by run takes the two filters as well. The drill-down is of one run and must be narrowed by the server; the read by case lists every run of the case. The SPA reads only the route by run; `web` serves both. Recorded for the owner in `deferred-work.md`.
+- `verdict`: only the two list functions at the end of `domain/run.py`, the port, the repository's two step queries (one shared helper for the filters), the two routes and the fake repository were changed. No migration.
+- SPA: `components/AgentSteps.tsx` (table, filters, "more", "read again", close), opened from `AuditEventRow` ("Show the agent's steps" on a `verdict.suggested` row) and from the run on the result view ("How was this reached?"). Not polled.
+- Tests: `packages/synthdata/tests/test_agent_log_end_to_end.py` (the whole path through `web`); `services/web/tests/test_result_view.py` and `test_upload.py`, `services/verdict/tests/test_verdict_integration.py` and the contracts tests extended; `spa/src/screens/AgentLog.test.tsx` (three) and one in `ResultView.test.tsx`.
+- Verified 2026-10-08: the Python commands (534 passed, coverage 90%), the SPA commands (267 passed), both image builds. Not checked in a browser or in Azure (`deferred-work.md`).
+
 ## Spec Change Log
 
 ## Review Triage Log
 
+One layer ran (edge-case), also asked to look for model-written text reaching the page as HTML, the customer reading the log, and a query parameter reaching SQL unbound; it reported none of those three.
+
+| # | Finding (reviewer) | Verdict | Evidence | Route |
+|---|---|---|---|---|
+| 1 | A cursor step number above what the database column holds passes the contract and is answered 500, not 422 (edge) | low | `StepNumber` has a lower bound only; direct correction | patch |
+| 2 | A "more" answer that repeats or reorders steps is shown twice, with duplicate keys (edge) | low | `getRunSteps` does not check the order against the cursor; direct correction | patch |
+| 3 | A long value cut at 80 characters can end in half a character (edge) | low | `AgentSteps.tsx` cuts by code unit; direct correction | patch |
+| 4 | On the read by case, a step of another run committed late can be passed by the cursor (edge) | low | The screen reads by run only, where steps of one run are written in order | reject |
+
 ## Design Notes
 
 - Tests follow the owner's rule in `CLAUDE.md` ("Tests: keep the suite small"): a test per acceptance criterion and for the guards of real risk, whole paths before parts, the Python budgets per package kept, and the same restraint in the SPA's tests.
+- Two other stories are being implemented in this working tree at the same time: 3.1 with 4.1 (`packages/synthdata/src`, `data/`) and 3.2 (`services/retrieval`, the runnable rows and the effect check in `services/verdict/src/verdict/domain`, `services/workflow` settings). Leave their work alone; in `services/verdict` touch only what the step reads need (routes, the repository's step queries, the contracts model). Do not stop the compose containers and do not run `tools/dev.sh`. Tests that use the scheduler emulator fail each other when two runs overlap: run those once at the end, and run a failure your change cannot explain again alone before reporting it.
 - Do not commit or push. Scratch files go in the gitignored `.work/` folder, never outside the project. Stop any containers and local stacks you start.
 - No architecture principles were agreed for this project; the spine and the standards are the guardrails. No UX design exists by the owner's choice: plain default styling.
 - Approval: Darrel asked on 2026-10-07 for the remaining stories to be built in order in one session; this spec was not reviewed by him before implementation.

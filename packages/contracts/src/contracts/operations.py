@@ -268,6 +268,7 @@ OPERATIONS: tuple[Operation, ...] = (
         path="/verdict-runs/{verdict_run_id}/steps",
         request_model=None,
         response_model=verdict.AgentStepList,
+        query_model=verdict.RunStepQuery,
     ),
     Operation(
         name="list_case_agent_steps",

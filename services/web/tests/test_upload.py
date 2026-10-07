@@ -292,6 +292,9 @@ def test_story_1_5_no_route_returns_an_original(settings: Settings) -> None:
         ("GET", "/api/cases/{case_id}/pages"),
         ("GET", "/api/pages/{page_id}/boxes"),
         ("GET", "/api/documents/{document_id}/file"),
+        # Story 2.8: the agent's log, read only. Neither returns a file.
+        ("GET", "/api/verdict-runs/{verdict_run_id}/steps"),
+        ("GET", "/api/cases/{case_id}/agent-steps"),
     }
 
 

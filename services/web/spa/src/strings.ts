@@ -11,7 +11,9 @@ import type {
   RouteDetail,
   Service,
   StageStatus,
+  StepOutcome,
   SystemReason,
+  ToolName,
   Verdict,
 } from "./api/contracts.gen";
 
@@ -480,6 +482,62 @@ export const strings = {
   },
   // A screen whose code is fetched when it is first opened.
   screenLoading: "Opening the screen…",
+  // Story 2.8: the agent's log of one verdict run.
+  steps: {
+    // On a "verdict suggested" row of the trail, and on the run of the result view.
+    openFromTrail: "Show the agent's steps",
+    openFromResult: "How was this reached?",
+    heading: (runId: string) => `The agent's steps of run ${runId}`,
+    intro:
+      "Every search of the manual and every rule the agent read for this suggestion, in the order it made them. A call that was refused or failed is listed too.",
+    reading: "Reading the steps…",
+    unknownRun: "The steps of this run could not be found.",
+    none: "The agent has made no steps in this run yet.",
+    noneMatch: "No step of this run matches.",
+    table: (runId: string) => `Agent steps of run ${runId}`,
+    stepColumn: "Step",
+    toolColumn: "Tool",
+    argumentsColumn: "Arguments",
+    factColumn: "Fact",
+    rulesColumn: "Rules returned or read",
+    outcomeColumn: "Outcome",
+    latencyColumn: "Took",
+    timeColumn: "Time",
+    tool: {
+      list_facts: "List the facts",
+      search_rules: "Search the manual",
+      read_rule: "Read a rule",
+    } satisfies Record<ToolName, string>,
+    outcome: {
+      done: "Done",
+      refused: "Refused",
+      failed: "Failed",
+    } satisfies Record<StepOutcome, string>,
+    // A refused or failed call, with why in plain words.
+    outcomeBecause: (outcome: string, reason: string) =>
+      `${outcome}. ${reason}`,
+    argumentName: (name: string) => `${name}:`,
+    noArguments: "None",
+    noFact: "None",
+    noRules: "None",
+    // A long value is cut on screen; the whole value opens under it.
+    cut: (start: string) => `${start}…`,
+    latency: (milliseconds: number) => `${milliseconds} ms`,
+    narrowLegend: "Narrow the steps",
+    toolLabel: "Tool",
+    anyTool: "Any tool",
+    ruleLabel: "Rule id",
+    ruleHint: "For example UW-DM-002. Leave empty for any rule.",
+    notARuleId: "That is not a rule id. A rule id looks like UW-DM-002.",
+    narrow: "Show matching steps",
+    showAll: "Show every step",
+    more: "Show more steps",
+    moreExist: "This run has more steps than are shown.",
+    readingMore: "Reading more steps…",
+    moreFault: "More steps could not be read.",
+    readAgain: "Read the steps again",
+    close: "Close the steps",
+  },
   notFound: {
     heading: "Page not found",
     body: "This screen does not exist, or is not open to your role.",

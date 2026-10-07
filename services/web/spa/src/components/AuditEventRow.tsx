@@ -90,14 +90,24 @@ function detailText(event: AuditRecord): string {
   return "";
 }
 
-/** One event of a case's audit trail: time, actor, action, page and detail. */
+/**
+ * One event of a case's audit trail: time, actor, action, page and detail.
+ * A "verdict suggested" event also offers its run's steps (story 2.8): the
+ * event's reference is the run (AD-8, AD-15).
+ */
 export function AuditEventRow({
   event,
   pages,
+  stepsOpen,
+  onToggleSteps,
 }: {
   event: AuditRecord;
   /** The case's pages as the server lists them: where a page's number comes from. */
   pages: CaseProgress["pages"];
+  /** Whether this event's run has its steps open under the trail. */
+  stepsOpen: boolean;
+  /** Open or close the steps of a run; the control is handed on, for the focus to return to. */
+  onToggleSteps: (runId: string, opener: HTMLButtonElement) => void;
 }) {
   const pageNumber =
     event.page_id === null
@@ -128,6 +138,18 @@ export function AuditEventRow({
       </td>
       <td>
         {detailText(event)}
+        {event.action === "verdict.suggested" && (
+          <>
+            {" "}
+            <button
+              type="button"
+              aria-expanded={stepsOpen}
+              onClick={(click) => onToggleSteps(event.ref, click.currentTarget)}
+            >
+              {strings.steps.openFromTrail}
+            </button>
+          </>
+        )}
         {event.action === "stage.failed" && event.trace_id !== NO_TRACE_ID && (
           // What to look for in the logs, worded as an error's reference is.
           <>
