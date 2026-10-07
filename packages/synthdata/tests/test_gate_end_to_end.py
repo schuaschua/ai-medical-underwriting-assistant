@@ -10,9 +10,6 @@ stand-ins' package and read the answer key, which nothing there may do
 (spine AD-17).
 """
 
-import json
-from typing import Any
-
 import pytest
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from synthdata_stack import (
@@ -20,33 +17,13 @@ from synthdata_stack import (
     LocalIntake,
     ServicesBehindSidecar,
     answer_key,
-    completed,
-    workflow_service,
+    start_and_wait,
 )
 
-from contracts.models.workflow import AuditTrail, CaseProgress
 from synthdata.foundry_standin import Mode
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
-
-
-def start_and_wait(
-    workflow_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    sidecar: ServicesBehindSidecar,
-    case_id: str,
-    **options: Any,
-) -> tuple[CaseProgress, AuditTrail, dict[str, Any]]:
-    """Start the case, wait for its lifecycle to end, and read what it left."""
-    with workflow_service(workflow_settings, sidecar) as client:
-        assert client.post(f"/cases/{case_id}/start", json=options).status_code == 200
-        state = completed(scheduler_client, case_id)
-        progress = CaseProgress.model_validate(
-            client.get(f"/cases/{case_id}/progress").json()
-        )
-        trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
-    return progress, trail, json.loads(state.serialized_output or "")
 
 
 def test_story_1_9_a_case_with_medical_and_other_pages_is_routed_page_by_page(
@@ -61,8 +38,12 @@ def test_story_1_9_a_case_with_medical_and_other_pages_is_routed_page_by_page(
         intake=intake.app(), classification=classification.app()
     )
 
-    progress, trail, output = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
+    progress, trail, _ = start_and_wait(
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        waits_for_a_human=True,
     )
 
     # The stand-in's runs agree, so every page is classified at 1.0: a
@@ -76,7 +57,6 @@ def test_story_1_9_a_case_with_medical_and_other_pages_is_routed_page_by_page(
     assert len(set(expected)) == 2
     # No page is left `classified`, and a page waits for a person: so does the case.
     assert progress.case_status.value == "awaiting_human"
-    assert output == {"case_id": case_id, "case_status": "awaiting_human"}
     assert progress.error_code is None
 
     # The trail: for each page one `page.routed` event, after its
@@ -134,8 +114,12 @@ def test_story_1_9_one_case_ends_with_pages_on_all_three_routes(
         intake=intake.app(), classification=classification.app()
     )
 
-    progress, trail, output = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
+    progress, trail, _ = start_and_wait(
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        waits_for_a_human=True,
     )
 
     # One case from `data/cases/`, and every route of the gate: medical and
@@ -151,7 +135,6 @@ def test_story_1_9_one_case_ends_with_pages_on_all_three_routes(
     assert [page.page_status.value for page in progress.pages] == routes
     assert set(routes) == {"extracting", "awaiting_customer", "awaiting_triage"}
     assert progress.case_status.value == "awaiting_human"
-    assert output == {"case_id": case_id, "case_status": "awaiting_human"}
     listed = {
         item.page_id: item for item in classification.listed(case_id).classifications
     }
@@ -188,7 +171,11 @@ def test_story_1_9_pages_the_classifier_is_unsure_of_go_to_triage(
     )
 
     progress, trail, _ = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        waits_for_a_human=True,
     )
 
     assert [page.page_status.value for page in progress.pages] == [

@@ -6,9 +6,13 @@ import type {
   CaseProgress,
   CaseStarted,
   CaseStatus,
+  ClassificationList,
+  Decision,
+  DecisionRecorded,
   ErrorBody,
   ErrorCode,
   Me,
+  PageDecisionRequest,
   UploadedCase,
 } from "./contracts.gen";
 
@@ -251,4 +255,73 @@ export async function getProgress(caseId: string): Promise<CaseProgress> {
     throw new ApiError(200, null, "The answer was not a progress.", null);
   }
   return progress as unknown as CaseProgress;
+}
+
+/** Whether a value is a number from 0 to 1 (NaN fails both comparisons). */
+function isUnitNumber(value: unknown): boolean {
+  return typeof value === "number" && value >= 0 && value <= 1;
+}
+
+/** Whether a value has what a classification is shown with. */
+function isClassification(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const classification = value as Record<string, unknown>;
+  return (
+    typeof classification.page_id === "string" &&
+    typeof classification.page_type === "string" &&
+    isUnitNumber(classification.confidence)
+  );
+}
+
+/**
+ * Read what the classifier said of each page of a case: the page type and
+ * the confidence, a number from 0 to 1.
+ */
+export async function getClassifications(
+  caseId: string,
+): Promise<ClassificationList> {
+  const listed = await request<unknown>(
+    "GET",
+    casePath(caseId, "classifications"),
+  );
+  if (
+    typeof listed !== "object" ||
+    listed === null ||
+    (listed as Record<string, unknown>).case_id !== caseId ||
+    !Array.isArray((listed as Record<string, unknown>).classifications) ||
+    !(listed as { classifications: unknown[] }).classifications.every(
+      isClassification,
+    )
+  ) {
+    throw new ApiError(200, null, "The answer was not classifications.", null);
+  }
+  return listed as ClassificationList;
+}
+
+/**
+ * Send a person's decision about one page. The server takes the actor from
+ * the role header and decides whether that role may make that decision.
+ * Safe to repeat: the same decision again is answered with the stored one.
+ */
+export async function decidePage(
+  caseId: string,
+  pageId: string,
+  decision: Decision,
+): Promise<DecisionRecorded> {
+  const body: PageDecisionRequest = { decision };
+  const recorded = await request<unknown>(
+    "POST",
+    casePath(caseId, `pages/${encodeURIComponent(pageId)}/decisions`),
+    { json: body },
+  );
+  const record =
+    typeof recorded === "object" && recorded !== null
+      ? (recorded as Record<string, unknown>)
+      : {};
+  if (record.page_id !== pageId || record.decision !== decision) {
+    throw new ApiError(200, null, "The answer was not the decision.", null);
+  }
+  return recorded as DecisionRecorded;
 }

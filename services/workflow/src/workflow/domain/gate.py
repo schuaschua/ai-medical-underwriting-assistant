@@ -6,13 +6,12 @@ orchestration may call it on values an activity returned (AD-5).
 """
 
 import math
-from collections.abc import Iterable
 from datetime import datetime
 from enum import StrEnum
 from typing import TypeGuard
 
 from contracts.audit import AuditAction, AuditRecord, RouteDetail
-from contracts.enums import ActorKind, CaseStatus, PageStatus, StopAfter
+from contracts.enums import ActorKind, PageStatus
 from contracts.errors import NO_TRACE_ID, DomainError, ErrorCode
 from workflow.domain.recording import PageChange, Recording
 
@@ -49,12 +48,6 @@ class Route(StrEnum):
         return PageStatus(self.value)
 
 
-# The statuses the gate may leave a case in, besides `running`, which it has.
-STATUSES_THE_GATE_SETS = frozenset({CaseStatus.AWAITING_HUMAN, CaseStatus.COMPLETED})
-# The routes that leave a page waiting for a person.
-_AWAITS_A_HUMAN = frozenset({Route.CUSTOMER, Route.TRIAGE})
-
-
 def route_page(*, is_medical: bool, confidence: float, threshold: float) -> Route:
     """Route one classified page. A confidence equal to the threshold counts as sure.
 
@@ -66,22 +59,6 @@ def route_page(*, is_medical: bool, confidence: float, threshold: float) -> Rout
     if confidence < threshold:
         return Route.TRIAGE
     return Route.EXTRACTION if is_medical else Route.CUSTOMER
-
-
-def case_status_after_gate(
-    routes: Iterable[Route], stop_after: StopAfter | None
-) -> CaseStatus:
-    """The case's status once every page is routed.
-
-    A case told to stop after the gate is complete, whatever its pages wait
-    for (AD-17: nobody decides the pages of a bake-off run). Otherwise it
-    waits for a human if any page does, and goes on running if none does.
-    """
-    if stop_after is StopAfter.GATE:
-        return CaseStatus.COMPLETED
-    if any(route in _AWAITS_A_HUMAN for route in routes):
-        return CaseStatus.AWAITING_HUMAN
-    return CaseStatus.RUNNING
 
 
 def route_recording(

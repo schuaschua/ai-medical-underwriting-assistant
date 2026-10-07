@@ -15,8 +15,8 @@ from contracts.models.workflow import (
     CaseStarted,
     StartCaseRequest,
 )
-from workflow.domain.entities import StartParameters
-from workflow.domain.gate import STATUSES_THE_GATE_SETS, Route, route_recording
+from workflow.domain.entities import SettledCase, StartParameters
+from workflow.domain.gate import Route, route_recording
 from workflow.domain.lifecycle import (
     case_started,
     new_case,
@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 UNKNOWN_CASE_MESSAGE = "That case could not be found."
 UNKNOWN_PAGE_MESSAGE = "That page could not be found."
-NOT_A_GATE_STATUS_MESSAGE = "The gate does not give a case that status."
 NOT_STARTED_MESSAGE = "The case could not be started. Please try again."
 
 
@@ -210,30 +209,30 @@ async def record_route(
 
 async def settle_case_after_gate(
     case_id: str,
-    case_status: CaseStatus,
     *,
     store: CaseStore,
     now: Callable[[], datetime] = utc_now,
-) -> CaseStatus:
-    """Give a case the status the gate left it with; answer with the status it has now.
+) -> SettledCase:
+    """Give a case the status its pages give it after the gate; answer with the case as it is now.
 
-    The gate leaves a case waiting for a human or, told to stop there,
-    completed: any other status is `validation_failed`. A case that has
-    failed in the meantime stays failed. Safe to repeat. `not_found` for a
-    case never started.
+    The store works the status out from the pages as they are stored, by
+    the one rule (`domain/case_status.py`): waiting for a human, running,
+    or, with every page final or the case told to stop there, completed. So
+    a late repeat cannot undo what a decision has changed before it, and a
+    case that has failed stays failed. The answer also says what each page
+    is at that moment, so the lifecycle waits for the pages that still wait
+    and for no page that was decided already. `not_found` for a case never
+    started.
     """
-    if case_status not in STATUSES_THE_GATE_SETS:
-        raise DomainError(ErrorCode.VALIDATION_FAILED, NOT_A_GATE_STATUS_MESSAGE)
-    status = await store.move_case(case_id, case_status, now())
-    if status is None:
+    settled = await store.settle_case(case_id, now())
+    if settled is None:
         raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_CASE_MESSAGE)
     logger.info(
-        "case after the gate: case_id=%s wanted=%s case_status=%s",
+        "case after the gate: case_id=%s case_status=%s",
         case_id,
-        case_status.value,
-        status.value,
+        settled.case_status.value,
     )
-    return status
+    return settled
 
 
 async def read_progress(case_id: str, *, store: CaseStore) -> CaseProgress:

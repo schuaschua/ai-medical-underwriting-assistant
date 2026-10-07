@@ -59,7 +59,45 @@ export function caseProgress(
   };
 }
 
-const CASE_ROUTE = /^\/api\/cases\/([^/]+)\/(start|progress)$/;
+/** One classification, as `classification` lists it for the page of that number. */
+export function classification(
+  caseId: string,
+  pageNumber: number,
+  pageType: string,
+  confidence: number,
+) {
+  return {
+    classification_id: `019a0000-0000-7000-8000-0000000002${String(pageNumber).padStart(2, "0")}`,
+    case_id: caseId,
+    page_id: pageProgress(pageNumber, "classified").page_id,
+    contender: "llm",
+    page_type: pageType,
+    is_medical: !["id_document", "invoice", "other"].includes(pageType),
+    confidence,
+    reason: "A synthetic reason.",
+  };
+}
+
+/** The answer to a decision, as `workflow` gives it. */
+export function decisionRecorded(
+  caseId: string,
+  pageId: string,
+  decision: string,
+  role: string | null,
+) {
+  return {
+    decision_id: "019a0000-0000-7000-8000-000000000301",
+    case_id: caseId,
+    page_id: pageId,
+    decision,
+    actor: role,
+    page_status: decision === "keep" ? "awaiting_triage" : "discarded",
+    occurred_at: "2026-10-07T09:00:00Z",
+  };
+}
+
+const CASE_ROUTE = /^\/api\/cases\/([^/]+)\/(start|progress|classifications)$/;
+const DECISION_ROUTE = /^\/api\/cases\/([^/]+)\/pages\/([^/]+)\/decisions$/;
 
 const NO_TRACE_ID = "0".repeat(32);
 
@@ -146,6 +184,22 @@ export function fakeServer(
         return started.has(caseId)
           ? json(200, caseProgress(caseId))
           : json(404, errorBody("not_found", "That case could not be found."));
+      }
+      if (caseId !== undefined && resource === "classifications") {
+        return json(200, { case_id: caseId, classifications: [] });
+      }
+      const [, decidedCase, decidedPage] = DECISION_ROUTE.exec(call.path) ?? [];
+      if (
+        decidedCase !== undefined &&
+        decidedPage !== undefined &&
+        call.method === "POST" &&
+        typeof call.body === "string"
+      ) {
+        const sent = JSON.parse(call.body) as { decision: string };
+        return json(
+          200,
+          decisionRecorded(decidedCase, decidedPage, sent.decision, call.role),
+        );
       }
       return json(404, errorBody("not_found", "Not found."));
     },

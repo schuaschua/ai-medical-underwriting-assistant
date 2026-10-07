@@ -19,7 +19,13 @@ from durabletask.client import OrchestrationState, OrchestrationStatus
 from durabletask.internal import orchestrator_service_pb2 as pb
 from durabletask.worker import ConcurrencyOptions
 
-from contracts.enums import CaseStatus, ClassifierContender, StageStatus
+from contracts.enums import (
+    CaseStatus,
+    ClassifierContender,
+    Decision,
+    PageStatus,
+    StageStatus,
+)
 from contracts.errors import DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from workflow.adapters.credential import azure_credential
@@ -37,6 +43,7 @@ from workflow.adapters.orchestration import (
     OK,
     OUTCOME,
     PAGE_IDS,
+    PAGE_STATUSES,
     REDACT_DOCUMENT,
     REFUSED,
     ROUTE,
@@ -44,6 +51,7 @@ from workflow.adapters.orchestration import (
     SETTLE_CASE_AFTER_GATE,
     activity_retry_policy,
     build_case_lifecycle,
+    decision_event,
     stage_retry_policy,
 )
 from workflow.adapters.telemetry import current_trace_id
@@ -55,12 +63,7 @@ from workflow.domain.cases import (
     settle_case_after_gate,
 )
 from workflow.domain.entities import CaseRecord
-from workflow.domain.gate import (
-    DEFAULT_GATE_THRESHOLD,
-    STATUSES_THE_GATE_SETS,
-    Route,
-    is_unit_number,
-)
+from workflow.domain.gate import DEFAULT_GATE_THRESHOLD, Route, is_unit_number
 from workflow.domain.lifecycle import case_started
 from workflow.domain.ports import CaseStore, EngineState, StageServices
 from workflow.domain.recording import RecordOutcome
@@ -101,6 +104,10 @@ _sdk_logger.addFilter(SdkLogFilter())
 
 # Orchestrations in these states will never run again.
 _DEAD = frozenset({OrchestrationStatus.FAILED, OrchestrationStatus.TERMINATED})
+# How the scheduler refuses an event for an instance that is gone or has ended.
+_NOTHING_TO_TELL = frozenset(
+    {grpc.StatusCode.NOT_FOUND, grpc.StatusCode.FAILED_PRECONDITION}
+)
 # Errors that the same call would meet again, however often it is repeated.
 _PERMANENT = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
 # How a recorded stage result left the trail: written now, or there already.
@@ -215,6 +222,48 @@ class SchedulerEngine:
                 return _engine_state(self._state(case.case_id))
             raise
         return EngineState.CREATED
+
+    async def decision_made(
+        self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
+    ) -> None:
+        """Raise the external event that tells the case's orchestration of a stored decision (AD-5)."""
+        await asyncio.to_thread(
+            self._decision_made, case_id, page_id, awaited, decision
+        )
+
+    def _decision_made(
+        self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
+    ) -> None:
+        existing = self._state(case_id)
+        if existing is None or existing.runtime_status in _DEAD:
+            # Nobody will ever be told: the decision is stored, and the case
+            # has no lifecycle to go on with it. Ids only (security rule 31).
+            logger.warning(
+                "decision not told: case_id=%s page_id=%s orchestration=%s",
+                case_id,
+                page_id,
+                "missing" if existing is None else existing.runtime_status.name.lower(),
+            )
+            return
+        if existing.runtime_status is OrchestrationStatus.COMPLETED:
+            # The lifecycle ended as it should: the decision was told before
+            # and is repeated now. Nothing waits for it.
+            return
+        # The scheduler keeps an event raised before its wait, so a decision
+        # made while the case is still being settled is not missed.
+        try:
+            self._client.raise_orchestration_event(
+                case_id, decision_event(page_id, awaited), data=decision.value
+            )
+        except grpc.RpcError as error:
+            if error.code() not in _NOTHING_TO_TELL:
+                raise
+            # The orchestration ended between the look above and the raise.
+            logger.info(
+                "decision not told: case_id=%s page_id=%s orchestration=ended",
+                case_id,
+                page_id,
+            )
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self._client.close)
@@ -459,31 +508,35 @@ class Activities:
         return {OUTCOME: REFUSED, "reason": outcome.value}
 
     def settle_case_after_gate(
-        self, context: task.ActivityContext, settled: dict[str, str]
-    ) -> dict[str, str]:
-        """Give the case the status the gate left it with; answer with the one it has now.
+        self, context: task.ActivityContext, settled: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Give the case the status its pages give it after the gate; answer with the case as it is now.
 
-        Only `awaiting_human` and `completed` are taken: anything else,
-        `failed` among them, is answered as refused.
+        The status is not handed in: it is worked out from the stored pages
+        in the transaction that sets it, by the rule every decision uses
+        too. Run late, after a decision, it finds the pages as that decision
+        left them and undoes nothing. The answer also names the status of
+        each page at that moment, ids and statuses only (AD-6): the
+        lifecycle waits for the pages that wait then.
         """
-        case_id = str(settled.get("case_id"))
-        try:
-            wanted = CaseStatus(str(settled.get(CASE_STATUS)))
-            if wanted not in STATUSES_THE_GATE_SETS or not isinstance(
-                settled.get("case_id"), str
-            ):
-                raise ValueError
-        except ValueError:
+        case_id = settled.get("case_id")
+        if not isinstance(case_id, str):
             return {OUTCOME: REFUSED, "reason": ErrorCode.VALIDATION_FAILED.value}
         try:
-            status = self._run(
+            case = self._run(
                 SETTLE_CASE_AFTER_GATE,
                 case_id,
-                settle_case_after_gate(case_id, wanted, store=self._store),
+                settle_case_after_gate(case_id, store=self._store),
             )
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}
-        return {OUTCOME: OK, CASE_STATUS: status.value}
+        return {
+            OUTCOME: OK,
+            CASE_STATUS: case.case_status.value,
+            PAGE_STATUSES: {
+                page_id: status.value for page_id, status in case.page_statuses.items()
+            },
+        }
 
     @staticmethod
     def _stage_answer(

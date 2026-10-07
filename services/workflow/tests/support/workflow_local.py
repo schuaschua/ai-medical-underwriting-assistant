@@ -1,8 +1,10 @@
 """Helpers of the integration tests: the local PostgreSQL, seen as one role or another."""
 
+import time
 from typing import Any
 
 import psycopg
+from fastapi.testclient import TestClient
 
 from workflow.settings import Settings
 
@@ -27,4 +29,28 @@ def as_service(settings: Settings) -> Settings:
             "database_user": settings.database_service_role,
             "database_service_role": None,
         }
+    )
+
+
+def wait_for_case_status(
+    client: TestClient, case_id: str, wanted: str, timeout_seconds: float = 60.0
+) -> dict[str, Any]:
+    """Read the case's progress until it has the wanted status; return that progress.
+
+    A case whose page waits for a person keeps its orchestration alive
+    (story 1.10), so there is no completion to wait for: what the service
+    reports is looked at until the lifecycle, which runs on the worker's
+    own threads, has got there.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    progress: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        response = client.get(f"/cases/{case_id}/progress")
+        progress = response.json() if response.status_code == 200 else {}
+        if progress.get("case_status") == wanted:
+            return progress
+        # Not a wait for time to pass: the other threads get their turn.
+        time.sleep(0.05)
+    raise AssertionError(
+        f"case {case_id} did not reach {wanted}: {progress.get('case_status')}"
     )

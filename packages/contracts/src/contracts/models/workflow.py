@@ -5,7 +5,7 @@ from typing import Annotated, Self
 from pydantic import Field, model_validator
 
 from contracts.audit import AuditRecord
-from contracts.base import ContractModel, PageNumber, UtcDatetime
+from contracts.base import ContractModel, NonEmptyStr, PageNumber, UtcDatetime
 from contracts.enums import (
     CaseStatus,
     ClassifierContender,
@@ -63,11 +63,20 @@ class DecisionRequest(ContractModel):
     """Request of `POST /cases/{case_id}/pages/{page_id}/decisions`."""
 
     decision: Decision
-    # AD-9: `web` passes the demo role on as the human actor.
-    actor: DemoRole
+    # AD-9: `web` passes the demo role on as the human actor. Any text is
+    # taken here, so that an actor that is no demo role reaches `workflow`'s
+    # domain rule and is refused there as `actor_not_human` (AD-10), and not
+    # as a request that is merely not valid.
+    actor: NonEmptyStr
 
 
 class DecisionRecorded(ContractModel):
+    """Response of `POST /cases/{case_id}/pages/{page_id}/decisions`: the stored decision.
+
+    `page_status` is the status the decision left the page in. A repeat of a
+    decision is answered with the one stored the first time.
+    """
+
     decision_id: DecisionId
     case_id: CaseId
     page_id: PageId

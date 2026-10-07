@@ -593,14 +593,23 @@ def test_story_1_8_a_failed_classification_is_stored_as_failed_and_lists_nothing
     assert deployment.calls == calls
 
 
+@pytest.mark.parametrize(("retries", "calls"), [(1, 2), (0, 1), (4, 5)])
 def test_story_1_8_the_retry_setting_reaches_the_gateway_of_the_real_service(
-    migrated_database: Settings,
+    migrated_database: Settings, retries: int, calls: int
 ) -> None:
     sidecar, deployment = IntakeSidecar(), Deployment(429)
     case_id = new_id()
     page_id = sidecar.pages.add(case_id)
+    # One classifier run: with several, the run that gives up first cancels
+    # the others, and how many calls those had made by then is a matter of
+    # timing. With one, the count is the gateway's alone.
     settings = migrated_database.model_copy(
-        update={"model_max_retries": 1, "model_retry_seconds": 0.01}
+        update={
+            "classifier_runs": 1,
+            "classifier_max_concurrent_runs": 1,
+            "model_max_retries": retries,
+            "model_retry_seconds": 0.01,
+        }
     )
 
     with service(settings, sidecar, deployment) as client:
@@ -608,9 +617,10 @@ def test_story_1_8_the_retry_setting_reaches_the_gateway_of_the_real_service(
             "/classifications", json=command_for(case_id, page_id)
         ).json()
 
-    # A throttled page: each of the five runs is sent once and once more.
+    # A throttled page: the run is sent once and then as often again as the
+    # setting says, none of them the default of three.
     assert (body["status"], body["error_code"]) == ("failed", "model_unavailable")
-    assert deployment.calls == 10
+    assert deployment.calls == calls
 
 
 def test_story_1_8_when_intake_is_down_for_the_page_no_row_is_left_and_the_repeat_works(

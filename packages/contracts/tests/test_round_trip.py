@@ -129,6 +129,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "Health": {"status": "ok"},
     "Me": {"role": "customer"},
     "UploadedCase": {"case_id": CASE, "document_id": DOCUMENT},
+    "PageDecisionRequest": {"decision": "keep"},
     "RedactionCommand": {"eval_run_id": EVAL},
     "RedactionResult": {
         "case_id": CASE,

@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from contracts.audit import AuditAction, AuditRecord, RouteDetail
-from contracts.enums import CaseStatus, ClassifierContender, PageStatus
+from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.classification import ClassificationResult
@@ -24,9 +24,16 @@ from contracts.models.extraction import FactSetResult
 from contracts.models.intake import RedactionResult
 from contracts.models.verdict import VerdictRunResult
 from contracts.models.workflow import AuditTrail, CaseProgress, PageProgress
-from workflow.domain.entities import CaseRecord
+from workflow.domain.case_status import case_status_after_gate, case_status_following
+from workflow.domain.decisions import case_takes_decisions
+from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
 from workflow.domain.ports import EngineState
-from workflow.domain.recording import Recording, RecordOutcome
+from workflow.domain.recording import (
+    Decided,
+    DecisionOutcome,
+    Recording,
+    RecordOutcome,
+)
 from workflow.domain.transitions import (
     CASE_STATUSES_TAKING_RESULTS,
     CASE_TRANSITIONS,
@@ -59,6 +66,7 @@ class MemoryCaseStore:
     cases: dict[str, CaseRecord] = field(default_factory=dict)
     pages: dict[str, MemoryPage] = field(default_factory=dict)
     events: list[tuple[datetime, Recording]] = field(default_factory=list)
+    decisions: list[PageDecision] = field(default_factory=list)
     fail: bool = False
     # The audit event cannot be written: everything before it is undone.
     fail_audit_insert: bool = False
@@ -146,18 +154,68 @@ class MemoryCaseStore:
                 return audit.detail
         return None
 
-    async def move_case(
-        self, case_id: str, case_status: CaseStatus, moved_at: datetime
-    ) -> CaseStatus | None:
+    def _follow_pages(self, case_id: str, *, at_the_gate: bool) -> SettledCase:
+        case = self.cases[case_id]
+        statuses = {
+            page_id: page.page_status
+            for page_id, page in self.pages.items()
+            if page.case_id == case_id
+        }
+        wanted = (
+            case_status_after_gate(statuses.values(), case.parameters.stop_after)
+            if at_the_gate
+            else case_status_following(statuses.values())
+        )
+        if wanted in CASE_TRANSITIONS[case.case_status]:
+            case = replace(case, case_status=wanted)
+            self.cases[case_id] = case
+        return SettledCase(case.case_status, statuses)
+
+    async def decide(self, recording: Recording, recorded_at: datetime) -> Decided:
         if self.fail:
             raise StoreDown
-        case = self.cases.get(case_id)
+        audit, wanted, change = (
+            recording.audit,
+            recording.decision,
+            recording.page_change,
+        )
+        assert wanted is not None and change is not None
+        case = self.cases.get(audit.case_id)
         if case is None:
+            return Decided(DecisionOutcome.UNKNOWN_CASE)
+        page = self.pages.get(change.page_id)
+        if page is None or page.case_id != audit.case_id:
+            return Decided(DecisionOutcome.UNKNOWN_PAGE)
+        for stored in self.decisions:
+            if (stored.page_id, stored.decision) == (wanted.page_id, wanted.decision):
+                return Decided(DecisionOutcome.REPEATED, stored)
+        if (
+            not case_takes_decisions(case.case_status, case.parameters.stop_after)
+            or page.page_status is not change.only_from
+            or change.page_status not in PAGE_TRANSITIONS[page.page_status]
+        ):
+            return Decided(DecisionOutcome.NOT_AWAITING)
+        if self.fail_audit_insert:
+            # Nothing above has been applied yet, as after a rollback.
+            raise StoreDown
+        page.page_status = change.page_status
+        self.decisions.append(wanted)
+        self._follow_pages(audit.case_id, at_the_gate=False)
+        # The event takes the eval run of its case, as the real store sets it.
+        stored_audit = audit.model_copy(
+            update={"eval_run_id": case.parameters.eval_run_id}
+        )
+        self.events.append((recorded_at, replace(recording, audit=stored_audit)))
+        return Decided(DecisionOutcome.RECORDED, wanted)
+
+    async def settle_case(
+        self, case_id: str, settled_at: datetime
+    ) -> SettledCase | None:
+        if self.fail:
+            raise StoreDown
+        if case_id not in self.cases:
             return None
-        if case_status in CASE_TRANSITIONS[case.case_status]:
-            case = replace(case, case_status=case_status)
-            self.cases[case_id] = case
-        return case.case_status
+        return self._follow_pages(case_id, at_the_gate=True)
 
     async def progress(self, case_id: str) -> CaseProgress | None:
         if self.fail:
@@ -222,6 +280,11 @@ class FakeEngine:
     fail: bool = False
     # What an orchestration that already exists is reported as.
     existing: EngineState = EngineState.ACTIVE
+    # Story 1.10: the decisions the orchestrations were told of, in order,
+    # as (case id, page id, the status the page had, the decision).
+    told: list[tuple[str, str, PageStatus, Decision]] = field(default_factory=list)
+    # The engine cannot be told: no event is raised.
+    fail_events: bool = False
 
     async def ensure_started(self, case: CaseRecord) -> EngineState:
         self.calls.append(case.case_id)
@@ -231,6 +294,13 @@ class FakeEngine:
             return self.existing
         self.instances[case.case_id] = case
         return EngineState.CREATED
+
+    async def decision_made(
+        self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
+    ) -> None:
+        if self.fail_events:
+            raise StoreDown
+        self.told.append((case_id, page_id, awaited, decision))
 
 
 @dataclass

@@ -784,6 +784,8 @@ def test_story_1_6_the_service_role_has_exactly_the_rights_the_migration_gives(
         # AD-8: no UPDATE, no DELETE, no TRUNCATE.
         ("audit_event", "INSERT,SELECT"),
         ("case_status", "INSERT,SELECT,UPDATE"),
+        # AD-10: a decision is added and read, never changed (story 1.10).
+        ("human_decision", "INSERT,SELECT"),
         ("page_status", "INSERT,SELECT,UPDATE"),
     ]
     # Only migrations change the schema or its revision.
@@ -880,6 +882,7 @@ def test_story_1_6_migration_keeps_everything_in_schema_workflow(
         ("workflow", "alembic_version"),
         ("workflow", "audit_event"),
         ("workflow", "case_status"),
+        ("workflow", "human_decision"),
         ("workflow", "page_status"),
     ]
     assert query(

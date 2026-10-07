@@ -4,11 +4,25 @@ import type {
   DemoRole,
   ErrorCode,
   PageStatus,
+  PageType,
 } from "./api/contracts.gen";
 
 /** The largest upload, in MB, as the wording states it. The server enforces it. */
 export const MAX_UPLOAD_MB = 10;
 const TOO_LARGE = `The file is larger than ${MAX_UPLOAD_MB} MB. Choose a smaller PDF.`;
+
+/**
+ * A confidence as the server gives it, a number from 0 to 1, worded as a
+ * whole percentage such as "96%". Rounded down, so that only a confidence of
+ * exactly 1 reads "100%".
+ */
+export function percentage(share: number): string {
+  if (share >= 1) {
+    return "100%";
+  }
+  // The small addition undoes binary rounding: 0.29 times 100 is 28.99…
+  return `${Math.min(99, Math.max(0, Math.floor(share * 100 + 1e-9)))}%`;
+}
 
 export const strings = {
   appTitle: "AI Medical Underwriting Assistant",
@@ -88,6 +102,33 @@ export const strings = {
     denied: "Denied",
     failed: "Failed",
   } satisfies Record<PageStatus, string>,
+  // Plain words for what the classifier took a page for, as the prompt to
+  // the customer names it: "This looks like <these words> (96%)."
+  pageType: {
+    lab_report: "a laboratory report",
+    attending_physician_statement: "a doctor's statement",
+    application_form: "an application form",
+    id_document: "an identity document",
+    invoice: "an invoice or bill",
+    other: "a page that is not a medical document",
+  } satisfies Record<PageType, string>,
+  decision: {
+    prompt: (pageType: string, confidence: string) =>
+      `This looks like ${pageType} (${confidence}). Discard or keep?`,
+    // When what the classifier said could not be read, or names a type this
+    // build has no words for.
+    promptWithoutType: "This page needs your answer. Discard or keep?",
+    answerFor: (pageNumber: number) => `Your answer for page ${pageNumber}`,
+    discard: "Discard",
+    discardFor: (pageNumber: number) => `Discard page ${pageNumber}`,
+    keep: "Keep",
+    keepFor: (pageNumber: number) => `Keep page ${pageNumber}`,
+    sending: "Saving your answer…",
+    saved: "Your answer was saved.",
+    tryAgain: "Try again",
+    tryAgainFor: (pageNumber: number) =>
+      `Try again to save your answer for page ${pageNumber}`,
+  },
   notFound: {
     heading: "Page not found",
     body: "This screen does not exist, or is not open to your role.",
@@ -103,6 +144,7 @@ export const strings = {
       invalid_role: "Choose a role to continue.",
       role_not_allowed: "This action is not open to your role.",
       not_found: "That could not be found.",
+      not_awaiting_decision: "This page is no longer waiting for that answer.",
       method_not_allowed: "That action is not available here.",
       file_too_large: TOO_LARGE,
       payload_too_large: TOO_LARGE,

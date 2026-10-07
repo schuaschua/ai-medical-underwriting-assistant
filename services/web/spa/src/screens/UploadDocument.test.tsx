@@ -1332,7 +1332,9 @@ describe("1.9 page badges", () => {
       ? []
       : within(list)
           .getAllByRole("listitem")
-          .map((item) => item.textContent ?? "");
+          // The badge itself: a page that waits for the customer has its
+          // prompt under it (story 1.10).
+          .map((item) => item.firstElementChild?.textContent ?? "");
   }
 
   function reads(server: { calls: RecordedCall[] }): number {
@@ -1515,13 +1517,18 @@ describe("1.9 page badges", () => {
     const sources = [
       "src/screens/UploadDocument.tsx",
       "src/cases/caseProgress.ts",
+      "src/cases/classifications.ts",
+      "src/components/PagePrompt.tsx",
       "src/strings.ts",
       "src/api/client.ts",
     ].map((path) => readFileSync(resolve(process.cwd(), path), "utf8"));
 
     for (const source of sources) {
-      // No threshold, no confidence and no medical-or-not reach the screen.
-      expect(source).not.toMatch(/threshold|confidence|is_medical|0\.9/i);
+      // No threshold and no medical-or-not reach the screen. The confidence
+      // does since story 1.10, to be shown as the server gave it: nothing
+      // compares it with anything.
+      expect(source).not.toMatch(/threshold|is_medical|0\.9/i);
+      expect(source).not.toMatch(/confidence\s*[<>]=?|[<>]=?\s*confidence/i);
     }
   });
 });

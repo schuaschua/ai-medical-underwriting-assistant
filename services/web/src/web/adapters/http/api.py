@@ -1,8 +1,10 @@
-"""The `/api` routes: health, the role echo, the upload and the case's lifecycle.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle and decisions.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
-to `intake`, asks `workflow` to start the case, and reads progress and the
-audit trail from `workflow`.
+to `intake`, asks `workflow` to start the case, reads progress and the audit
+trail from `workflow` and the classifications from `classification`, and
+passes a person's decision about a page on to `workflow` with the request's
+demo role as the actor (AD-9, AD-10).
 
 A route is added to `role_checked`, never to `router` itself, so that it
 cannot be reached without a valid `X-Demo-Role` (spine AD-9). A route for one
@@ -19,11 +21,14 @@ from fastapi import APIRouter, Body, Depends, Path, Request
 from contracts.enums import DemoRole
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
-from contracts.models.web import Health, Me, UploadedCase
+from contracts.models.classification import ClassificationList
+from contracts.models.web import Health, Me, PageDecisionRequest, UploadedCase
 from contracts.models.workflow import (
     AuditTrail,
     CaseProgress,
     CaseStarted,
+    DecisionRecorded,
+    DecisionRequest,
     StartCaseRequest,
 )
 from contracts.operations import get_operation
@@ -46,6 +51,7 @@ START_OPTIONS_MESSAGE = "Start options are not open to your role."
 
 # An id that is not a UUIDv7 is refused with 422 before any service is called.
 CaseIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
+PageIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 
 
 def _services(request: Request) -> ServiceClient:
@@ -122,6 +128,38 @@ async def read_audit_trail(
 ) -> AuditTrail:
     return await _services(request).read_audit_trail(
         case_id, traceparent=request.headers.get("traceparent")
+    )
+
+
+# What the classifier said of each page of a case: the page type and the
+# confidence the customer's prompt names (story 1.10), and later the reason
+# the triage queue shows. Read from `classification`, which owns it.
+@role_checked.get(get_operation("list_classifications").path)
+async def list_classifications(
+    case_id: CaseIdPath, request: Request
+) -> ClassificationList:
+    return await _services(request).list_classifications(
+        case_id, traceparent=request.headers.get("traceparent")
+    )
+
+
+# AD-10: keep, discard, accept or deny one page. Open to both roles, and
+# `web` adds no rule: the body names the decision only, the actor is the
+# demo role the request was checked for (AD-9), and `workflow` decides
+# whether that role may make that decision about that page.
+@role_checked.post(get_operation("record_decision").path)
+async def record_decision(
+    case_id: CaseIdPath,
+    page_id: PageIdPath,
+    decision: PageDecisionRequest,
+    request: Request,
+    role: Annotated[DemoRole, Depends(any_role)],
+) -> DecisionRecorded:
+    return await _services(request).record_decision(
+        case_id,
+        page_id,
+        DecisionRequest(decision=decision.decision, actor=role.value),
+        traceparent=request.headers.get("traceparent"),
     )
 
 

@@ -6,12 +6,12 @@ from enum import StrEnum
 from typing import Protocol
 
 from contracts.audit import RouteDetail
-from contracts.enums import CaseStatus, ClassifierContender
+from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
 from contracts.models.classification import ClassificationResult
 from contracts.models.intake import RedactionResult
 from contracts.models.workflow import AuditTrail, CaseProgress
-from workflow.domain.entities import CaseRecord
-from workflow.domain.recording import Recording, RecordOutcome
+from workflow.domain.entities import CaseRecord, SettledCase
+from workflow.domain.recording import Decided, Recording, RecordOutcome
 
 
 class CaseStore(Protocol):
@@ -43,15 +43,30 @@ class CaseStore(Protocol):
         """The detail of the `page.routed` event in the trail for that page and reference, if any."""
         ...
 
-    async def move_case(
-        self, case_id: str, case_status: CaseStatus, moved_at: datetime
-    ) -> CaseStatus | None:
-        """Give the case a status, if it may follow the one the case has.
+    async def decide(self, recording: Recording, recorded_at: datetime) -> Decided:
+        """Write a human decision in one transaction, or nothing (AD-8, AD-10).
 
-        Returns the status the case has afterwards: the one asked for, or the
-        one it kept because the change was not allowed
-        (`domain/transitions.py`). None if the case is unknown. Asking again
-        changes nothing.
+        Together: the decision's row, the page's new status (only from the
+        status the decision needs), the case status its pages then give
+        (`domain/case_status.py`) and the audit event, which takes the case's
+        eval run id. A page that holds the same decision already is answered
+        with that one and nothing is written. A page that is in another
+        status, or whose case takes no decision
+        (`domain/decisions.py`), is left as it is.
+        """
+        ...
+
+    async def settle_case(
+        self, case_id: str, settled_at: datetime
+    ) -> SettledCase | None:
+        """Give the case the status its pages give it after the gate; return the case as it is then.
+
+        The status is worked out from the stored pages, in the transaction
+        that sets it (`domain/case_status.py`), so asking again, however
+        late, never undoes what a decision has changed since. A status that
+        may not follow the one the case has (`domain/transitions.py`) is not
+        set. The answer holds the status the case has and the statuses of
+        its pages as that transaction read them. None if the case is unknown.
         """
         ...
 
@@ -85,6 +100,17 @@ class LifecycleEngine(Protocol):
 
         Returns the state that orchestration is in. A case that already has
         one is left exactly as it is, whatever that state.
+        """
+        ...
+
+    async def decision_made(
+        self, case_id: str, page_id: str, awaited: PageStatus, decision: Decision
+    ) -> None:
+        """Tell the case's orchestration of a stored decision, by an external event (AD-5).
+
+        `awaited` is the status the page had for the decision. Telling it
+        twice does no harm, and neither does telling an orchestration that
+        has ended. Raises if the engine could not be told.
         """
         ...
 

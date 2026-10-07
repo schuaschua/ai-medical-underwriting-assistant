@@ -431,8 +431,9 @@ def test_story_1_6_the_bundled_head_is_the_newest_migration_in_the_package() -> 
     assert versions == [
         "v0001_case_status_page_status_and_audit_event.py",
         "v0002_audit_event_is_append_only.py",
+        "v0003_human_decision.py",
     ]
-    assert bundled_head() == "0002"
+    assert bundled_head() == "0003"
     # Inside the package, so the image carries it.
     assert MIGRATIONS_DIR.parent.name == "workflow"
     assert (MIGRATIONS_DIR / "env.py").is_file()

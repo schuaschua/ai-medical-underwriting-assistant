@@ -282,11 +282,12 @@ def test_story_1_8_classification_itself_routes_nothing_and_waits_for_no_human()
     None
 ):
     # The classify activity never routes (AD-7): the gate does, after it
-    # (story 1.9). The waits for decisions come with stories 1.10 and 1.11.
+    # (story 1.9). The waits for decisions are the orchestration's, after
+    # the gate (story 1.10): no activity waits for a person.
     classify_source = inspect.getsource(Activities.classify_page)
     assert "record_route" not in classify_source
     assert "Route(" not in classify_source
-    assert "wait_for_external_event" not in inspect.getsource(build_case_lifecycle)
+    assert "wait_for_external_event" not in inspect.getsource(Activities)
     assert PageStatus.AWAITING_TRIAGE in PAGE_TRANSITIONS[PageStatus.CLASSIFIED]
 
 

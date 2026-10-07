@@ -696,6 +696,10 @@ def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
         ("POST", "/api/cases/{case_id}/start"),
         ("GET", "/api/cases/{case_id}/progress"),
         ("GET", "/api/cases/{case_id}/audit"),
+        # Story 1.10: what the classifier said of the pages, and a person's
+        # decision about one. Neither returns a file.
+        ("GET", "/api/cases/{case_id}/classifications"),
+        ("POST", "/api/cases/{case_id}/pages/{page_id}/decisions"),
     }
 
 

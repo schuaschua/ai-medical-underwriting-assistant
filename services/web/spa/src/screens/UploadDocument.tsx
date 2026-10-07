@@ -6,9 +6,11 @@ import {
   useCaseProgress,
   type CaseState,
 } from "../cases/caseProgress";
+import { useClassifications } from "../cases/classifications";
 import { addSessionCase, useSessionCases } from "../cases/sessionCases";
 import { forgetUploadKey, uploadKeyFor } from "../cases/uploadKey";
 import { ErrorMessage } from "../components/ErrorMessage";
+import { PagePrompt } from "../components/PagePrompt";
 import { strings } from "../strings";
 
 type State =
@@ -48,15 +50,19 @@ function caseText(state: CaseState): string {
 
 /**
  * One badge per page: its number and the status the server gave it, in page
- * order. Nothing here works a status out (AD-7, AD-19).
+ * order. Nothing here works a status out (AD-7, AD-19). A page that waits
+ * for the customer has its prompt under its badge (AD-10).
  */
 function PageBadges({
   caseId,
   pages,
+  onAnswered,
 }: {
   caseId: string;
   pages: readonly PageProgress[];
+  onAnswered: () => void;
 }) {
+  const classifications = useClassifications(caseId, pages);
   if (pages.length === 0) {
     return null;
   }
@@ -67,13 +73,25 @@ function PageBadges({
     <ul aria-label={strings.upload.pagesOf(caseId)}>
       {inPageOrder.map((page) => (
         <li key={page.page_id}>
-          {strings.upload.pageBadge(
-            page.page_number,
-            // A status this build has no wording for is shown as it came.
-            Object.hasOwn(strings.pageStatus, page.page_status)
-              ? strings.pageStatus[page.page_status]
-              : page.page_status,
-          )}
+          <span>
+            {strings.upload.pageBadge(
+              page.page_number,
+              // A status this build has no wording for is shown as it came.
+              Object.hasOwn(strings.pageStatus, page.page_status)
+                ? strings.pageStatus[page.page_status]
+                : page.page_status,
+            )}
+          </span>
+          <PagePrompt
+            caseId={caseId}
+            page={page}
+            classification={
+              Object.hasOwn(classifications, page.page_id)
+                ? classifications[page.page_id]
+                : undefined
+            }
+            onAnswered={onAnswered}
+          />
         </li>
       ))}
     </ul>
@@ -202,6 +220,8 @@ export function UploadDocument() {
                       <PageBadges
                         caseId={item.case_id}
                         pages={caseState.pages}
+                        // The page's new status is the server's to say.
+                        onAnswered={() => check(item.case_id)}
                       />
                     )}
                     {caseState.kind === "not_started" && (

@@ -33,6 +33,7 @@ from contracts.models.verdict import (
     VerdictRun,
     VerdictRunResult,
 )
+from contracts.models.web import PageDecisionRequest
 from contracts.models.workflow import (
     CaseProgress,
     CaseStarted,
@@ -143,7 +144,11 @@ def test_story_1_1_unknown_verdict_is_rejected() -> None:
     ("model", "payload"),
     [
         (DecisionRequest, {"decision": "approve", "actor": "customer"}),
-        (DecisionRequest, {"decision": "keep", "actor": "admin"}),
+        (DecisionRequest, {"decision": "keep", "actor": " "}),
+        (DecisionRequest, {"decision": "keep"}),
+        (PageDecisionRequest, {"decision": "approve"}),
+        # The browser never names the actor: `web` takes it from the role header.
+        (PageDecisionRequest, {"decision": "keep", "actor": "underwriter"}),
         (StartCaseRequest, {"classifier_contender": "regex"}),
         (StartCaseRequest, {"retriever_configs": ["r7"]}),
         (StartCaseRequest, {"stop_after": "extraction"}),

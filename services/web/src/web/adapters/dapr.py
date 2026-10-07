@@ -15,11 +15,14 @@ from pydantic import ValidationError
 from contracts.base import ContractModel
 from contracts.enums import Service
 from contracts.errors import HTTP_STATUS, DomainError, ErrorBody, ErrorCode
+from contracts.models.classification import ClassificationList
 from contracts.models.intake import CaseCreated
 from contracts.models.workflow import (
     AuditTrail,
     CaseProgress,
     CaseStarted,
+    DecisionRecorded,
+    DecisionRequest,
     StartCaseRequest,
 )
 from contracts.operations import Operation, get_operation
@@ -50,6 +53,18 @@ _UPLOAD_REFUSALS = frozenset(
 # browser as it is: the case is unknown, or the start options are not valid.
 _UNKNOWN_CASE = frozenset({ErrorCode.NOT_FOUND, ErrorCode.VALIDATION_FAILED})
 _INVALID_START = frozenset({ErrorCode.VALIDATION_FAILED})
+# AD-10: what `workflow` may say about a decision. The rule is its own; its
+# verdict is passed on as it is. A decision whose event could not be raised
+# is `upstream_unavailable` there and here: the caller sends it again.
+_DECISION_REFUSALS = frozenset(
+    {
+        ErrorCode.NOT_FOUND,
+        ErrorCode.VALIDATION_FAILED,
+        ErrorCode.ACTOR_NOT_HUMAN,
+        ErrorCode.ROLE_NOT_ALLOWED,
+        ErrorCode.NOT_AWAITING_DECISION,
+    }
+)
 
 
 def sidecar_base_url(settings: Settings) -> str:
@@ -204,6 +219,39 @@ class ServiceClient:
             AuditTrail,
             passed_on=_UNKNOWN_CASE,
             traceparent=traceparent,
+        )
+
+    async def list_classifications(
+        self, case_id: str, *, traceparent: str | None
+    ) -> ClassificationList:
+        """`GET /cases/{case_id}/classifications` on `classification`."""
+        return await self._call(
+            get_operation("list_classifications"),
+            {"case_id": case_id},
+            ClassificationList,
+            passed_on=_UNKNOWN_CASE,
+            traceparent=traceparent,
+        )
+
+    async def record_decision(
+        self,
+        case_id: str,
+        page_id: str,
+        decision: DecisionRequest,
+        *,
+        traceparent: str | None,
+    ) -> DecisionRecorded:
+        """`POST /cases/{case_id}/pages/{page_id}/decisions` on `workflow` (AD-10).
+
+        Safe to repeat: the same decision again is answered with the stored one.
+        """
+        return await self._call(
+            get_operation("record_decision"),
+            {"case_id": case_id, "page_id": page_id},
+            DecisionRecorded,
+            passed_on=_DECISION_REFUSALS,
+            traceparent=traceparent,
+            body=decision.model_dump(mode="json"),
         )
 
     async def _call[T: ContractModel](

@@ -14,6 +14,7 @@ from psycopg import errors as pg_errors
 from pydantic import BaseModel
 from sqlalchemy import (
     URL,
+    CheckConstraint,
     Column,
     DateTime,
     Engine,
@@ -43,6 +44,8 @@ from contracts.enums import (
     ActorKind,
     CaseStatus,
     ClassifierContender,
+    Decision,
+    DemoRole,
     PageStatus,
     RetrieverConfig,
     StageStatus,
@@ -53,10 +56,23 @@ from contracts.ids import new_id
 from contracts.models.workflow import AuditTrail, CaseProgress, PageProgress
 from workflow.adapters.credential import azure_credential
 from workflow.adapters.telemetry import adapter_span
-from workflow.domain.entities import CaseRecord, StartParameters
-from workflow.domain.recording import Recording, RecordOutcome
+from workflow.domain.case_status import case_status_after_gate, case_status_following
+from workflow.domain.decisions import case_takes_decisions
+from workflow.domain.entities import (
+    CaseRecord,
+    PageDecision,
+    SettledCase,
+    StartParameters,
+)
+from workflow.domain.recording import (
+    Decided,
+    DecisionOutcome,
+    Recording,
+    RecordOutcome,
+)
 from workflow.domain.transitions import (
     CASE_STATUSES_TAKING_RESULTS,
+    CASE_TRANSITIONS,
     case_statuses_before,
     page_statuses_before,
     redaction_statuses_before,
@@ -75,6 +91,7 @@ TOKEN_REFRESH_MARGIN_SECONDS = 300
 CASE_STATUS_TABLE = "case_status"
 PAGE_STATUS_TABLE = "page_status"
 AUDIT_EVENT_TABLE = "audit_event"
+HUMAN_DECISION_TABLE = "human_decision"
 # AD-8: one event per case, page, action and reference; a null page counts as
 # one value, so a case-level event cannot be written twice either.
 AUDIT_EVENT_UNIQUE = "uq_workflow_audit_event_subject"
@@ -158,6 +175,44 @@ audit_event_table = Table(
         postgresql_nulls_not_distinct=True,
     ),
     Index("ix_workflow_audit_event_case_id_occurred_at", "case_id", "occurred_at"),
+)
+
+# AD-10: the decisions people made, one row each. Like the trail it is only
+# ever added to: this module has an INSERT for it and no UPDATE or DELETE, and
+# the service's database role is granted neither. A page takes each decision
+# once, so the same decision sent again finds its row.
+human_decision_table = Table(
+    HUMAN_DECISION_TABLE,
+    metadata,
+    Column("decision_id", Uuid(as_uuid=False), primary_key=True),
+    Column(
+        "case_id",
+        Uuid(as_uuid=False),
+        ForeignKey(case_status_table.c.case_id),
+        nullable=False,
+    ),
+    Column(
+        "page_id",
+        Uuid(as_uuid=False),
+        ForeignKey(page_status_table.c.page_id),
+        nullable=False,
+    ),
+    Column("decision", Text, nullable=False),
+    # The demo role that decided.
+    Column("actor", Text, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "page_id", "decision", name="uq_workflow_human_decision_page_id_decision"
+    ),
+    # AD-10: the database too takes a decision from a demo role only.
+    CheckConstraint(
+        "actor IN ('customer', 'underwriter')", name="ck_workflow_human_decision_actor"
+    ),
+    CheckConstraint(
+        "decision IN ('keep', 'discard', 'accept', 'deny')",
+        name="ck_workflow_human_decision_decision",
+    ),
+    Index("ix_workflow_human_decision_case_id", "case_id"),
 )
 
 # Alembic's own table, in the service's schema (Conventions, Database).
@@ -379,8 +434,88 @@ def _audit_record(row: Row[*tuple[Any, ...]]) -> AuditRecord:
     )
 
 
+def _decision(row: Row[*tuple[Any, ...]]) -> PageDecision:
+    return PageDecision(
+        decision_id=row.decision_id,
+        case_id=row.case_id,
+        page_id=row.page_id,
+        decision=Decision(row.decision),
+        actor=DemoRole(row.actor),
+        occurred_at=_utc(row.occurred_at),
+    )
+
+
+def _audit_values(
+    recording: Recording, recorded_at: datetime, eval_run_id: str | None
+) -> dict[str, object]:
+    """The row of a recording's audit event."""
+    audit = recording.audit
+    return {
+        "audit_event_id": new_id(),
+        "actor_kind": audit.actor_kind.value,
+        "actor": audit.actor,
+        "action": audit.action.value,
+        "occurred_at": audit.occurred_at,
+        "case_id": audit.case_id,
+        "page_id": audit.page_id,
+        "ref": audit.ref,
+        "detail": _detail_json(audit.detail),
+        "error_code": recording.error_code.value
+        if recording.error_code is not None
+        else None,
+        "trace_id": audit.trace_id,
+        "eval_run_id": eval_run_id,
+        "recorded_at": recorded_at,
+    }
+
+
+async def _follow_pages(
+    connection: AsyncConnection,
+    case_id: str,
+    current: CaseStatus,
+    stop_after: StopAfter | None,
+    moved_at: datetime,
+    *,
+    at_the_gate: bool,
+) -> SettledCase:
+    """Give a case the status its stored pages give it; return the case as it is afterwards.
+
+    The caller holds the lock on the case's row, so the pages read here and
+    the status set here belong together. A status that may not follow the
+    current one (domain/transitions.py) is not set.
+    """
+    pages = await connection.execute(
+        select(page_status_table.c.page_id, page_status_table.c.page_status).where(
+            page_status_table.c.case_id == case_id
+        )
+    )
+    page_statuses = {page.page_id: PageStatus(page.page_status) for page in pages}
+    wanted = (
+        case_status_after_gate(page_statuses.values(), stop_after)
+        if at_the_gate
+        else case_status_following(page_statuses.values())
+    )
+    if wanted is current:
+        return SettledCase(current, page_statuses)
+    if wanted not in CASE_TRANSITIONS[current]:
+        # The case keeps its status, and the log says its pages ask for another.
+        logger.warning(
+            "case status not followed: case_id=%s case_status=%s wanted=%s",
+            case_id,
+            current.value,
+            wanted.value,
+        )
+        return SettledCase(current, page_statuses)
+    await connection.execute(
+        update(case_status_table)
+        .where(case_status_table.c.case_id == case_id)
+        .values(case_status=wanted.value, updated_at=moved_at)
+    )
+    return SettledCase(wanted, page_statuses)
+
+
 class SqlCaseStore:
-    """Case and page status and the audit trail.
+    """Case and page status, the decisions people made, and the audit trail.
 
     Every statement uses bound parameters (security rule 21). The audit table
     is only ever inserted into and read (AD-8, security rule 32).
@@ -563,23 +698,107 @@ class SqlCaseStore:
         # changes above are rolled back with it.
         await connection.execute(
             insert(audit_event_table).values(
-                audit_event_id=new_id(),
-                actor_kind=audit.actor_kind.value,
-                actor=audit.actor,
-                action=audit.action.value,
-                occurred_at=audit.occurred_at,
-                case_id=audit.case_id,
-                page_id=audit.page_id,
-                ref=audit.ref,
-                detail=_detail_json(audit.detail),
-                error_code=recording.error_code.value
-                if recording.error_code is not None
-                else None,
-                trace_id=audit.trace_id,
-                eval_run_id=audit.eval_run_id,
-                recorded_at=recorded_at,
+                **_audit_values(recording, recorded_at, audit.eval_run_id)
             )
         )
+
+    async def decide(self, recording: Recording, recorded_at: datetime) -> Decided:
+        """Write a human decision in one transaction, or nothing (AD-8, AD-10)."""
+        with adapter_span(tracer, "workflow.db.decide"):
+            # Every check comes before the first write, so a refusal leaves
+            # a transaction that changed nothing.
+            async with self._database.begin() as connection:
+                return await self._decide(connection, recording, recorded_at)
+
+    async def _decide(
+        self, connection: AsyncConnection, recording: Recording, recorded_at: datetime
+    ) -> Decided:
+        audit = recording.audit
+        wanted = recording.decision
+        change = recording.page_change
+        if wanted is None or change is None:
+            raise ValueError("a decision's recording names the decision and its page")
+        # The case's row is locked first, as for every recording: two
+        # decisions about one case run one after the other.
+        locked = await connection.execute(
+            select(
+                case_status_table.c.case_status,
+                case_status_table.c.stop_after,
+                case_status_table.c.eval_run_id,
+            )
+            .where(case_status_table.c.case_id == audit.case_id)
+            .with_for_update()
+        )
+        case = locked.first()
+        if case is None:
+            return Decided(DecisionOutcome.UNKNOWN_CASE)
+        this_page = (
+            page_status_table.c.page_id == change.page_id,
+            page_status_table.c.case_id == audit.case_id,
+        )
+        known = await connection.execute(
+            select(page_status_table.c.page_id).where(*this_page)
+        )
+        if known.first() is None:
+            return Decided(DecisionOutcome.UNKNOWN_PAGE)
+        # The same decision again: answered with the stored one, whatever
+        # has become of the page and the case since. The role was checked
+        # against the decision before, so the stored row is that role's.
+        stored = await connection.execute(
+            select(human_decision_table).where(
+                human_decision_table.c.page_id == wanted.page_id,
+                human_decision_table.c.decision == wanted.decision.value,
+            )
+        )
+        repeated = stored.first()
+        if repeated is not None:
+            return Decided(DecisionOutcome.REPEATED, _decision(repeated))
+        case_status = CaseStatus(case.case_status)
+        stop_after = StopAfter(case.stop_after) if case.stop_after is not None else None
+        if not case_takes_decisions(case_status, stop_after):
+            return Decided(DecisionOutcome.NOT_AWAITING)
+        # Made only from the status the decision needs, in the statement
+        # that makes it: a page that awaits something else matches no row.
+        changed = await connection.execute(
+            update(page_status_table)
+            .where(
+                *this_page,
+                page_status_table.c.page_status.in_(
+                    _values(page_statuses_before(change.page_status, change.only_from))
+                ),
+            )
+            .values(page_status=change.page_status.value, updated_at=recorded_at)
+            .returning(page_status_table.c.page_id)
+        )
+        if changed.first() is None:
+            return Decided(DecisionOutcome.NOT_AWAITING)
+        await connection.execute(
+            insert(human_decision_table).values(
+                decision_id=wanted.decision_id,
+                case_id=wanted.case_id,
+                page_id=wanted.page_id,
+                decision=wanted.decision.value,
+                actor=wanted.actor.value,
+                occurred_at=wanted.occurred_at,
+            )
+        )
+        # The case status follows the pages, here and not later (AD-5).
+        await _follow_pages(
+            connection,
+            audit.case_id,
+            case_status,
+            stop_after,
+            recorded_at,
+            at_the_gate=False,
+        )
+        # Last, as for every recording: if this insert fails, all of the
+        # above is rolled back with it.
+        await connection.execute(
+            insert(audit_event_table).values(
+                **_audit_values(recording, recorded_at, case.eval_run_id)
+            )
+        )
+        return Decided(DecisionOutcome.RECORDED, wanted)
 
     async def route_of(
         self, case_id: str, page_id: str, ref: str
@@ -598,31 +817,33 @@ class SqlCaseStore:
                 detail = result.scalar_one_or_none()
         return RouteDetail.model_validate(detail) if detail is not None else None
 
-    async def move_case(
-        self, case_id: str, case_status: CaseStatus, moved_at: datetime
-    ) -> CaseStatus | None:
-        """Give the case a status if it may follow the one it has; return the one it has now."""
-        with adapter_span(tracer, "workflow.db.move_case"):
+    async def settle_case(
+        self, case_id: str, settled_at: datetime
+    ) -> SettledCase | None:
+        """Give the case the status its pages give it after the gate; return the case as it is now."""
+        with adapter_span(tracer, "workflow.db.settle_case"):
             async with self._database.begin() as connection:
-                # Made only from a status the new one may follow
-                # (domain/transitions.py), in the statement that makes it.
-                await connection.execute(
-                    update(case_status_table)
-                    .where(
-                        case_status_table.c.case_id == case_id,
-                        case_status_table.c.case_status.in_(
-                            _values(case_statuses_before(case_status))
-                        ),
+                # Locked, so a decision made at the same moment is either
+                # seen here whole or made after this.
+                locked = await connection.execute(
+                    select(
+                        case_status_table.c.case_status,
+                        case_status_table.c.stop_after,
                     )
-                    .values(case_status=case_status.value, updated_at=moved_at)
+                    .where(case_status_table.c.case_id == case_id)
+                    .with_for_update()
                 )
-                result = await connection.execute(
-                    select(case_status_table.c.case_status).where(
-                        case_status_table.c.case_id == case_id
-                    )
+                case = locked.first()
+                if case is None:
+                    return None
+                return await _follow_pages(
+                    connection,
+                    case_id,
+                    CaseStatus(case.case_status),
+                    StopAfter(case.stop_after) if case.stop_after is not None else None,
+                    settled_at,
+                    at_the_gate=True,
                 )
-                value = result.scalar_one_or_none()
-        return CaseStatus(value) if value is not None else None
 
     async def progress(self, case_id: str) -> CaseProgress | None:
         """The case's status and its tracked pages, by page number, with their failure codes."""

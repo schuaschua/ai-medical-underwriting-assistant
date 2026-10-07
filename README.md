@@ -26,13 +26,14 @@ holds the ruff, mypy and pytest settings for every member.
   that serves the React app in `services/web/spa/` and every `/api` route from one origin.
   `services/intake/` owns cases, documents and the stored PDFs: database schema `intake` and the blob
   containers `originals` and `cases`. `services/workflow/` owns the case lifecycle: one orchestration
-  per case on Azure Durable Task Scheduler, case and page status, and the append-only audit trail
-  (database schema `workflow`). `services/classification/` says what each page is, with a confidence
+  per case on Azure Durable Task Scheduler, case and page status, the decisions people made and the
+  append-only audit trail (database schema `workflow`). `services/classification/` says what each page is, with a confidence
   and a reason (database schema `classification`); its prompt is in
   `services/classification/src/classification/prompts/`. `web` calls `intake` and `workflow` through
   its Dapr sidecar: it asks `intake` to create a case from an upload, then asks `workflow` to start
-  it. `workflow` commands `intake` and `classification`, and `classification` reads each page from
-  `intake`. No service imports another service's code.
+  it. It passes a person's decision about a page on to `workflow`, and reads the classifications from
+  `classification`. `workflow` commands `intake` and `classification`, and `classification` reads
+  each page from `intake`. No service imports another service's code.
 
 ### Install and check
 
@@ -114,11 +115,60 @@ value in force when its lifecycle confirmed it, so a change applies to cases sta
 Each route is written with a `page.routed` event by `workflow:gate`, which names the classification it
 came from, the route and the threshold used. After the gate a case with a page that waits for a person
 shows as `awaiting_human`; a case whose pages all went to extraction stays `running`; a case started
-with `stop_after: gate` ends as `completed`. The lifecycle ends there for now: the customer's and the
-underwriter's decisions and extraction come with later stories.
+with `stop_after: gate` ends as `completed`.
+
+A page that waits for a person is decided by a person and by nothing else. There is one operation for
+it, `POST /cases/<case_id>/pages/<page_id>/decisions` on `workflow`, and no other way a page is kept,
+discarded, accepted or denied. Who may decide what is one mapping in the contracts package
+(`contracts/decisions.py`), enforced in `workflow`'s domain code:
+
+| Decision | Role | The page must be | It becomes | Audit action |
+| --- | --- | --- | --- | --- |
+| `discard` | customer | `awaiting_customer` | `discarded` | `page.discarded` |
+| `keep` | customer | `awaiting_customer` | `awaiting_triage` | `page.kept` |
+| `accept` | underwriter | `awaiting_triage` | `extracting` | `page.accepted` |
+| `deny` | underwriter | `awaiting_triage` | `denied` | `page.denied` |
+
+An actor that is not one of the two demo roles is refused with `actor_not_human` (403), a role asking
+for the other role's decision with `role_not_allowed` (403), and a page that does not wait for that
+decision, or whose case has failed, is completed or was started with `stop_after: gate`, with
+`not_awaiting_decision` (409). The decision (table `workflow.human_decision`), the page's new status,
+the case status and the audit event (actor kind `human`, the demo role as actor, the decision's id as
+reference) are written in one transaction. The same decision sent again writes nothing and is
+answered with the stored one.
+
+The case status follows the pages, in that same transaction: `awaiting_human` while any page waits
+for a person, else `running` while any page is still in work, else `completed`. The step after the
+gate uses the same rule on the stored pages, so it cannot undo a decision however late it runs.
+
+The lifecycle no longer ends at the gate when a page waits. Its orchestration waits for each
+decision as an external event (never by polling or a timer) and goes on page by page as decisions
+arrive; it ends when no page waits. The decision is stored by the HTTP call, and the event only wakes
+the orchestration: if the event cannot be raised the call answers 502, and sending the same decision
+again raises it, as long as the case's orchestration is still alive. For an orchestration that has
+completed nothing is raised and nothing is said; for one that is missing, failed or terminated
+nothing is raised and `workflow` logs a warning (`decision not told`), because the decision is stored
+and no lifecycle will go on with it. An accepted page stays `extracting`: extraction comes with a later story.
+Because a waiting case keeps its orchestration alive, the orchestration's code may not be changed
+freely once a deployed case is in flight: see the note at the top of
+`services/workflow/src/workflow/adapters/orchestration.py`.
+
+`web` passes a decision on (`POST /api/cases/<case_id>/pages/<page_id>/decisions`, body
+`{"decision": ...}`) with the request's demo role as the actor, and adds no rule of its own. It also
+reads what the classifier said (`GET /api/cases/<case_id>/classifications`, from `classification`).
 
 The upload screen shows each case's pages under its status, one badge per page with the page number
 and the status the server gave it, and updates them as it reads the progress again every few seconds.
+Under a page that waits for the customer it asks, for example, "This looks like an invoice or bill
+(100%). Discard or keep?", with the predicted type and the confidence the server gave, and the two
+buttons. After an answer it reads the case again. If the call fails the prompt stays, with the error.
+The customer sees the same message whether or not the answer was saved: after a call that got no
+answer, or a fault of the server, the answer may be stored, so only the same answer can be sent again
+("Try again"), also once the page shows a new status. After a refusal nothing was saved, and both
+answers are offered again. To see it locally, upload
+`data/cases/case-002.pdf`: three of its pages go back to the customer. The underwriter's screen for
+accept and deny comes with the triage queue (story 1.11); until then those two decisions can be sent
+through the API.
 The progress of a case, and of a page, also carries the error code of the stage that failed, if one
 did (`error_code`); the screen does not show it yet.
 
@@ -176,7 +226,7 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | `web`'s Dapr sidecar | `http://localhost:3500` |
 | `intake` (`/health`, `/ready`, `POST /cases`, `POST /cases/<case_id>/redaction`, `GET /cases/<case_id>/pages`, `GET /pages/<page_id>/text`, `/boxes` and `/thumbnail`, `GET /documents/<document_id>/file`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
 | Stand-in for Azure AI Language (this machine only) | `http://localhost:5100` |
-| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
+| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`, `POST /cases/<case_id>/pages/<page_id>/decisions`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
 | `classification` (`/health`, `/ready`, `POST /classifications`, `GET /cases/<case_id>/classifications`), and its Dapr sidecar | `http://localhost:8003`, `http://localhost:3503` |
 | Stand-in for the Foundry chat deployment (this machine only) | `http://localhost:5101` |
 | PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |

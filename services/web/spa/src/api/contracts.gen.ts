@@ -148,6 +148,7 @@ export interface Contracts {
   Page: Page;
   PageBoxes: PageBoxes;
   PageBoxesQuery: PageBoxesQuery;
+  PageDecisionRequest: PageDecisionRequest;
   PageList: PageList;
   PageProgress: PageProgress;
   PageQueue: PageQueue;
@@ -336,6 +337,12 @@ export interface ClassifyCommand {
   eval_run_id?: string | null;
   page_id: string;
 }
+/**
+ * Response of `POST /cases/{case_id}/pages/{page_id}/decisions`: the stored decision.
+ *
+ * `page_status` is the status the decision left the page in. A repeat of a
+ * decision is answered with the one stored the first time.
+ */
 export interface DecisionRecorded {
   actor: DemoRole;
   case_id: string;
@@ -349,7 +356,7 @@ export interface DecisionRecorded {
  * Request of `POST /cases/{case_id}/pages/{page_id}/decisions`.
  */
 export interface DecisionRequest {
-  actor: DemoRole;
+  actor: string;
   decision: Decision;
 }
 /**
@@ -454,6 +461,15 @@ export interface WordBox {
 export interface PageBoxesQuery {
   quote_end?: number | null;
   quote_start?: number | null;
+}
+/**
+ * Request of `POST /api/cases/{case_id}/pages/{page_id}/decisions`.
+ *
+ * It names no actor: `web` passes the request's demo role on as the actor
+ * (AD-9), so a browser cannot say who decided.
+ */
+export interface PageDecisionRequest {
+  decision: Decision;
 }
 /**
  * Response of `GET /cases/{case_id}/pages`; empty until redaction is done.

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRole } from "../role/roleStore";
 import {
   caseProgress,
+  classification,
+  decisionRecorded,
   errorBody,
   fakeServer,
   json,
@@ -11,6 +13,8 @@ import {
 } from "../test/server";
 import {
   ApiError,
+  decidePage,
+  getClassifications,
   getMe,
   getProgress,
   IDEMPOTENCY_KEY_HEADER,
@@ -422,5 +426,150 @@ describe("1.6 API client", () => {
     );
 
     expect(error).toMatchObject({ status: 403, code: "role_not_allowed" });
+  });
+});
+
+describe("1.10 API client", () => {
+  const PAGE = pageProgress(2, "awaiting_customer").page_id;
+
+  it("sends a decision as a POST with the role header and the decision only", async () => {
+    const server = fakeServer();
+    setRole("customer");
+
+    await expect(decidePage(UPLOADED.case_id, PAGE, "keep")).resolves.toEqual(
+      decisionRecorded(UPLOADED.case_id, PAGE, "keep", "customer"),
+    );
+
+    expect(server.calls).toEqual([
+      {
+        path: `/api/cases/${UPLOADED.case_id}/pages/${PAGE}/decisions`,
+        method: "POST",
+        role: "customer",
+        contentType: "application/json",
+        // No actor: the server takes it from the role header.
+        body: JSON.stringify({ decision: "keep" }),
+      },
+    ]);
+  });
+
+  it("turns a refused decision into an ApiError with the server's code", async () => {
+    fakeServer((call) =>
+      call.path.endsWith("/decisions")
+        ? json(
+            409,
+            errorBody(
+              "not_awaiting_decision",
+              "Not waiting for this decision.",
+            ),
+          )
+        : undefined,
+    );
+    setRole("customer");
+
+    await expect(
+      decidePage(UPLOADED.case_id, PAGE, "discard"),
+    ).rejects.toMatchObject({ status: 409, code: "not_awaiting_decision" });
+  });
+
+  it("refuses an answer that is not the decision that was sent", async () => {
+    let answer: unknown = decisionRecorded(
+      UPLOADED.case_id,
+      PAGE,
+      "discard",
+      "customer",
+    );
+    fakeServer((call) =>
+      call.path.endsWith("/decisions") ? json(200, answer) : undefined,
+    );
+    setRole("customer");
+
+    // Another decision, and another page.
+    await expect(
+      decidePage(UPLOADED.case_id, PAGE, "keep"),
+    ).rejects.toMatchObject({ status: 200, code: null });
+    answer = decisionRecorded(UPLOADED.case_id, UPLOADED.case_id, "keep", null);
+    await expect(
+      decidePage(UPLOADED.case_id, PAGE, "keep"),
+    ).rejects.toBeInstanceOf(ApiError);
+    // No decision at all: null, a list, a text.
+    for (const nothing of [null, [], "keep", {}]) {
+      answer = nothing;
+      await expect(
+        decidePage(UPLOADED.case_id, PAGE, "keep"),
+      ).rejects.toMatchObject({ name: "ApiError", status: 200, code: null });
+    }
+  });
+
+  it("keeps a page id from changing the path a decision is sent on", async () => {
+    const server = fakeServer();
+    setRole("customer");
+
+    await expect(
+      decidePage(UPLOADED.case_id, "../../me?x=", "keep"),
+    ).rejects.toBeInstanceOf(ApiError);
+
+    expect(server.calls[0]?.path).toBe(
+      `/api/cases/${UPLOADED.case_id}/pages/..%2F..%2Fme%3Fx%3D/decisions`,
+    );
+  });
+
+  it("reads the classifications of a case, with the confidence as the server's number", async () => {
+    let classifications: unknown[] = [
+      classification(UPLOADED.case_id, 2, "other", 0.96),
+    ];
+    const server = fakeServer((call) =>
+      call.path.endsWith("/classifications")
+        ? json(200, { case_id: UPLOADED.case_id, classifications })
+        : undefined,
+    );
+    setRole("customer");
+
+    await expect(getClassifications(UPLOADED.case_id)).resolves.toMatchObject({
+      classifications: [
+        { page_id: PAGE, page_type: "other", confidence: 0.96 },
+      ],
+    });
+    expect(server.calls[0]).toMatchObject({
+      path: `/api/cases/${UPLOADED.case_id}/classifications`,
+      method: "GET",
+      role: "customer",
+    });
+
+    const good = classification(UPLOADED.case_id, 1, "invoice", 1);
+    for (const broken of [
+      null,
+      "a page",
+      { ...good, page_id: 7 },
+      { ...good, page_type: null },
+      { ...good, confidence: "0.96" },
+      { ...good, confidence: null },
+      // A confidence is a number from 0 to 1.
+      { ...good, confidence: 1.01 },
+      { ...good, confidence: -0.1 },
+      { ...good, confidence: Number.NaN },
+    ]) {
+      classifications = [good, broken];
+      await expect(getClassifications(UPLOADED.case_id)).rejects.toMatchObject({
+        status: 200,
+        code: null,
+      });
+    }
+  });
+
+  it("refuses classifications that are about another case, or are no list", async () => {
+    let answer: unknown = { case_id: PAGE, classifications: [] };
+    fakeServer((call) =>
+      call.path.endsWith("/classifications") ? json(200, answer) : undefined,
+    );
+    setRole("customer");
+
+    await expect(getClassifications(UPLOADED.case_id)).rejects.toMatchObject({
+      status: 200,
+      code: null,
+    });
+    answer = { case_id: UPLOADED.case_id, classifications: "none" };
+    await expect(getClassifications(UPLOADED.case_id)).rejects.toBeInstanceOf(
+      ApiError,
+    );
   });
 });

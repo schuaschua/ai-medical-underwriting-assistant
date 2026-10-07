@@ -16,6 +16,7 @@ from contracts.enums import ActorKind, CaseStatus, PageStatus, StageStatus
 from contracts.errors import NO_TRACE_ID, DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from contracts.models.intake import RedactionResult
+from workflow.domain.entities import PageDecision
 
 
 class RecordOutcome(StrEnum):
@@ -33,6 +34,27 @@ class RecordOutcome(StrEnum):
     CASE_FAILED = "case_failed"
     # A redaction result for a case whose pages are tracked already.
     PAGES_ALREADY_TRACKED = "pages_already_tracked"
+
+
+class DecisionOutcome(StrEnum):
+    """How the store left a human decision."""
+
+    RECORDED = "recorded"
+    # The same decision is stored for the page already: nothing was written.
+    REPEATED = "repeated"
+    UNKNOWN_CASE = "unknown_case"
+    UNKNOWN_PAGE = "unknown_page"
+    # The page, or its case, awaits no such decision. Nothing was written.
+    NOT_AWAITING = "not_awaiting"
+
+
+@dataclass(frozen=True, slots=True)
+class Decided:
+    """What the store answers a decision with."""
+
+    outcome: DecisionOutcome
+    # The decision the store holds: the new one, or the one stored before.
+    decision: PageDecision | None = None
 
 
 # What the lifecycle itself is called in an audit record, as `<app id>:<part>`.
@@ -67,6 +89,8 @@ class Recording:
     # Pages that begin to be tracked, each as `uploaded`.
     new_pages: tuple[NewPage, ...] = ()
     page_change: PageChange | None = None
+    # Set for a human decision; stored as its own row with the event (AD-10).
+    decision: PageDecision | None = None
 
 
 # The page status a done stage result leaves its page in.

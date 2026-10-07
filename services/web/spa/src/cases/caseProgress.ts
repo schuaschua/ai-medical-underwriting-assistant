@@ -57,6 +57,8 @@ interface Reads {
   notBefore: number;
   /** Counts the starts: an answer to a read sent before one is out of date. */
   starts: number;
+  /** A read was asked for while one was out: another follows it at once. */
+  again: boolean;
 }
 
 /** The wait after `failures` failed reads in a row: doubled each time, to a limit. */
@@ -83,6 +85,9 @@ export function useCaseProgress(caseIds: readonly string[]): {
   const current = useRef<CaseStates>({});
   const reads = useRef<Record<string, Reads>>({});
   const mounted = useRef(true);
+  // The read itself, for the read that follows one that was out when the
+  // user asked: set once `read` exists.
+  const readAgain = useRef<(caseId: string) => void>(() => undefined);
 
   const readsOf = useCallback((caseId: string): Reads => {
     reads.current[caseId] ??= {
@@ -92,6 +97,7 @@ export function useCaseProgress(caseIds: readonly string[]): {
       failures: 0,
       notBefore: 0,
       starts: 0,
+      again: false,
     };
     return reads.current[caseId];
   }, []);
@@ -133,6 +139,11 @@ export function useCaseProgress(caseIds: readonly string[]): {
     (caseId: string, asked = false) => {
       const mine = readsOf(caseId);
       const before = stateOf(current.current, caseId);
+      if (asked && mine.inFlight) {
+        // The read that is out may have been answered before what the user
+        // just did: its answer is followed by a new read.
+        mine.again = true;
+      }
       if (
         // One read at a time for a case: answers cannot overtake each other.
         mine.inFlight ||
@@ -190,10 +201,18 @@ export function useCaseProgress(caseIds: readonly string[]): {
         )
         .finally(() => {
           mine.inFlight = false;
+          if (mine.again) {
+            mine.again = false;
+            readAgain.current(caseId);
+          }
         });
     },
     [readsOf, set],
   );
+
+  useEffect(() => {
+    readAgain.current = (caseId: string) => read(caseId, true);
+  }, [read]);
 
   /** Read a case again now, whatever its back-off: the user asked. */
   const check = useCallback(

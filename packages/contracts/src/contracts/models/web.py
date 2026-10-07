@@ -3,7 +3,7 @@
 from typing import Literal
 
 from contracts.base import ContractModel
-from contracts.enums import DemoRole
+from contracts.enums import Decision, DemoRole
 from contracts.ids import CaseId, DocumentId
 
 
@@ -29,3 +29,13 @@ class UploadedCase(ContractModel):
 
     case_id: CaseId
     document_id: DocumentId
+
+
+class PageDecisionRequest(ContractModel):
+    """Request of `POST /api/cases/{case_id}/pages/{page_id}/decisions`.
+
+    It names no actor: `web` passes the request's demo role on as the actor
+    (AD-9), so a browser cannot say who decided.
+    """
+
+    decision: Decision

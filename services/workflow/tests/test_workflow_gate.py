@@ -44,9 +44,11 @@ from workflow.adapters.orchestration import (
     ROUTE_PAGE,
     SETTLE_CASE_AFTER_GATE,
     build_case_lifecycle,
+    decision_event,
 )
 from workflow.adapters.scheduler import Activities, ActivityFailed, build_worker
-from workflow.domain import gate
+from workflow.domain import case_status, gate
+from workflow.domain.case_status import case_status_after_gate
 from workflow.domain.cases import (
     record_route,
     record_stage_result,
@@ -56,7 +58,6 @@ from workflow.domain.entities import StartParameters
 from workflow.domain.gate import (
     GATE_ACTOR,
     Route,
-    case_status_after_gate,
     route_page,
     route_recording,
 )
@@ -202,8 +203,10 @@ def test_story_1_9_a_threshold_outside_zero_to_one_is_refused_at_start_up(
 
 def test_story_1_9_the_rule_is_pure() -> None:
     # The orchestration calls it, so it may use no clock, random value or I/O.
-    source = inspect.getsource(gate.route_page) + inspect.getsource(
-        gate.case_status_after_gate
+    source = (
+        inspect.getsource(gate.route_page)
+        + inspect.getsource(case_status.case_status_after_gate)
+        + inspect.getsource(case_status.case_status_following)
     )
 
     for forbidden in ("datetime", "now", "random", "await ", "open(", "store"):
@@ -211,7 +214,7 @@ def test_story_1_9_the_rule_is_pure() -> None:
 
 
 @pytest.mark.parametrize(
-    ("routes", "stop_after", "case_status"),
+    ("routes", "stop_after", "expected"),
     [
         ([Route.EXTRACTION, Route.EXTRACTION], None, CaseStatus.RUNNING),
         ([Route.EXTRACTION, Route.CUSTOMER], None, CaseStatus.AWAITING_HUMAN),
@@ -223,9 +226,12 @@ def test_story_1_9_the_rule_is_pure() -> None:
     ],
 )
 def test_story_1_9_the_case_status_after_the_gate(
-    routes: list[Route], stop_after: StopAfter | None, case_status: CaseStatus
+    routes: list[Route], stop_after: StopAfter | None, expected: CaseStatus
 ) -> None:
-    assert case_status_after_gate(routes, stop_after) is case_status
+    # Story 1.10: the rule reads the page statuses the routes gave.
+    page_statuses = [route.page_status for route in routes]
+
+    assert case_status_after_gate(page_statuses, stop_after) is expected
 
 
 # --- The recording of a route --------------------------------------------------------
@@ -381,37 +387,58 @@ def test_story_1_9_a_failed_case_takes_no_route(
     assert store.pages[first].page_status is PageStatus.CLASSIFIED
 
 
+def gated_case(
+    store: MemoryCaseStore,
+    case_id: str,
+    routes: list[Route],
+    parameters: StartParameters = PARAMETERS,
+) -> tuple[FakeStages, list[str]]:
+    """A started case whose pages the gate has routed, and that is not settled yet."""
+    stages, page_ids = classified_case(
+        store, case_id, pages=len(routes), parameters=parameters
+    )
+
+    async def route_all() -> None:
+        for page_id, route in zip(page_ids, routes, strict=True):
+            await record_route(
+                case_id,
+                page_id,
+                stages.classifications[(case_id, page_id)].classification_id,
+                route,
+                THRESHOLD,
+                store=store,
+            )
+
+    asyncio.run(route_all())
+    return stages, page_ids
+
+
 @pytest.mark.parametrize(
-    ("wanted", "kept"),
+    ("routes", "stop_after", "kept"),
     [
-        (CaseStatus.AWAITING_HUMAN, CaseStatus.AWAITING_HUMAN),
-        (CaseStatus.COMPLETED, CaseStatus.COMPLETED),
+        ([Route.CUSTOMER, Route.EXTRACTION], None, CaseStatus.AWAITING_HUMAN),
+        ([Route.TRIAGE], None, CaseStatus.AWAITING_HUMAN),
+        ([Route.EXTRACTION, Route.EXTRACTION], None, CaseStatus.RUNNING),
+        ([Route.CUSTOMER, Route.EXTRACTION], StopAfter.GATE, CaseStatus.COMPLETED),
     ],
 )
 def test_story_1_9_the_case_is_given_its_status_after_the_gate(
-    store: MemoryCaseStore, case_id: str, wanted: CaseStatus, kept: CaseStatus
+    store: MemoryCaseStore,
+    case_id: str,
+    routes: list[Route],
+    stop_after: StopAfter | None,
+    kept: CaseStatus,
 ) -> None:
-    classified_case(store, case_id)
+    # Story 1.10: the status is not handed in. It is worked out from the
+    # stored pages, by the rule every decision uses too.
+    gated_case(store, case_id, routes, replace(PARAMETERS, stop_after=stop_after))
 
     async def settle() -> CaseStatus:
-        return await settle_case_after_gate(case_id, wanted, store=store)
+        return (await settle_case_after_gate(case_id, store=store)).case_status
 
     # Safe to repeat: the second call finds the status set.
     assert [asyncio.run(settle()), asyncio.run(settle())] == [kept, kept]
     assert store.cases[case_id].case_status is kept
-
-
-@pytest.mark.parametrize("wanted", [CaseStatus.FAILED, CaseStatus.RUNNING])
-def test_story_1_9_the_gate_gives_a_case_no_other_status(
-    store: MemoryCaseStore, case_id: str, wanted: CaseStatus
-) -> None:
-    classified_case(store, case_id)
-
-    with pytest.raises(DomainError) as raised:
-        asyncio.run(settle_case_after_gate(case_id, wanted, store=store))
-
-    assert raised.value.code is ErrorCode.VALIDATION_FAILED
-    assert store.cases[case_id].case_status is CaseStatus.RUNNING
 
 
 def test_story_1_9_a_failed_case_stays_failed_after_the_gate(
@@ -420,13 +447,11 @@ def test_story_1_9_a_failed_case_stays_failed_after_the_gate(
     async def scenario() -> CaseStatus:
         await store.start(new_case(case_id, PARAMETERS, NOW))
         await record_stage_result(redaction_failed(case_id), store=store)
-        return await settle_case_after_gate(
-            case_id, CaseStatus.AWAITING_HUMAN, store=store
-        )
+        return (await settle_case_after_gate(case_id, store=store)).case_status
 
     assert asyncio.run(scenario()) is CaseStatus.FAILED
     with pytest.raises(DomainError) as raised:
-        asyncio.run(settle_case_after_gate(new_id(), CaseStatus.COMPLETED, store=store))
+        asyncio.run(settle_case_after_gate(new_id(), store=store))
     assert raised.value.code is ErrorCode.NOT_FOUND
 
 
@@ -438,10 +463,25 @@ class RecordingContext:
 
     def __init__(self) -> None:
         self.asked: list[dict[str, Any]] = []
+        # Story 1.10: the external events the orchestrator waits for, by name.
+        self.awaited: list[str] = []
 
     def call_activity(self, activity: str, **options: Any) -> object:
         self.asked.append({"activity": activity, **options})
         return task.CompletableTask[Any]()
+
+    def wait_for_external_event(self, name: str, **options: Any) -> object:
+        self.awaited.append(name)
+        return task.CompletableTask[Any]()
+
+
+# Story 1.10: as the last answer, says the orchestrator is expected to be
+# waiting for people now. Its result is then the events it waits for.
+WAITING = object()
+
+
+def waiting_for(*events: str) -> dict[str, list[str]]:
+    return {"waiting_for": list(events)}
 
 
 def run_lifecycle(
@@ -458,6 +498,8 @@ def run_lifecycle(
     next(steps)
     asked_at_each_wait = [len(context.asked)]
     for answer in answers:
+        if answer is WAITING:
+            return context.asked, waiting_for(*context.awaited), asked_at_each_wait
         try:
             if isinstance(answer, Exception):
                 steps.throw(answer)
@@ -493,6 +535,18 @@ def routed(route: str) -> dict[str, str]:
     return {"outcome": "ok", "case_status": "running", "route": route}
 
 
+def settled_waiting(page_ids: list[str], statuses: list[str]) -> dict[str, Any]:
+    """A settle activity's answer for a case with a waiting page: its status, and each page's.
+
+    Story 1.10: the lifecycle waits for the pages the settle found waiting.
+    """
+    return {
+        "outcome": "ok",
+        "case_status": "awaiting_human",
+        "page_statuses": dict(zip(page_ids, statuses, strict=True)),
+    }
+
+
 def routes_asked(asked: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [step for step in asked if step["activity"] == ROUTE_PAGE]
 
@@ -522,7 +576,8 @@ def test_story_1_9_after_classification_every_page_is_routed_and_the_case_settle
             redacted(page_ids),
             answers,
             [routed(route) for route in routes],
-            {"outcome": "ok", "case_status": "awaiting_human"},
+            settled_waiting(page_ids, routes),
+            WAITING,
         ],
     )
 
@@ -544,14 +599,22 @@ def test_story_1_9_after_classification_every_page_is_routed_and_the_case_settle
         for page_id, answer, route in zip(page_ids, answers, routes, strict=True)
     ]
     # All four were asked for together, after every page was classified.
-    assert asked_at_each_wait == [1, 2, 6, 10, 11]
-    # Then the case: a page waits for a person.
+    # After the settle nothing more is asked for: the lifecycle waits.
+    assert asked_at_each_wait == [1, 2, 6, 10, 11, 11]
+    # Then the case: a page waits for a person. The status is not handed
+    # in: the activity works it out from the stored pages (story 1.10).
     assert asked[-1] == {
         "activity": SETTLE_CASE_AFTER_GATE,
-        "input": {"case_id": case_id, "case_status": "awaiting_human"},
+        "input": {"case_id": case_id},
         "retry_policy": RETRY,
     }
-    assert result == {"case_id": case_id, "case_status": "awaiting_human"}
+    # The lifecycle does not end there: it waits for the decision about
+    # each waiting page (story 1.10).
+    assert result == waiting_for(
+        decision_event(page_ids[1], PageStatus.AWAITING_CUSTOMER),
+        decision_event(page_ids[2], PageStatus.AWAITING_TRIAGE),
+        decision_event(page_ids[3], PageStatus.AWAITING_CUSTOMER),
+    )
 
 
 def test_story_1_9_a_case_whose_pages_all_go_to_extraction_goes_on_running(
@@ -595,7 +658,7 @@ def test_story_1_9_a_case_started_with_stop_after_gate_ends_completed(
 
     # The page is routed like any other, and then the case ends.
     assert [step["input"]["route"] for step in routes_asked(asked)] == [route]
-    assert asked[-1]["input"] == {"case_id": case_id, "case_status": "completed"}
+    assert asked[-1]["input"] == {"case_id": case_id}
     assert result == {"case_id": case_id, "case_status": "completed"}
 
 
@@ -603,7 +666,8 @@ def test_story_1_9_a_case_is_routed_with_the_threshold_its_confirm_step_answered
     case_id: str,
 ) -> None:
     started = {"case_id": case_id, "classifier_contender": "llm"}
-    pages: list[object] = [redacted([new_id()]), [classified(True, 0.6)]]
+    page_id = new_id()
+    pages: list[object] = [redacted([page_id]), [classified(True, 0.6)]]
 
     strict, _, _ = run_lifecycle(
         started,
@@ -611,7 +675,8 @@ def test_story_1_9_a_case_is_routed_with_the_threshold_its_confirm_step_answered
             confirmed(0.9),
             *pages,
             [routed("awaiting_triage")],
-            {"outcome": "ok", "case_status": "awaiting_human"},
+            settled_waiting([page_id], ["awaiting_triage"]),
+            WAITING,
         ],
     )
     lenient, result, _ = run_lifecycle(
@@ -660,24 +725,27 @@ def test_story_1_9_the_case_is_settled_on_the_routes_the_trail_holds(
     # A retry: the route activity of the one page had recorded
     # `awaiting_triage` on an earlier run. Asked now to record `extracting`,
     # it answers with what is stored, and the case is settled on that.
+    page_id = new_id()
     asked, result, _ = run_lifecycle(
         {"case_id": case_id, "classifier_contender": "llm"},
         [
             CONFIRMED,
-            redacted([new_id()]),
+            redacted([page_id]),
             [classified(True, 0.95)],
             [routed("awaiting_triage")],
-            {"outcome": "ok", "case_status": "awaiting_human"},
+            settled_waiting([page_id], ["awaiting_triage"]),
+            WAITING,
         ],
     )
 
     assert routes_asked(asked)[0]["input"]["route"] == "extracting"
     assert asked[-1] == {
         "activity": SETTLE_CASE_AFTER_GATE,
-        "input": {"case_id": case_id, "case_status": "awaiting_human"},
+        "input": {"case_id": case_id},
         "retry_policy": RETRY,
     }
-    assert result == {"case_id": case_id, "case_status": "awaiting_human"}
+    # And it waits for the decision the stored route asks for (story 1.10).
+    assert result == waiting_for(decision_event(page_id, PageStatus.AWAITING_TRIAGE))
 
 
 @pytest.mark.parametrize(
@@ -709,7 +777,8 @@ def test_story_1_9_the_orchestrator_stays_deterministic(case_id: str) -> None:
         redacted(page_ids),
         [classified(True, 0.95), classified(False, 0.4)],
         [routed("extracting"), routed("awaiting_triage")],
-        {"outcome": "ok", "case_status": "awaiting_human"},
+        settled_waiting(page_ids, ["extracting", "awaiting_triage"]),
+        WAITING,
     ]
     started = {"case_id": case_id, "classifier_contender": "llm"}
 
@@ -1032,12 +1101,14 @@ def test_story_1_9_a_retry_under_a_changed_setting_keeps_the_route_that_was_stor
             redacted([first]),
             [classified(True, 0.6)],
             [again],
-            {"outcome": "ok", "case_status": "awaiting_human"},
+            settled_waiting([first], ["awaiting_triage"]),
+            WAITING,
         ],
     )
     assert routes_asked(asked)[0]["input"]["route"] == "extracting"
-    assert asked[-1]["input"] == {"case_id": case_id, "case_status": "awaiting_human"}
-    assert result["case_status"] == "awaiting_human"
+    # It asks for the settle, and then waits for the underwriter (story 1.10).
+    assert asked[-1]["activity"] == SETTLE_CASE_AFTER_GATE
+    assert result == waiting_for(decision_event(first, PageStatus.AWAITING_TRIAGE))
 
 
 def test_story_1_9_the_route_activity_answers_what_no_retry_can_mend(
@@ -1122,8 +1193,8 @@ def test_story_1_9_a_route_that_cannot_be_written_fails_the_activity_for_a_retry
 def test_story_1_9_the_settle_activity_gives_the_case_its_status_after_the_gate(
     store: MemoryCaseStore, case_id: str
 ) -> None:
-    stages, _ = classified_case(store, case_id)
-    settled = {"case_id": case_id, "case_status": "awaiting_human"}
+    stages, page_ids = gated_case(store, case_id, [Route.CUSTOMER, Route.EXTRACTION])
+    settled = {"case_id": case_id}
 
     with service_loop() as loop:
         activities = Activities(store, loop, 5.0, stages, 5.0)
@@ -1131,45 +1202,58 @@ def test_story_1_9_the_settle_activity_gives_the_case_its_status_after_the_gate(
         answers = [
             activities.settle_case_after_gate(context, settled) for _ in range(2)
         ]
-        unknown = activities.settle_case_after_gate(
-            context, {**settled, "case_id": new_id()}
-        )
+        unknown = activities.settle_case_after_gate(context, {"case_id": new_id()})
         store.fail = True
         with pytest.raises(ActivityFailed):
             activities.settle_case_after_gate(context, settled)
 
-    assert answers == [{"outcome": "ok", "case_status": "awaiting_human"}] * 2
+    # The case's status, and each page's as the settle read it (story
+    # 1.10): ids and statuses only (AD-6).
+    assert (
+        answers == [settled_waiting(page_ids, ["awaiting_customer", "extracting"])] * 2
+    )
     assert unknown == {"outcome": "refused", "reason": "not_found"}
     assert store.cases[case_id].case_status is CaseStatus.AWAITING_HUMAN
 
 
 @pytest.mark.parametrize(
     "settled",
-    [
-        {"case_status": "failed"},
-        {"case_status": "running"},
-        {"case_status": "paused"},
-        {"case_status": None},
-        {},
-        {"case_status": "completed", "case_id": None},
-    ],
-    ids=["failed", "running", "unknown", "null", "missing", "no-case"],
+    [{}, {"case_id": None}, {"case_id": 7}],
+    ids=["missing", "null", "not-an-id"],
 )
-def test_story_1_9_the_settle_activity_takes_only_the_statuses_the_gate_sets(
+def test_story_1_9_the_settle_activity_refuses_a_command_that_names_no_case(
     store: MemoryCaseStore, case_id: str, settled: dict[str, Any]
 ) -> None:
-    stages, _ = classified_case(store, case_id)
+    stages, _ = gated_case(store, case_id, [Route.CUSTOMER])
 
     with service_loop() as loop:
         activities = Activities(store, loop, 5.0, stages, 5.0)
         answer = activities.settle_case_after_gate(
-            task.ActivityContext(case_id, 5), {"case_id": case_id, **settled}
+            task.ActivityContext(case_id, 5), settled
         )
 
-    # Never `failed`, which only a failed stage or the lifecycle's own
-    # failure gives a case, with its event; and nothing else either.
     assert answer == {"outcome": "refused", "reason": "validation_failed"}
     assert store.cases[case_id].case_status is CaseStatus.RUNNING
+
+
+@pytest.mark.parametrize("handed_in", ["failed", "completed", "running", "paused"])
+def test_story_1_9_the_settle_activity_takes_no_status_from_its_caller(
+    store: MemoryCaseStore, case_id: str, handed_in: str
+) -> None:
+    # Never `failed`, which only a failed stage or the lifecycle's own
+    # failure gives a case, with its event; and nothing else either: the
+    # status comes from the stored pages alone (story 1.10).
+    stages, page_ids = gated_case(store, case_id, [Route.TRIAGE, Route.EXTRACTION])
+
+    with service_loop() as loop:
+        activities = Activities(store, loop, 5.0, stages, 5.0)
+        answer = activities.settle_case_after_gate(
+            task.ActivityContext(case_id, 5),
+            {"case_id": case_id, "case_status": handed_in},
+        )
+
+    assert answer == settled_waiting(page_ids, ["awaiting_triage", "extracting"])
+    assert store.cases[case_id].case_status is CaseStatus.AWAITING_HUMAN
 
 
 # --- Progress ----------------------------------------------------------------------------
@@ -1194,7 +1278,7 @@ def test_story_1_9_progress_shows_the_routed_statuses_and_no_failure_reason(
                 THRESHOLD,
                 store=store,
             )
-        await settle_case_after_gate(case_id, CaseStatus.AWAITING_HUMAN, store=store)
+        await settle_case_after_gate(case_id, store=store)
 
     asyncio.run(gate_the_case())
 

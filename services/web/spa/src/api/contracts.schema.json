@@ -626,6 +626,7 @@
     },
     "DecisionRecorded": {
       "additionalProperties": false,
+      "description": "Response of `POST /cases/{case_id}/pages/{page_id}/decisions`: the stored decision.\n\n`page_status` is the status the decision left the page in. A repeat of a\ndecision is answered with the one stored the first time.",
       "properties": {
         "actor": {
           "$ref": "#/$defs/DemoRole"
@@ -674,7 +675,9 @@
       "description": "Request of `POST /cases/{case_id}/pages/{page_id}/decisions`.",
       "properties": {
         "actor": {
-          "$ref": "#/$defs/DemoRole"
+          "pattern": "\\S",
+          "title": "Actor",
+          "type": "string"
         },
         "decision": {
           "$ref": "#/$defs/Decision"
@@ -1144,6 +1147,20 @@
         }
       },
       "title": "PageBoxesQuery",
+      "type": "object"
+    },
+    "PageDecisionRequest": {
+      "additionalProperties": false,
+      "description": "Request of `POST /api/cases/{case_id}/pages/{page_id}/decisions`.\n\nIt names no actor: `web` passes the request's demo role on as the actor\n(AD-9), so a browser cannot say who decided.",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/Decision"
+        }
+      },
+      "required": [
+        "decision"
+      ],
+      "title": "PageDecisionRequest",
       "type": "object"
     },
     "PageList": {

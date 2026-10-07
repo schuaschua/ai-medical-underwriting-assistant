@@ -1,7 +1,9 @@
-"""The routes of `workflow`: the probes, the start of a case, its progress and its audit trail.
+"""The routes of `workflow`: the probes, the start of a case, its progress, its audit trail and decisions.
 
 Only `web` calls these, through Dapr (spine, Operations). Stage results are
 not posted here: the orchestration's activities record them (AD-2, AD-8).
+The decision route is the only way a page is kept, discarded, accepted or
+denied (AD-10).
 """
 
 import logging
@@ -10,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated, Protocol
 
-from fastapi import APIRouter, Body, Path
+from fastapi import APIRouter, Body, Path, Request
 
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import UUID7_PATTERN
@@ -19,15 +21,19 @@ from contracts.models.workflow import (
     AuditTrail,
     CaseProgress,
     CaseStarted,
+    DecisionRecorded,
+    DecisionRequest,
     StartCaseRequest,
 )
 from contracts.operations import get_operation
+from workflow.adapters.telemetry import current_trace_id
 from workflow.domain.cases import (
     read_audit_trail,
     read_progress,
     start_case,
     utc_now,
 )
+from workflow.domain.decisions import record_decision
 from workflow.domain.entities import StartParameters
 from workflow.domain.ports import CaseStore, LifecycleEngine
 from workflow.settings import HEALTH_PATH, READY_PATH
@@ -38,6 +44,7 @@ NOT_READY_MESSAGE = "The service is not ready."
 
 # An id that is not a UUIDv7 is refused with 422 before anything is looked up.
 CaseIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
+PageIdPath = Annotated[str, Path(pattern=UUID7_PATTERN)]
 
 
 class SchemaRevision(Protocol):
@@ -129,5 +136,24 @@ def build_router(dependencies: Dependencies) -> APIRouter:
     @router.get(get_operation("read_audit_trail").path)
     async def audit_trail_route(case_id: CaseIdPath) -> AuditTrail:
         return await read_audit_trail(case_id, store=dependencies.store)
+
+    # AD-10: the one decision operation. The actor is in the body, as `web`
+    # passed it on (AD-9); the domain refuses any that is not a demo role.
+    @router.post(get_operation("record_decision").path)
+    async def record_decision_route(
+        case_id: CaseIdPath,
+        page_id: PageIdPath,
+        decision: DecisionRequest,
+        request: Request,
+    ) -> DecisionRecorded:
+        return await record_decision(
+            case_id,
+            page_id,
+            decision,
+            store=dependencies.store,
+            engine=dependencies.engine,
+            trace_id=current_trace_id(request.headers.get("traceparent")),
+            now=dependencies.now,
+        )
 
     return router

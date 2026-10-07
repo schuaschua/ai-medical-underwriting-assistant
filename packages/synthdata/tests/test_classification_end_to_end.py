@@ -31,6 +31,7 @@ from synthdata_stack import (
     audit_rows,
     completed,
     query,
+    start_and_wait,
     workflow_service,
 )
 
@@ -38,7 +39,6 @@ from classification.adapters.http.app import create_app as create_classification
 from contracts.errors import ErrorBody, ErrorCode
 from contracts.ids import new_id
 from contracts.models.classification import ClassificationResult
-from contracts.models.workflow import AuditTrail, CaseProgress
 from contracts.rules import is_medical
 from synthdata.foundry_standin import LOCAL_DEPLOYMENT, Mode, page_text_of
 from workflow.settings import Settings
@@ -58,23 +58,6 @@ def classification_rows(admin: Settings) -> list[tuple[Any, ...]]:
     )
 
 
-def start_and_wait(
-    workflow_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    sidecar: ServicesBehindSidecar,
-    case_id: str,
-) -> tuple[CaseProgress, AuditTrail, dict[str, Any]]:
-    """Start the case, wait for its lifecycle to end, and read what it left."""
-    with workflow_service(workflow_settings, sidecar) as client:
-        assert client.post(f"/cases/{case_id}/start").status_code == 200
-        state = completed(scheduler_client, case_id)
-        progress = CaseProgress.model_validate(
-            client.get(f"/cases/{case_id}/progress").json()
-        )
-        trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
-    return progress, trail, json.loads(state.serialized_output or "")
-
-
 # --- The whole case ------------------------------------------------------------------------
 
 
@@ -91,14 +74,17 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         intake=intake.app(), classification=classification.app()
     )
 
-    progress, trail, output = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
+    progress, trail, _ = start_and_wait(
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        waits_for_a_human=True,
     )
 
-    # Every page was classified, and the lifecycle has ended (`start_and_wait`
-    # waited for it): the gate sent each medical page on to extraction and
-    # each other page back to the customer (story 1.9), so the case waits for
-    # a human.
+    # Every page was classified, and the gate sent each medical page on to
+    # extraction and each other page back to the customer (story 1.9), so
+    # the case waits for a human, and its lifecycle with it (story 1.10).
     page_ids = [page.page_id for page in intake.pages(case_id).pages]
     assert len(page_ids) == 6
     assert [(page.page_id, page.page_status.value) for page in progress.pages] == [
@@ -106,7 +92,6 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         for page_id, expected in zip(page_ids, key["pages"], strict=True)
     ]
     assert progress.case_status.value == "awaiting_human"
-    assert output == {"case_id": case_id, "case_status": "awaiting_human"}
 
     # The service lists one classification per page, each with a page type,
     # medical or not, a confidence from 0 to 1, a one-line reason and the
@@ -188,8 +173,12 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
         intake=intake.app(), classification=classification.app()
     )
 
-    progress, _, output = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
+    progress, _, _ = start_and_wait(
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        waits_for_a_human=True,
     )
 
     # Three of five runs agree: the majority's type, at 0.6.
@@ -202,7 +191,6 @@ def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_it
         "awaiting_triage"
     ] * 3
     assert progress.case_status.value == "awaiting_human"
-    assert output == {"case_id": case_id, "case_status": "awaiting_human"}
     for page, expected in zip(progress.pages, key["pages"], strict=True):
         item = listed[page.page_id]
         assert item.page_type.value == expected["page_type"]

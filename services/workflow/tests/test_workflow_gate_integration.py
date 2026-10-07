@@ -26,7 +26,7 @@ from workflow_fakes import (
     redaction_done,
     redaction_failed,
 )
-from workflow_local import connect
+from workflow_local import connect, wait_for_case_status
 
 from contracts.enums import (
     CaseStatus,
@@ -139,11 +139,16 @@ def test_story_1_9_every_page_of_a_started_case_leaves_classified_for_its_route(
 
     with workflow_service(service_settings, sidecar.transport()) as client:
         client.post(f"/cases/{case_id}/start", json={"eval_run_id": eval_run_id})
-        state = completed(scheduler_client, case_id)
+        # Story 1.10: pages wait for people, so the lifecycle does not end
+        # here. It waits, and the case says so.
         progress = CaseProgress.model_validate(
-            client.get(f"/cases/{case_id}/progress").json()
+            wait_for_case_status(client, case_id, "awaiting_human")
         )
         trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
+        state = scheduler_client.get_orchestration_state(case_id)
+        # Nobody will decide these pages: the waiting lifecycle is ended.
+        scheduler_client.terminate_orchestration(case_id)
+        scheduler_client.wait_for_orchestration_completion(case_id, timeout=60)
 
     page_ids = sidecar.stages.results[case_id].page_ids
     # Progress shows the routed statuses; a page waits for a person, so the
@@ -152,10 +157,8 @@ def test_story_1_9_every_page_of_a_started_case_leaves_classified_for_its_route(
     assert progress.case_status is CaseStatus.AWAITING_HUMAN
     assert progress.error_code is None
     assert {page.error_code for page in progress.pages} == {None}
-    assert json.loads(state.serialized_output or "") == {
-        "case_id": case_id,
-        "case_status": "awaiting_human",
-    }
+    assert state is not None
+    assert state.runtime_status is OrchestrationStatus.RUNNING
     # The trail: one `page.routed` event per page, after that page's
     # `page.classified` event, and no page is routed twice.
     for page_id, route in zip(page_ids, MIXED_ROUTES, strict=True):
@@ -325,24 +328,22 @@ def test_story_1_9_the_real_store_records_a_route_once_and_only_from_classified(
                 # A page that was never classified is not routed.
                 await route(second, new_id(), Route.EXTRACTION),
             ]
+            # Worked out from the stored pages (story 1.10): one of them
+            # waits for the customer.
             statuses = [
-                await settle_case_after_gate(
-                    case_id, CaseStatus.AWAITING_HUMAN, store=store
-                ),
-                await settle_case_after_gate(
-                    case_id, CaseStatus.AWAITING_HUMAN, store=store
-                ),
+                (await settle_case_after_gate(case_id, store=store)).case_status,
+                (await settle_case_after_gate(case_id, store=store)).case_status,
             ]
             # A later stage fails a page: the case fails, and stays failed.
             await record_stage_result(
                 classification_failed(case_id, third, "model_unavailable"), store=store
             )
             statuses.append(
-                await settle_case_after_gate(case_id, CaseStatus.COMPLETED, store=store)
+                (await settle_case_after_gate(case_id, store=store)).case_status
             )
             progress = await store.progress(case_id)
             assert progress is not None
-            assert await store.move_case(new_id(), CaseStatus.COMPLETED, NOW) is None
+            assert await store.settle_case(new_id(), NOW) is None
             return outcomes, statuses, progress
         finally:
             await database.dispose()

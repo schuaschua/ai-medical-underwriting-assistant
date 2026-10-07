@@ -22,10 +22,11 @@ from synthdata_stack import (
     audit_rows,
     completed,
     query,
+    start_and_wait,
     workflow_service,
 )
 
-from contracts.models.workflow import AuditTrail, CaseProgress
+from contracts.models.workflow import CaseProgress
 from intake.adapters.blob import build_blob_service
 from synthdata.language_standin import Mode
 from workflow.settings import Settings
@@ -44,20 +45,19 @@ def test_story_1_7_an_uploaded_and_started_case_shows_redaction_done_and_its_pag
         intake=intake.app(), classification=classification.app()
     )
 
-    with workflow_service(workflow_service_settings, sidecar) as client:
-        assert client.post(f"/cases/{case_id}/start").status_code == 200
-        completed(scheduler_client, case_id)
-        progress = CaseProgress.model_validate(
-            client.get(f"/cases/{case_id}/progress").json()
-        )
-        trail = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
+    progress, trail, _ = start_and_wait(
+        workflow_service_settings,
+        scheduler_client,
+        sidecar,
+        case_id,
+        waits_for_a_human=True,
+    )
 
     # Progress: redaction done, and the six pages of the case tracked: as
-    # `uploaded` when redaction ended. The lifecycle has ended by now
-    # (`completed` above waited for it): each page is classified (story 1.8)
-    # and routed by the gate (story 1.9), the three medical pages on to
+    # `uploaded` when redaction ended. By now each page is classified (story
+    # 1.8) and routed by the gate (story 1.9), the three medical pages on to
     # extraction and the other three back to the customer, so the case waits
-    # for a human.
+    # for a human, and its lifecycle with it (story 1.10).
     assert (progress.case_status.value, progress.redaction_status.value) == (
         "awaiting_human",
         "done",
