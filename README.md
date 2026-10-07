@@ -45,8 +45,8 @@ holds the ruff, mypy and pytest settings for every member.
   in an append-only step log (database schema `verdict`); its prompt is in
   `services/verdict/src/verdict/prompts/`. No service imports another service's code.
 - `evals/` is the bake-off runner, a dev tool that is in no image: one command that drives the running
-  system through `web`, as a user would, over the synthetic cases and their answer key, and writes the
-  scoreboard files (see "The bake-off" below and `evals/README.md`). It is the only code besides the
+  system through `web`, as a user would, over the synthetic cases and their answer key, scores the
+  retrieval rows or the two classifiers, and writes the scoreboard files (see "The bake-off" below and `evals/README.md`). It is the only code besides the
   generator's tests that reads `data/answer-key/`.
 
 ### Install and check
@@ -1081,6 +1081,41 @@ of it in Azure (the only folder of `data/` in any image); `dapr.yaml` points the
 `.work/scoreboards/`, so after `./tools/dev.sh` and a local `uv run python -m bakeoff` the screen
 shows the local stand-in figures. The screen reads the files once: use "Read again" after a new
 run. A file written before story 3.5 has no `failed_runs` and is refused: run the bake-off again.
+
+**The classifier bake-off** (story 4.3) is a second mode of the same command, and a run of its own:
+
+```sh
+uv run python -m bakeoff --bake-off classification
+```
+
+It uploads each file of the scored page set (`data/answer-key/page-set.json`: the 22 case files, 94
+pages) once per classifier contender, started with that contender, the run's `eval_run_id` and
+`stop_after` `gate`, so the pages are redacted, classified and routed and nothing else runs: no
+extraction, no verdict, no page waiting for a person. Then it reads each case's progress and stored
+classifications through `web` and compares every page with its expected label. Per contender, over
+every page: **accuracy** (the stored `is_medical` is the expected one), **calibration** (of the
+pages scored 0.90 or more, the share labelled correctly), **queue rate** (the share the gate sent to
+triage) and the stated **cost per page** (`evals/static-metrics.yaml`). The winner is the more
+accurate contender among those calibrated at 0.90 or more, then the one with the lower queue rate;
+there is none when no contender qualifies. A page without a result is wrong and listed; a file whose
+case fails or does not finish counts all its pages as wrong and is listed; a contender whose
+commands `classification` refuses (`doc-intelligence` without a classifier) is recorded as not
+measured, with the case that showed it, and the run goes on. Every stored `reason` is checked for
+the planted identifiers of its case, and one that holds any fails the command like a leak (exit
+status 1); a file whose reasons could not be read is listed and makes the run incomplete (3), as
+does a run that measured no contender, which writes no file. The run writes `classification.json`
+(`ClassificationScoreboard`), under `.work/scoreboards/` locally and in `data/scoreboards/` only
+with `--deployed`. Local figures are not results here either: both stand-ins read the generator's
+headings.
+
+`web` serves that file as the other two, on `GET /api/scoreboards/classification`, and the
+Scoreboard screen shows it in a second table under the retrieval one: a line per classifier with
+accuracy, calibration and queue rate as percentages with their counts, the pages not classified,
+the stated cost per page, the winner marked with the word "Winner", and "Not measured" for a
+contender without figures. Under the table, each line names the classifier it is about: one that
+could not be run, files that failed, reasons that leaked or were not read. Each table stands alone:
+where one file is missing, that table says that its bake-off (named) has not been run and the other
+is shown all the same.
 
 ### Contract types
 

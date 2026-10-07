@@ -218,6 +218,55 @@ export function redactionScoreboard(changes: Record<string, unknown> = {}) {
   };
 }
 
+/** One line of the classifier scoreboard: measured with these figures, or not measured. */
+export function classifierScore(
+  contender: string,
+  measured: boolean,
+  changes: Record<string, unknown> = {},
+) {
+  const numbers = {
+    pages: 94,
+    accuracy: 0.9574,
+    right_pages: 90,
+    calibration: 0.975,
+    confident_pages: 80,
+    confident_right_pages: 78,
+    queue_rate: 0.1277,
+    queued_pages: 12,
+    pages_not_classified: 2,
+  };
+  return {
+    contender,
+    measured,
+    ...(measured
+      ? numbers
+      : Object.fromEntries(Object.keys(numbers).map((name) => [name, null]))),
+    cost_per_page: null,
+    ...changes,
+  };
+}
+
+/** The classifier scoreboard as the runner writes it: both contenders measured, `llm` the winner. */
+export function classificationScoreboard(
+  changes: Record<string, unknown> = {},
+) {
+  return {
+    run: SCOREBOARD_RUN,
+    contenders: [
+      classifierScore("llm", true),
+      classifierScore("doc-intelligence", true),
+    ],
+    winner: "llm",
+    not_run: [],
+    unscored_cases: [],
+    unclassified_pages: [],
+    reasons_checked: 184,
+    reason_leaks: [],
+    reasons_not_checked: [],
+    ...changes,
+  };
+}
+
 /** A thumbnail as `web` serves it. The bytes are no picture and need not be. */
 export function thumbnail(): Response {
   return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {

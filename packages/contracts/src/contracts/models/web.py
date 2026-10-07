@@ -19,6 +19,7 @@ from contracts.base import (
 from contracts.enums import (
     CaseStatus,
     ChunkSet,
+    ClassifierContender,
     Decision,
     DemoRole,
     PageType,
@@ -350,4 +351,191 @@ class RedactionScoreboard(ContractModel):
             )
         if self.may_also_be_redacted_masked > self.may_also_be_redacted:
             raise ValueError("more strings masked than were listed")
+        return self
+
+
+# --- The classifier scoreboard (story 4.3) --------------------------------------------
+
+# A page counts for calibration when its stored confidence is at least this,
+# and a contender can win only when its calibration is at least this too.
+CALIBRATION_BAR = 0.9
+# The same bar in whole numbers, so that it is held against counts and not
+# against a rounded figure: at least 9 in 10.
+_BAR_PART, _BAR_WHOLE = 9, 10
+
+
+def meets_calibration_bar(confident_right_pages: int, confident_pages: int) -> bool:
+    """Whether the pages scored 0.90 or more were labelled correctly at least 9 times in 10.
+
+    False when there is no such page: a contender without a calibration
+    cannot win.
+    """
+    return (
+        confident_pages > 0
+        and confident_right_pages * _BAR_WHOLE >= confident_pages * _BAR_PART
+    )
+
+
+class ClassifierScore(ContractModel):
+    """One classifier contender on the classifier scoreboard.
+
+    A contender that could not be run is not measured: it carries no figure
+    and no count. A measured one carries the counts behind each figure, all
+    over the same pages: every page of the scored set.
+    """
+
+    contender: ClassifierContender
+    measured: bool
+    # Every page of the scored set.
+    pages: Count | None
+    # Pages whose stored `is_medical` is the expected one, over all pages. A
+    # page without a usable result is wrong.
+    accuracy: UnitFloat | None
+    right_pages: Count | None
+    # Of the pages scored 0.90 or more, those labelled correctly. Null when
+    # no page was scored that high.
+    calibration: UnitFloat | None
+    confident_pages: Count | None
+    confident_right_pages: Count | None
+    # Pages the gate routed to the underwriter's triage queue, over all pages.
+    queue_rate: UnitFloat | None
+    queued_pages: Count | None
+    # Pages that count as wrong for want of a result: a failed result, none,
+    # or a case that failed or did not finish.
+    pages_not_classified: Count | None
+    # Stated, not measured; null when nobody stated it.
+    cost_per_page: StatedFigure | None
+
+    @model_validator(mode="after")
+    def _figures_follow_counts(self) -> Self:
+        counts = (
+            self.pages,
+            self.right_pages,
+            self.confident_pages,
+            self.confident_right_pages,
+            self.queued_pages,
+            self.pages_not_classified,
+        )
+        figures = (self.accuracy, self.calibration, self.queue_rate)
+        if not self.measured:
+            if any(value is not None for value in (*counts, *figures)):
+                raise ValueError("a contender that is not measured carries no numbers")
+            return self
+        if any(value is None for value in counts):
+            raise ValueError(
+                "a measured contender carries the counts behind its figures"
+            )
+        pages, right, confident, confident_right, queued, missing = (
+            value or 0 for value in counts
+        )
+        if not pages:
+            raise ValueError("a measured contender was scored on at least one page")
+        if (
+            right + missing > pages
+            or confident + missing > pages
+            or queued + missing > pages
+            or confident_right > min(confident, right)
+        ):
+            raise ValueError("the counts of a contender do not hold together")
+        expected = (
+            share(right, pages),
+            share(confident_right, confident) if confident else None,
+            share(queued, pages),
+        )
+        if figures != expected:
+            raise ValueError("each figure must be its counts' share")
+        return self
+
+    @property
+    def can_win(self) -> bool:
+        """Measured, and calibrated at least 9 times in 10 on the pages it was sure of."""
+        return self.measured and meets_calibration_bar(
+            self.confident_right_pages or 0, self.confident_pages or 0
+        )
+
+
+class ClassifierUnscoredCase(ContractModel):
+    """A file of the page set whose pages all count as wrong for one contender, and why."""
+
+    contender: ClassifierContender
+    case_key: OneLine
+    # Null when the upload itself failed.
+    case_id: CaseId | None
+    # The last status read; null when none was.
+    case_status: CaseStatus | None
+    reason: UnscoredReason
+    error_code: ErrorCode | None
+
+
+class UnclassifiedPage(ContractModel):
+    """A page with a failed result, or none, for one contender: it counts as wrong."""
+
+    contender: ClassifierContender
+    case_key: OneLine
+    page_number: PageNumber
+    # The code of the page's failure; null when the page simply has no result.
+    error_code: ErrorCode | None
+
+
+class UncheckedReasons(ContractModel):
+    """A file whose stored reasons could not be read for one contender: nothing of them was checked."""
+
+    contender: ClassifierContender
+    case_key: OneLine
+
+
+class ReasonLeak(ContractModel):
+    """A planted identifier found in a stored `reason`. Never the value itself."""
+
+    contender: ClassifierContender
+    case_key: OneLine
+    page_number: PageNumber
+    # The category of the planted identifier (`person_name`, `address`, ...).
+    category: OneLine
+
+
+class ClassificationScoreboard(ContractModel):
+    """The file `classification.json`: both classifier contenders, scored on the same pages."""
+
+    run: ScoreboardRun
+    # Every contender once, in the order of the enum.
+    contenders: list[ClassifierScore]
+    # The more accurate contender among those whose calibration is at least
+    # 0.90, then the one with the lower queue rate. Null when none qualifies.
+    winner: ClassifierContender | None
+    # For each contender that was tried and could not be run: the first file
+    # of the set, the case it was uploaded as and what that case ended with,
+    # which is all the run knows of why. No other file was uploaded for it.
+    not_run: list[ClassifierUnscoredCase]
+    unscored_cases: list[ClassifierUnscoredCase]
+    # The pages with a failed result or none. The pages of an unscored case
+    # are named by their case above, and only those that failed are here too.
+    unclassified_pages: list[UnclassifiedPage]
+    # The stored reasons read and looked through for planted identifiers,
+    # and the ones that held one.
+    reasons_checked: Count
+    reason_leaks: list[ReasonLeak]
+    # Files of a measured contender whose reasons were not read: the case
+    # was not final, or its classifications could not be read. While there
+    # is one, the reasons check is not clean, whatever `reason_leaks` holds.
+    reasons_not_checked: list[UncheckedReasons]
+
+    @model_validator(mode="after")
+    def _contenders_are_all_and_the_winner_qualifies(self) -> Self:
+        if [score.contender for score in self.contenders] != list(ClassifierContender):
+            raise ValueError("contenders must be every contender once, in order")
+        measured = {score.contender for score in self.contenders if score.measured}
+        tried = [case.contender for case in self.not_run]
+        if len(set(tried)) != len(tried) or measured & set(tried):
+            raise ValueError(
+                "not_run names a contender once, and none that was measured"
+            )
+        able = {score.contender for score in self.contenders if score.can_win}
+        if (self.winner is None) != (not able) or (
+            self.winner is not None and self.winner not in able
+        ):
+            raise ValueError(
+                "the winner is a measured contender calibrated at 0.90 or more, "
+                "and there is one if any qualifies"
+            )
         return self

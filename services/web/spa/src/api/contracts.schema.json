@@ -687,6 +687,85 @@
       "title": "ClassificationResult",
       "type": "object"
     },
+    "ClassificationScoreboard": {
+      "additionalProperties": false,
+      "description": "The file `classification.json`: both classifier contenders, scored on the same pages.",
+      "properties": {
+        "contenders": {
+          "items": {
+            "$ref": "#/$defs/ClassifierScore"
+          },
+          "title": "Contenders",
+          "type": "array"
+        },
+        "not_run": {
+          "items": {
+            "$ref": "#/$defs/ClassifierUnscoredCase"
+          },
+          "title": "Not Run",
+          "type": "array"
+        },
+        "reason_leaks": {
+          "items": {
+            "$ref": "#/$defs/ReasonLeak"
+          },
+          "title": "Reason Leaks",
+          "type": "array"
+        },
+        "reasons_checked": {
+          "minimum": 0,
+          "title": "Reasons Checked",
+          "type": "integer"
+        },
+        "reasons_not_checked": {
+          "items": {
+            "$ref": "#/$defs/UncheckedReasons"
+          },
+          "title": "Reasons Not Checked",
+          "type": "array"
+        },
+        "run": {
+          "$ref": "#/$defs/ScoreboardRun"
+        },
+        "unclassified_pages": {
+          "items": {
+            "$ref": "#/$defs/UnclassifiedPage"
+          },
+          "title": "Unclassified Pages",
+          "type": "array"
+        },
+        "unscored_cases": {
+          "items": {
+            "$ref": "#/$defs/ClassifierUnscoredCase"
+          },
+          "title": "Unscored Cases",
+          "type": "array"
+        },
+        "winner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassifierContender"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "contenders",
+        "winner",
+        "not_run",
+        "unscored_cases",
+        "unclassified_pages",
+        "reasons_checked",
+        "reason_leaks",
+        "reasons_not_checked"
+      ],
+      "title": "ClassificationScoreboard",
+      "type": "object"
+    },
     "ClassifierContender": {
       "enum": [
         "llm",
@@ -713,6 +792,222 @@
         "reason"
       ],
       "title": "ClassifierOutput",
+      "type": "object"
+    },
+    "ClassifierScore": {
+      "additionalProperties": false,
+      "description": "One classifier contender on the classifier scoreboard.\n\nA contender that could not be run is not measured: it carries no figure\nand no count. A measured one carries the counts behind each figure, all\nover the same pages: every page of the scored set.",
+      "properties": {
+        "accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Accuracy"
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Calibration"
+        },
+        "confident_pages": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Confident Pages"
+        },
+        "confident_right_pages": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Confident Right Pages"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "cost_per_page": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatedFigure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "measured": {
+          "title": "Measured",
+          "type": "boolean"
+        },
+        "pages": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pages"
+        },
+        "pages_not_classified": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Pages Not Classified"
+        },
+        "queue_rate": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Queue Rate"
+        },
+        "queued_pages": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Queued Pages"
+        },
+        "right_pages": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Right Pages"
+        }
+      },
+      "required": [
+        "contender",
+        "measured",
+        "pages",
+        "accuracy",
+        "right_pages",
+        "calibration",
+        "confident_pages",
+        "confident_right_pages",
+        "queue_rate",
+        "queued_pages",
+        "pages_not_classified",
+        "cost_per_page"
+      ],
+      "title": "ClassifierScore",
+      "type": "object"
+    },
+    "ClassifierUnscoredCase": {
+      "additionalProperties": false,
+      "description": "A file of the page set whose pages all count as wrong for one contender, and why.",
+      "properties": {
+        "case_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Case Id"
+        },
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "case_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaseStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "enum": [
+            "case_failed",
+            "not_final_in_time",
+            "wait_without_label",
+            "request_failed"
+          ],
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contender",
+        "case_key",
+        "case_id",
+        "case_status",
+        "reason",
+        "error_code"
+      ],
+      "title": "ClassifierUnscoredCase",
       "type": "object"
     },
     "ClassifyCommand": {
@@ -1634,6 +1929,38 @@
       ],
       "title": "ReasonEffect",
       "type": "string"
+    },
+    "ReasonLeak": {
+      "additionalProperties": false,
+      "description": "A planted identifier found in a stored `reason`. Never the value itself.",
+      "properties": {
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "category": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Category",
+          "type": "string"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contender",
+        "case_key",
+        "page_number",
+        "category"
+      ],
+      "title": "ReasonLeak",
+      "type": "object"
     },
     "RedactionCommand": {
       "additionalProperties": false,
@@ -2738,6 +3065,63 @@
         "has_more"
       ],
       "title": "TriageQueue",
+      "type": "object"
+    },
+    "UncheckedReasons": {
+      "additionalProperties": false,
+      "description": "A file whose stored reasons could not be read for one contender: nothing of them was checked.",
+      "properties": {
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        }
+      },
+      "required": [
+        "contender",
+        "case_key"
+      ],
+      "title": "UncheckedReasons",
+      "type": "object"
+    },
+    "UnclassifiedPage": {
+      "additionalProperties": false,
+      "description": "A page with a failed result, or none, for one contender: it counts as wrong.",
+      "properties": {
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "contender": {
+          "$ref": "#/$defs/ClassifierContender"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorCode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contender",
+        "case_key",
+        "page_number",
+        "error_code"
+      ],
+      "title": "UnclassifiedPage",
       "type": "object"
     },
     "UnscoredCase": {

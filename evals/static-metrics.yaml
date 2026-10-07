@@ -74,3 +74,19 @@ rows:
       amount: "4"
       unit: stories built
       source: "epics.md: stories 2.2 (ingestion), 2.3 (search operation), 3.3 (Azure AI Search index) and 3.8 (knowledge base and agentic retrieval)"
+
+# What the classifier scoreboard prints beside each contender (story 4.3): the
+# cost of classifying one page.
+#
+# Cost per page: not stated yet. The unit to state it in is USD per page, from
+# the Azure price list of the day the bake-off is run in Azure, with the list's
+# address and that date as the source. For `llm` a page is
+# `CLASSIFICATION_CLASSIFIER_RUNS` (5) chat calls with the page's text and its
+# thumbnail: state it from the tokens the deployment's metrics show for the run,
+# divided by the pages. For `doc-intelligence` it is the list price of a custom
+# classification page (see deferred-work.md, story 4.3).
+classifiers:
+  llm:
+    cost_per_page: null
+  doc-intelligence:
+    cost_per_page: null

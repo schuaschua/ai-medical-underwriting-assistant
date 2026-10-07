@@ -1012,6 +1012,20 @@ curl -s "$WEB/api/cases/<case_id>/classifications" -H 'X-Demo-Role: underwriter'
 
 Every page has a result with `"contender": "doc-intelligence"`, the service's confidence and the fixed reason; a page whose result failed says why in the case's audit trail.
 
+**Step 5. Run the classification bake-off.** Added by story 4.3; not yet run. Only after step 4 shows results of `doc-intelligence`, and after the retrieval bake-off of the same session, so that the two do not share the chat deployment's token limit. From the repository root:
+
+```bash
+uv run python -m bakeoff --bake-off classification --deployed --web-address "$WEB"
+```
+
+It uploads the 22 case files twice (44 cases of an eval run, in neither of the underwriter's lists), stops each at the gate, and writes `data/scoreboards/classification.json` (`evals/README.md`, "The classification bake-off"). Read the printout before committing the file:
+
+- Both contenders must be measured. `doc-intelligence: not measured` with a line `cannot be run here` means that the first case started with it failed with no page classified: `classification` refused the contender (no endpoint or classifier id in its settings), or the classifier is not trained and `workflow`'s retries ran out. Open that case's audit trail, go back to step 3, and run the bake-off again as a new run.
+- Exit status 0 is a whole run. 3 means a file was not scored, a page has no result or a file's reasons were not read: start the command again with `--eval-run-id <the id it printed>` if it was a passing fault (a case that failed stays failed: a new run scores it again). 1 means a stored reason holds a planted identifier: do not publish, and look at the reason. 4 means the run broke off; resume it with its id.
+- State the cost per page of both contenders in `evals/static-metrics.yaml` first if it is to be on the scoreboard (`deferred-work.md`, story 4.3).
+
+Commit the file, then build and deploy `web` again: the Scoreboard screen shows it in its second table.
+
 ## Out-of-band log
 
 Every command that changed Azure or GitHub outside the pipeline, newest last (`terraform.md` rule 29).

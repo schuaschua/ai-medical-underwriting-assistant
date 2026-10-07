@@ -1,4 +1,4 @@
-"""Story 3.5: `web` serves the scoreboard files the bake-off runner wrote, read-only (AD-17)."""
+"""Stories 3.5 and 4.3: `web` serves the scoreboard files the bake-off runner wrote, read-only (AD-17)."""
 
 import json
 import logging
@@ -9,7 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from contracts.errors import ErrorBody
-from contracts.models.web import RedactionScoreboard, RetrievalScoreboard
+from contracts.models.web import (
+    ClassificationScoreboard,
+    RedactionScoreboard,
+    RetrievalScoreboard,
+)
 from web.adapters.http.app import create_app
 from web.adapters.http.scoreboards import MAX_FILE_BYTES
 from web.settings import Settings
@@ -18,6 +22,7 @@ CUSTOMER = {"X-Demo-Role": "customer"}
 UNDERWRITER = {"X-Demo-Role": "underwriter"}
 RETRIEVAL = "/api/scoreboards/retrieval"
 REDACTION = "/api/scoreboards/redaction"
+CLASSIFICATION = "/api/scoreboards/classification"
 
 RUN = {
     "eval_run_id": "0199b7a0-0000-7000-8000-000000000006",
@@ -80,6 +85,62 @@ def redaction_report() -> dict[str, Any]:
     }
 
 
+def classification_board() -> dict[str, Any]:
+    """The classifier scoreboard: `llm` measured and the winner, the other not run."""
+    measured = {
+        "contender": "llm",
+        "measured": True,
+        "pages": 94,
+        "accuracy": 0.9574,
+        "right_pages": 90,
+        "calibration": 0.975,
+        "confident_pages": 80,
+        "confident_right_pages": 78,
+        "queue_rate": 0.1277,
+        "queued_pages": 12,
+        "pages_not_classified": 1,
+        "cost_per_page": {
+            "amount": "0.01",
+            "unit": "USD per page",
+            "source": "price list",
+        },
+    }
+    return {
+        "run": RUN,
+        "contenders": [
+            measured,
+            {
+                **dict.fromkeys(measured),
+                "contender": "doc-intelligence",
+                "measured": False,
+            },
+        ],
+        "winner": "llm",
+        "not_run": [
+            {
+                "contender": "doc-intelligence",
+                "case_key": "case-001",
+                "case_id": "0199b7a0-0000-7000-8000-000000000001",
+                "case_status": "failed",
+                "reason": "case_failed",
+                "error_code": "stage_failed",
+            }
+        ],
+        "unscored_cases": [],
+        "unclassified_pages": [
+            {
+                "contender": "llm",
+                "case_key": "case-006",
+                "page_number": 4,
+                "error_code": None,
+            }
+        ],
+        "reasons_checked": 93,
+        "reason_leaks": [],
+        "reasons_not_checked": [{"contender": "llm", "case_key": "case-007"}],
+    }
+
+
 def error_code(response_json: object) -> str:
     return ErrorBody.model_validate(response_json).error.code.value
 
@@ -112,7 +173,7 @@ def test_story_3_5_the_underwriter_reads_each_scoreboard_file_as_it_is_and_nothi
     # No file yet: the bake-off has not been run. The folder's own note is
     # no scoreboard.
     (scoreboards_dir / "README.md").write_text("# Scoreboards\n", encoding="utf-8")
-    for path in (RETRIEVAL, REDACTION):
+    for path in (RETRIEVAL, REDACTION, CLASSIFICATION):
         not_run = client.get(path, headers=UNDERWRITER)
         assert (not_run.status_code, error_code(not_run.json())) == (404, "not_found")
 
@@ -137,8 +198,19 @@ def test_story_3_5_the_underwriter_reads_each_scoreboard_file_as_it_is_and_nothi
     assert report.json() == redaction_report()
     assert RedactionScoreboard.model_validate(report.json()).clean is False
 
+    # Story 4.3: the classifier bake-off's file is served as the other two:
+    # 404 until it is written, then as it is, checked against its model.
+    assert client.get(CLASSIFICATION, headers=UNDERWRITER).status_code == 404
+    (scoreboards_dir / "classification.json").write_text(
+        json.dumps(classification_board())
+    )
+    classifiers = client.get(CLASSIFICATION, headers=UNDERWRITER)
+    assert classifiers.status_code == 200
+    assert classifiers.json() == classification_board()
+    assert ClassificationScoreboard.model_validate(classifiers.json()).winner == "llm"
+
     # AD-9: the scoreboard is the underwriter's; AD-17: nothing takes a score.
-    for path in (RETRIEVAL, REDACTION):
+    for path in (RETRIEVAL, REDACTION, CLASSIFICATION):
         refused = client.get(path, headers=CUSTOMER)
         assert (refused.status_code, error_code(refused.json())) == (
             403,
@@ -149,8 +221,9 @@ def test_story_3_5_the_underwriter_reads_each_scoreboard_file_as_it_is_and_nothi
                 method, path, headers=UNDERWRITER, json=retrieval_board()
             )
             assert written.status_code == 405
-    # Only the two files are served, by their route: no name reaches the folder.
+    # Only the three files are served, by their route: no name reaches the folder.
     for path in (
+        "/api/scoreboards/classification.json",
         "/api/scoreboards",
         "/api/scoreboards/README.md",
         "/api/scoreboards/retrieval.json",
@@ -205,3 +278,12 @@ def test_story_3_5_a_file_that_does_not_fit_its_model_is_a_plain_500_and_the_log
     assert response.status_code == 500
     assert "Specimendale" not in response.text + caplog.text
     assert "file=redaction.json" in caplog.text
+
+    # Story 4.3: a classifier scoreboard whose winner was not measured.
+    unmeasured_winner = {**classification_board(), "winner": "doc-intelligence"}
+    (scoreboards_dir / "classification.json").write_text(json.dumps(unmeasured_winner))
+    caplog.clear()
+    with caplog.at_level(logging.ERROR):
+        response = client.get(CLASSIFICATION, headers=UNDERWRITER)
+    assert (response.status_code, "contenders" in response.text) == (500, False)
+    assert "file=classification.json" in caplog.text

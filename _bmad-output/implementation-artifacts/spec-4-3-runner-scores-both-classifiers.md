@@ -2,7 +2,8 @@
 title: 'Story 4.3: Runner scores both classifiers and the scoreboard shows the winner'
 type: 'feature'
 created: '2026-10-08'
-status: 'ready-for-dev'
+status: 'done'
+baseline_commit: 'dbce613b2d6b981f2ce036d73e882017b176fa5c'
 route: 'dispatch'
 review_loop_iteration: 0
 context:
@@ -88,6 +89,31 @@ context:
 ## Spec Change Log
 
 ## Review Triage Log
+
+Review 1 (2026-10-08): blind hunter (B), edge-case hunter (E), verification-gap (V). No intent gap, no bad spec.
+
+| # | Finding | Verdict | Route | Evidence |
+| --- | --- | --- | --- | --- |
+| B1, E1, E3, V2 | An outage of `classification` during the first file reads as "not measured"; a run that measured nothing exits 0 and can be published | high | patch | `_never_classified` takes "failed, redaction done, every page still uploaded" as the contender not being runnable; `classification_is_incomplete` does not look at whether anything was measured. A deployed run would replace the published file with no figures. |
+| B2 | "Not measured" is proven only against a fake written to match it | medium | patch | The whole-path test always gives the stand-in a classifier; `doc-intelligence` without one against the real `workflow` and `classification` is the state the rule exists for. |
+| B3 | The file keeps nothing of why a contender is not measured | low | patch | The first file's case id and code go to a log line only, while the READMEs tell the operator to check that case. |
+| B8, E6 | Reasons that were never read are not counted, and the report still says none held an identifier | medium | patch | A file whose classifications could not be read, or that did not finish, only makes `reasons_checked` smaller. The same rule as the redaction check's `cases_not_checked`. |
+| B6 | The winner is ordered on rounded shares while calibration is held against counts | low | patch | Both contenders share the page count; a direct correction to the counts. |
+| B10 | An `OSError` replaces an earlier reason, and a state file that cannot be written is told as one file's failure | low | patch | A resume depends on that file; the two handlers disagree. |
+| B9, E8 | The screen says "no classifier has a calibration of at least 90%" when none was measured, and does not say which classifier a failed file or a leaking reason belongs to | low | patch | Direct corrections of wording and of what the lines name. |
+| B13, B14 | Lines of the READMEs out of step; no step for the classification bake-off in the Azure session's instructions; one confident page is enough to qualify | low | patch | Direct corrections, and one more question for the owner in `deferred-work.md`. Sprint status beside spec status is false. |
+| B4 | A run narrowed with `--contenders` writes the other contender as not measured and names a winner of one | low | patch | The file stays local, but the published folder must refuse a narrowed classification run as it refuses a narrowed retrieval run; that guard is the patch. |
+| V1 | Two refusals of the static-metrics file from story 3.4 now pass for the wrong reason | medium | patch | Filed evidence: both broken files lack the new `classifiers` block. |
+| V3 | A failed request for one file is not shown to leave the rest of the run standing | medium | patch | Filed evidence; the likely failure of the Azure run. |
+| V4, E7 | A retrieval or training-pages run id resumed as the other bake-off is refused in one direction only, and tested in one | low | patch | Filed evidence; `begin` does not refuse a training-pages state. |
+| V5 | Exit status 3 for a page without a result in a scored file is not observed | low | defer | Filed disposition. |
+| B5 | The contract does not check which qualifying contender wins | low | reject | The rule is the runner's and is tested there; the contract refuses a winner that cannot win. |
+| B7 | Pages of a failed file are never queued but stay in the queue rate's denominator | low | reject | The spec's definition is over every page; such a file also lowers accuracy, which is decided first, and the screen counts the pages not classified. |
+| B11 | A resume cannot recover a first file that failed | low | reject | With B1's patch such a file is an unscored file, not the contender's end. |
+| B12, E5 | The page set is not checked against the answer key or the files | low | reject | The generator's own tests hold the three equal. |
+| E2 | A first file that is not final while the contender is refused for the rest | low | reject | Two faults at once; every page then counts as wrong and every file is listed. |
+| E4 | A remembered case's contender is not compared with the runner's | false | reject | The state key holds the contender. |
+| E9 | Cost per page is null for both contenders | low | reject | No figure is entered from memory; recorded for the owner. |
 
 ## Design Notes
 

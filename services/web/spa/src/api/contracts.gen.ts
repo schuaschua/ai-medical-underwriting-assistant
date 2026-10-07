@@ -139,8 +139,11 @@ export interface Contracts {
   Classification: Classification;
   ClassificationList: ClassificationList;
   ClassificationResult: ClassificationResult;
+  ClassificationScoreboard: ClassificationScoreboard;
   ClassifierContender: ClassifierContender;
   ClassifierOutput: ClassifierOutput;
+  ClassifierScore: ClassifierScore;
+  ClassifierUnscoredCase: ClassifierUnscoredCase;
   ClassifyCommand: ClassifyCommand;
   ComparePairs: ComparePairs;
   Decision: Decision;
@@ -177,6 +180,7 @@ export interface Contracts {
   ReadRuleArguments: ReadRuleArguments;
   Reason: Reason;
   ReasonEffect: ReasonEffect;
+  ReasonLeak: ReasonLeak;
   RedactionCommand: RedactionCommand;
   RedactionLeak: RedactionLeak;
   RedactionResult: RedactionResult;
@@ -205,6 +209,8 @@ export interface Contracts {
   ToolName: ToolName;
   TriagePage: TriagePage;
   TriageQueue: TriageQueue;
+  UncheckedReasons: UncheckedReasons;
+  UnclassifiedPage: UnclassifiedPage;
   UnscoredCase: UnscoredCase;
   UploadedCase: UploadedCase;
   Verdict: Verdict;
@@ -403,6 +409,99 @@ export interface ClassificationResult {
   error_code: ErrorCode | null;
   page_id: string;
   status: StageStatus;
+}
+/**
+ * The file `classification.json`: both classifier contenders, scored on the same pages.
+ */
+export interface ClassificationScoreboard {
+  contenders: ClassifierScore[];
+  not_run: ClassifierUnscoredCase[];
+  reason_leaks: ReasonLeak[];
+  reasons_checked: number;
+  reasons_not_checked: UncheckedReasons[];
+  run: ScoreboardRun;
+  unclassified_pages: UnclassifiedPage[];
+  unscored_cases: ClassifierUnscoredCase[];
+  winner: ClassifierContender | null;
+}
+/**
+ * One classifier contender on the classifier scoreboard.
+ *
+ * A contender that could not be run is not measured: it carries no figure
+ * and no count. A measured one carries the counts behind each figure, all
+ * over the same pages: every page of the scored set.
+ */
+export interface ClassifierScore {
+  accuracy: number | null;
+  calibration: number | null;
+  confident_pages: number | null;
+  confident_right_pages: number | null;
+  contender: ClassifierContender;
+  cost_per_page: StatedFigure | null;
+  measured: boolean;
+  pages: number | null;
+  pages_not_classified: number | null;
+  queue_rate: number | null;
+  queued_pages: number | null;
+  right_pages: number | null;
+}
+/**
+ * A figure the runner cannot measure: stated by hand, with where it comes from.
+ */
+export interface StatedFigure {
+  amount: string;
+  source: string;
+  unit: string;
+}
+/**
+ * A file of the page set whose pages all count as wrong for one contender, and why.
+ */
+export interface ClassifierUnscoredCase {
+  case_id: string | null;
+  case_key: string;
+  case_status: CaseStatus | null;
+  contender: ClassifierContender;
+  error_code: ErrorCode | null;
+  reason:
+    | "case_failed"
+    | "not_final_in_time"
+    | "wait_without_label"
+    | "request_failed";
+}
+/**
+ * A planted identifier found in a stored `reason`. Never the value itself.
+ */
+export interface ReasonLeak {
+  case_key: string;
+  category: string;
+  contender: ClassifierContender;
+  page_number: number;
+}
+/**
+ * A file whose stored reasons could not be read for one contender: nothing of them was checked.
+ */
+export interface UncheckedReasons {
+  case_key: string;
+  contender: ClassifierContender;
+}
+/**
+ * When and where a bake-off run was made.
+ */
+export interface ScoreboardRun {
+  eval_run_id: string;
+  finished_at: string;
+  stand_ins: boolean;
+  started_at: string;
+  web_address: string;
+}
+/**
+ * A page with a failed result, or none, for one contender: it counts as wrong.
+ */
+export interface UnclassifiedPage {
+  case_key: string;
+  contender: ClassifierContender;
+  error_code: ErrorCode | null;
+  page_number: number;
 }
 /**
  * What one LLM classifier run must return; anything else is a failed parse.
@@ -684,16 +783,6 @@ export interface RedactionScoreboard {
   run: ScoreboardRun;
 }
 /**
- * When and where a bake-off run was made.
- */
-export interface ScoreboardRun {
-  eval_run_id: string;
-  finished_at: string;
-  stand_ins: boolean;
-  started_at: string;
-  web_address: string;
-}
-/**
  * One ladder row on the retrieval scoreboard.
  *
  * A row that answered "not available" is not measured: it is listed with
@@ -718,14 +807,6 @@ export interface RetrievalRowScore {
   rule_recall: number | null;
   store: string;
   verdict_accuracy: number | null;
-}
-/**
- * A figure the runner cannot measure: stated by hand, with where it comes from.
- */
-export interface StatedFigure {
-  amount: string;
-  source: string;
-  unit: string;
 }
 /**
  * The file `retrieval.json`: every ladder row, scored on the same cases.

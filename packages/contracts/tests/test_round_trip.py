@@ -191,6 +191,20 @@ UNSCORED_CASE = {
     "error_code": "stage_failed",
 }
 LEAK = {"case_key": "case-002", "page_number": 3, "category": "person_name"}
+CLASSIFIER_SCORE = {
+    "contender": "llm",
+    "measured": True,
+    "pages": 94,
+    "accuracy": 0.9574,
+    "right_pages": 90,
+    "calibration": 0.975,
+    "confident_pages": 80,
+    "confident_right_pages": 78,
+    "queue_rate": 0.1277,
+    "queued_pages": 12,
+    "pages_not_classified": 2,
+    "cost_per_page": STATED_FIGURE,
+}
 
 SAMPLES: dict[str, dict[str, Any]] = {
     "ErrorDetail": {
@@ -369,6 +383,34 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "unscored_cases": [UNSCORED_CASE],
     },
     "RedactionLeak": LEAK,
+    "ClassifierScore": CLASSIFIER_SCORE,
+    "ClassifierUnscoredCase": {**UNSCORED_CASE, "contender": "doc-intelligence"},
+    "UnclassifiedPage": {
+        "contender": "doc-intelligence",
+        "case_key": "case-002",
+        "page_number": 3,
+        "error_code": "model_unavailable",
+    },
+    "ReasonLeak": {**LEAK, "contender": "llm"},
+    "ClassificationScoreboard": {
+        "run": SCOREBOARD_RUN,
+        "contenders": [
+            CLASSIFIER_SCORE,
+            {
+                **dict.fromkeys(CLASSIFIER_SCORE),
+                "contender": "doc-intelligence",
+                "measured": False,
+            },
+        ],
+        "winner": "llm",
+        "not_run": [{**UNSCORED_CASE, "contender": "doc-intelligence"}],
+        "unscored_cases": [{**UNSCORED_CASE, "contender": "llm"}],
+        "unclassified_pages": [],
+        "reasons_checked": 90,
+        "reason_leaks": [{**LEAK, "contender": "llm"}],
+        "reasons_not_checked": [{"contender": "llm", "case_key": "case-002"}],
+    },
+    "UncheckedReasons": {"contender": "llm", "case_key": "case-002"},
     "RetrieverPair": {"first": "r4", "second": "r5"},
     "ComparePairs": {
         "default_pair": {"first": "r4", "second": "r5"},

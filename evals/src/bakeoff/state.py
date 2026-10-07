@@ -9,6 +9,7 @@ and uploads none of them a second time.
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -28,6 +29,10 @@ class _Stored(BaseModel):
     # started once, so a resume must be the same run: null until known.
     web_address: str | None = None
     rows: list[RetrieverConfig] | None = None
+    # Which bake-off the run is: its cases are started for that one only.
+    # Null in the file of a run made before there were two, and of the
+    # training pages' tool.
+    bake_off: Literal["retrieval", "classification"] | None = None
     # The answer key's case key to the case id `web` answered the upload with.
     cases: dict[str, CaseId] = {}
 
@@ -74,8 +79,21 @@ class RunState:
         A case already started keeps its rows: started again with others,
         the new rows would have no run and would count as wrong.
         """
+        if self._stored.bake_off == "classification":
+            raise RunRefused(
+                "this eval run is a classification bake-off; it cannot be "
+                "resumed as a retrieval one"
+            )
+        if self._stored.rows is None and self._stored.cases:
+            # Cases and no rows: the training pages' tool made them, stopped
+            # at the gate. They hold no verdict run to read.
+            raise RunRefused(
+                "this eval run prepared the classifier's training pages; it "
+                "cannot be resumed as a retrieval bake-off"
+            )
         if self._stored.rows is None:
             self._stored.rows = list(rows)
+            self._stored.bake_off = "retrieval"
             self._write()
         elif self._stored.rows != list(rows):
             first = ", ".join(row.value for row in self._stored.rows)
@@ -83,6 +101,23 @@ class RunState:
                 f"this eval run started its cases with rows {first}; a resume "
                 "must run with the same rows (start a new run for others)"
             )
+
+    def begin_classification(self) -> None:
+        """Mark the run as a classification bake-off; refuse the resume of a run that is none.
+
+        Its cases stop at the gate and are kept under their contender: a
+        run that started cases for the retrieval rows, or that prepared
+        training pages, holds cases that are not these.
+        """
+        if self._stored.bake_off == "classification":
+            return
+        if self._stored.bake_off is not None or self._stored.rows or self._stored.cases:
+            raise RunRefused(
+                "this eval run is not a classification bake-off; start a new "
+                "run for one"
+            )
+        self._stored.bake_off = "classification"
+        self._write()
 
     def record(self, case_key: str, case_id: str) -> None:
         self._stored.cases[case_key] = case_id

@@ -14,15 +14,21 @@ from pydantic import ValidationError
 
 from contracts.base import ContractModel
 from contracts.errors import DomainError, ErrorCode
-from contracts.models.web import RedactionScoreboard, RetrievalScoreboard
+from contracts.models.web import (
+    ClassificationScoreboard,
+    RedactionScoreboard,
+    RetrievalScoreboard,
+)
 from web.adapters.http.errors import INTERNAL_ERROR_MESSAGE
 
 logger = logging.getLogger(__name__)
 
-# The names the runner writes the two files under. Nothing else in the
-# folder is read, whatever it holds.
+# The names the runner writes its files under. Nothing else in the folder
+# is read, whatever it holds.
 RETRIEVAL_FILE = "retrieval.json"
 REDACTION_FILE = "redaction.json"
+# Story 4.3: the classifier bake-off's file, written by a run of its own.
+CLASSIFICATION_FILE = "classification.json"
 # A scoreboard is a few kilobytes; a file far beyond that is not one.
 MAX_FILE_BYTES = 1_000_000
 
@@ -30,7 +36,7 @@ NOT_RUN_MESSAGE = "That scoreboard has not been written yet."
 
 
 class ScoreboardReader:
-    """Reads the two scoreboard files of one folder."""
+    """Reads the scoreboard files of one folder."""
 
     def __init__(self, folder: Path) -> None:
         self._folder = folder
@@ -40,6 +46,9 @@ class ScoreboardReader:
 
     def redaction(self) -> RedactionScoreboard:
         return self._read(REDACTION_FILE, RedactionScoreboard)
+
+    def classification(self) -> ClassificationScoreboard:
+        return self._read(CLASSIFICATION_FILE, ClassificationScoreboard)
 
     def _read[Board: ContractModel](self, name: str, model: type[Board]) -> Board:
         file = self._folder / name

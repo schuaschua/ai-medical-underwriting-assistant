@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     # Folder holding the built SPA (index.html and its assets).
     spa_dir: Path = _DEFAULT_SPA_DIR
     # AD-17: the folder holding the scoreboard files the bake-off runner
-    # wrote (`retrieval.json`, `redaction.json`). `web` only reads them.
+    # wrote (`retrieval.json`, `redaction.json`, `classification.json`). `web` only
+    # reads them.
     scoreboards_dir: Path = _DEFAULT_SCOREBOARDS_DIR
 
     # AD-3: the port of this service's own Dapr sidecar, on loopback. Dapr tells

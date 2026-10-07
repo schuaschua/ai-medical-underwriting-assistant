@@ -1,7 +1,7 @@
 [project]
 name = "evals"
 version = "0.1.0"
-description = "The bake-off runner: scores the retrieval rows through web's API and writes the scoreboard files (spine AD-17)"
+description = "The bake-off runner: scores the retrieval rows and the classifier contenders through web's API and writes the scoreboard files (spine AD-17)"
 requires-python = "==3.13.*"
 # A dev tool, not a service: it is in no image, and no service depends on it
 # or imports it. It talks to `web` only and is the one reader of the answer key.

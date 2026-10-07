@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
 import type {
+  ClassificationScoreboard,
+  ClassifierContender,
+  ClassifierScore,
   RedactionScoreboard,
   RetrievalRowScore,
   RetrievalScoreboard,
@@ -7,10 +10,16 @@ import type {
 } from "../api/contracts.gen";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { LocalTime } from "../components/LocalTime";
-import { type RedactionRead, useScoreboard } from "../scoreboard/scoreboard";
+import {
+  type ClassificationRead,
+  type RedactionRead,
+  type RetrievalRead,
+  useScoreboard,
+} from "../scoreboard/scoreboard";
 import { exactPercentage, strings } from "../strings";
 
 const text = strings.scoreboard;
+const classifiers = strings.classifierScoreboard;
 
 /** The columns that hold what was measured or stated of a row. */
 const FIGURE_COLUMNS = [
@@ -196,46 +205,235 @@ function Board({ board }: { board: RetrievalScoreboard }) {
   );
 }
 
-/**
- * The retrieval scoreboard: one line per row of the ladder with what the row
- * is and what the bake-off measured, the winner the file names, and the
- * redaction check of the same run. Nothing here scores, orders or chooses
- * (AD-17): every figure and count is the file's.
- */
-export function Scoreboard() {
-  const { state, refresh } = useScoreboard();
-  const readAgain = (
-    <p>
-      <button type="button" onClick={refresh}>
-        {text.readAgain}
-      </button>
-    </p>
-  );
+/** The columns that hold what was measured or stated of a contender. */
+const CLASSIFIER_COLUMNS = [
+  classifiers.accuracyColumn,
+  classifiers.calibrationColumn,
+  classifiers.queueRateColumn,
+  classifiers.notClassifiedColumn,
+  classifiers.costColumn,
+];
 
+function ClassifierFigures({ score }: { score: ClassifierScore }) {
+  if (
+    !score.measured ||
+    score.pages === null ||
+    score.pages_not_classified === null
+  ) {
+    // No number at all, whatever the file holds for the contender.
+    return <td colSpan={CLASSIFIER_COLUMNS.length}>{text.notMeasured}</td>;
+  }
+  return (
+    <>
+      <td>
+        {share(
+          score.accuracy,
+          score.right_pages,
+          score.pages,
+          classifiers.noPages,
+        )}
+      </td>
+      <td>
+        {share(
+          score.calibration,
+          score.confident_right_pages,
+          score.confident_pages,
+          classifiers.noConfidentPages,
+        )}
+      </td>
+      <td>
+        {share(
+          score.queue_rate,
+          score.queued_pages,
+          score.pages,
+          classifiers.noPages,
+        )}
+      </td>
+      <td>
+        {classifiers.notClassified(score.pages_not_classified, score.pages)}
+      </td>
+      <td>
+        <Stated figure={score.cost_per_page} />
+      </td>
+    </>
+  );
+}
+
+function ClassifierBoard({ board }: { board: ClassificationScoreboard }) {
+  return (
+    <>
+      <p>{classifiers.intro}</p>
+      <p>
+        {text.runBefore}
+        <LocalTime at={board.run.finished_at} />
+        {text.runAgainst(board.run.web_address)}{" "}
+        {text.runId(board.run.eval_run_id)}
+      </p>
+      {board.run.stand_ins && (
+        <p role="note">
+          <strong>{classifiers.standIns}</strong>
+        </p>
+      )}
+      <table aria-label={classifiers.tableLabel}>
+        <thead>
+          <tr>
+            <th scope="col">{classifiers.contenderColumn}</th>
+            {CLASSIFIER_COLUMNS.map((column) => (
+              <th key={column} scope="col">
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {board.contenders.map((score) => (
+            <tr key={score.contender}>
+              <th scope="row">
+                {classifiers.contenders[score.contender]}
+                {/* The file names the winner; it is marked in words. */}
+                {board.winner === score.contender && (
+                  <>
+                    {" "}
+                    <strong>{text.winner}</strong>
+                  </>
+                )}
+              </th>
+              <ClassifierFigures score={score} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {board.winner === null && (
+        <p>
+          {board.contenders.some((score) => score.measured)
+            ? classifiers.noWinner
+            : classifiers.noneMeasured}
+        </p>
+      )}
+      {board.not_run.map((tried) => (
+        <p key={tried.contender}>
+          {classifiers.couldNotRun(
+            classifiers.contenders[tried.contender],
+            tried.case_key,
+          )}
+        </p>
+      ))}
+      <ByClassifier
+        board={board}
+        about={board.unscored_cases}
+        say={classifiers.unscoredFiles}
+      />
+      <p>
+        {board.reason_leaks.length > 0 || board.reasons_not_checked.length > 0
+          ? classifiers.reasonsNotClean(board.reasons_checked)
+          : classifiers.reasonsClean(board.reasons_checked)}
+      </p>
+      <ByClassifier
+        board={board}
+        about={board.reason_leaks}
+        say={classifiers.reasonLeaks}
+      />
+      <ByClassifier
+        board={board}
+        about={board.reasons_not_checked}
+        say={classifiers.reasonsNotRead}
+      />
+    </>
+  );
+}
+
+/** One line per classifier the file lists something of, with how many: the file's entries, counted, never weighed. */
+function ByClassifier({
+  board,
+  about,
+  say,
+}: {
+  board: ClassificationScoreboard;
+  about: { contender: ClassifierContender }[];
+  say: (classifier: string, count: number) => string;
+}) {
+  return (
+    <>
+      {board.contenders.map(({ contender }) => {
+        const count = about.filter(
+          (entry) => entry.contender === contender,
+        ).length;
+        return (
+          count > 0 && (
+            <p key={contender}>
+              {say(classifiers.contenders[contender], count)}
+            </p>
+          )
+        );
+      })}
+    </>
+  );
+}
+
+function Retrieval({ read }: { read: RetrievalRead }) {
   return (
     <section>
       <h2>{text.heading}</h2>
-      {state.kind === "reading" && <p role="status">{text.reading}</p>}
-      {state.kind === "notRun" && (
-        <>
-          <p>{text.notRun}</p>
-          {readAgain}
-        </>
-      )}
-      {state.kind === "unreadable" && (
+      {read.kind === "notRun" && <p>{text.notRun}</p>}
+      {read.kind === "unreadable" && (
         <>
           <p>{text.unreadable}</p>
-          <ErrorMessage error={state.error} />
-          {readAgain}
+          <ErrorMessage error={read.error} />
         </>
       )}
-      {state.kind === "read" && (
+      {read.kind === "read" && (
         <>
-          <Board board={state.board} />
-          <Redaction read={state.redaction} />
-          {readAgain}
+          <Board board={read.board} />
+          <Redaction read={read.redaction} />
         </>
       )}
     </section>
+  );
+}
+
+function Classifiers({ read }: { read: ClassificationRead }) {
+  return (
+    <section>
+      <h2>{classifiers.heading}</h2>
+      {read.kind === "notRun" && <p>{classifiers.notRun}</p>}
+      {read.kind === "unreadable" && (
+        <>
+          <p>{classifiers.unreadable}</p>
+          <ErrorMessage error={read.error} />
+        </>
+      )}
+      {read.kind === "read" && <ClassifierBoard board={read.board} />}
+    </section>
+  );
+}
+
+/**
+ * The two scoreboards. The retrieval one: a line per row of the ladder with
+ * what the row is and what the bake-off measured, the winner the file names,
+ * and the redaction check of the same run. Under it the classifier one
+ * (story 4.3): a line per contender. Each stands alone: a file that is
+ * missing or does not fit hides its own table only. Nothing here scores,
+ * orders or chooses (AD-17): every figure and count is a file's.
+ */
+export function Scoreboard() {
+  const { state, refresh } = useScoreboard();
+  if (state.kind === "reading") {
+    return (
+      <section>
+        <h2>{text.heading}</h2>
+        <p role="status">{text.reading}</p>
+      </section>
+    );
+  }
+  return (
+    <>
+      <Retrieval read={state.retrieval} />
+      <Classifiers read={state.classification} />
+      <p>
+        <button type="button" onClick={refresh}>
+          {text.readAgain}
+        </button>
+      </p>
+    </>
   );
 }

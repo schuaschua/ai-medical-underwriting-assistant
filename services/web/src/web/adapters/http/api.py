@@ -25,8 +25,8 @@ routes, and through two more that exist for it: the eval search, which is
 `retrieval`'s search passed through, and a page's stored text, which its
 redaction check reads. `web` scores nothing and never sees the expected answers.
 
-The scoreboard (story 3.5, AD-17) is the two files the runner wrote, read
-from `web`'s own folder and answered as they are. There is no route that
+The scoreboard (stories 3.5 and 4.3, AD-17) is the three files the runner
+wrote, read from `web`'s own folder and answered as they are. There is no route that
 takes a score.
 
 Compare (story 3.6, AD-11) is two routes: the pair of ladder rows to show,
@@ -58,6 +58,7 @@ from contracts.models.verdict import (
     VerdictRunList,
 )
 from contracts.models.web import (
+    ClassificationScoreboard,
     ComparePairs,
     Health,
     Me,
@@ -102,6 +103,7 @@ SCOREBOARDS_STATE = "scoreboards"
 # The scoreboard files. They are `web`'s own resource: no service owns a score.
 RETRIEVAL_SCOREBOARD_PATH = "/scoreboards/retrieval"
 REDACTION_SCOREBOARD_PATH = "/scoreboards/redaction"
+CLASSIFICATION_SCOREBOARD_PATH = "/scoreboards/classification"
 # Where it keeps the pairs of rows of the Compare toggle.
 COMPARE_PAIRS_STATE = "compare_pairs"
 # The pairs. They are `web`'s own resource: a setting, not a service's data.
@@ -444,7 +446,7 @@ async def read_page_text(
 
 # --- The scoreboard files (story 3.5) ------------------------------------------------
 #
-# AD-17: the scores are files the bake-off runner wrote. Two reads, for the
+# AD-17: the scores are files the bake-off runner wrote. Three reads, for the
 # underwriter only (AD-9): each file is checked against its contracts model
 # and answered as it is. 404 `not_found` until the bake-off has been run. No
 # route here takes a score. The functions are not `async`: reading a file
@@ -463,6 +465,14 @@ def read_redaction_scoreboard(
     request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
 ) -> RedactionScoreboard:
     return _scoreboards(request).redaction()
+
+
+# Story 4.3: the classifier bake-off's file, served as the other two are.
+@role_checked.get(CLASSIFICATION_SCOREBOARD_PATH)
+def read_classification_scoreboard(
+    request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
+) -> ClassificationScoreboard:
+    return _scoreboards(request).classification()
 
 
 # --- Compare (story 3.6) -------------------------------------------------------------

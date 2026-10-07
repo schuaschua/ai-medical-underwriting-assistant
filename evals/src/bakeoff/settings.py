@@ -2,13 +2,13 @@
 
 import ipaddress
 from pathlib import Path
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from contracts.enums import RetrieverConfig
+from contracts.enums import ClassifierContender, RetrieverConfig
 from contracts.ids import EvalRunId
 from contracts.models.retrieval import DEFAULT_TOP_K, MAX_TOP_K
 
@@ -23,6 +23,10 @@ SCRATCH = REPOSITORY_ROOT / ".work"
 
 RETRIEVAL_FILE = "retrieval.json"
 REDACTION_FILE = "redaction.json"
+CLASSIFICATION_FILE = "classification.json"
+
+# The two bake-offs the one command makes, one per run (story 4.3).
+BakeOff = Literal["retrieval", "classification"]
 
 _LOOPBACK_NAMES = frozenset({"localhost"})
 
@@ -54,11 +58,18 @@ class Settings(BaseSettings):
     # cases already uploaded under it are not uploaded again.
     eval_run_id: EvalRunId | None = None
 
+    # Which bake-off this run is: the retrieval ladder, or the two
+    # classifier contenders over the scored page set.
+    bake_off: BakeOff = "retrieval"
+
     # The cases to run, by their key (`case-001`); every case when not given.
     cases: list[str] | None = None
     # The ladder rows to try; every row when not given. A row that answers
     # "not available" is recorded as not measured either way.
     rows: Annotated[list[RetrieverConfig], Field(min_length=1)] | None = None
+    # The classifier contenders to score; both when not given. One that
+    # cannot be run here is recorded as not measured either way.
+    contenders: Annotated[list[ClassifierContender], Field(min_length=1)] | None = None
     # AD-17: a hit is an expected rule in the top 5.
     top_k: Annotated[int, Field(ge=1, le=MAX_TOP_K)] = DEFAULT_TOP_K
 
@@ -117,6 +128,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "a run against this machine is not a run against the deployed environment"
             )
+        if self.bake_off == "classification" and self.rows is not None:
+            raise ValueError("the classification bake-off takes no rows")
+        if self.bake_off == "retrieval" and self.contenders is not None:
+            raise ValueError("the retrieval bake-off takes no contenders")
+        if self.contenders is not None and len(set(self.contenders)) != len(
+            self.contenders
+        ):
+            raise ValueError("a contender is named once")
         published = _within(self.scoreboard_dir, PUBLISHED_SCOREBOARDS)
         if not self.deployed and published:
             # AD-17: figures from stand-ins are not results and are never published.
@@ -124,17 +143,18 @@ class Settings(BaseSettings):
                 "only a run against the deployed environment (--deployed) writes "
                 "data/scoreboards"
             )
-        if published and (self.cases is not None or self.rows is not None):
+        narrowed = (self.cases, self.rows, self.contenders)
+        if published and any(given is not None for given in narrowed):
             # A part of the bake-off must not replace the published whole.
             raise ValueError(
-                "a run narrowed with cases or rows does not write data/scoreboards; "
-                "give it another output folder"
+                "a run narrowed with cases, rows or contenders does not write "
+                "data/scoreboards; give it another output folder"
             )
         return self
 
     @property
     def scoreboard_dir(self) -> Path:
-        """Where this run writes its two files."""
+        """Where this run writes its files."""
         if self.output_dir is not None:
             return self.output_dir
         return PUBLISHED_SCOREBOARDS if self.deployed else SCRATCH / "scoreboards"
@@ -146,6 +166,11 @@ class Settings(BaseSettings):
     @property
     def answer_key_dir(self) -> Path:
         return self.data_dir / "answer-key" / "cases"
+
+    @property
+    def page_set_file(self) -> Path:
+        """The scored page set: the files and the expected label of every page."""
+        return self.data_dir / "answer-key" / "page-set.json"
 
 
 def _within(path: Path, folder: Path) -> bool:

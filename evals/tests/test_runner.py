@@ -1,4 +1,4 @@
-"""Story 3.4: a bake-off run against a stand-in for `web`: what is sent, what is counted, what is written.
+"""Stories 3.4 and 4.3: a bake-off run against a stand-in for `web`: what is sent, what is counted, what is written.
 
 The stand-in (`support/bakeoff_fakes.py`) answers as `web` does; the case set
 is made up here. The whole path against the real services is in
@@ -20,10 +20,14 @@ from bakeoff.__main__ import (
     EXIT_REFUSED,
     main,
 )
-from bakeoff.runner import RunResult, run
+from bakeoff.runner import RunResult, run, run_classification
 from bakeoff.settings import PUBLISHED_SCOREBOARDS, Settings
 from bakeoff.state import RunRefused
-from contracts.models.web import RedactionScoreboard, RetrievalScoreboard
+from contracts.models.web import (
+    ClassificationScoreboard,
+    RedactionScoreboard,
+    RetrievalScoreboard,
+)
 
 HBA1C = "Type 2 diabetes mellitus: HbA1c 7.4 %"
 SMOKER = "smoking status: current smoker"
@@ -302,6 +306,9 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
     # stays failed and so unscored, showed a wrong verdict before.
     web.verdicts["case-902"] = {**web.verdicts["case-902"], "r1": ("decline", None)}
     web.failed_runs = {("case-902", "r3")}
+    # One page text of a case cannot be read: half a case is not checked as
+    # if it were whole, so the case is left unchecked and the run not clean.
+    web.broken_texts = {("case-903", 2)}
     uploads, starts = list(web.uploads), list(web.starts)
     again = make_run(
         settings.model_copy(update={"eval_run_id": board.run.eval_run_id}), web
@@ -311,6 +318,8 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
     assert web.starts == [*starts, "case-904"] and len(starts) == 3
     starts = list(web.starts)
     assert again.retrieval.run.eval_run_id == board.run.eval_run_id
+    assert again.redaction.cases_not_checked == ["case-903"]
+    assert (again.redaction.cases_checked, again.redaction.clean) == (3, False)
     assert [case.case_key for case in again.retrieval.unscored_cases] == [
         "case-901",
         "case-903",
@@ -339,6 +348,24 @@ def test_story_3_4_a_case_that_fails_or_hangs_is_wrong_for_every_row_and_a_resum
                 ),
                 web,
             )
+    assert web.uploads == uploads and web.starts == starts
+    # Story 4.3: nor can it be resumed as a classification bake-off.
+    clock = Clock()
+    with pytest.raises(RunRefused):
+        asyncio.run(
+            run_classification(
+                settings.model_copy(
+                    update={
+                        "eval_run_id": board.run.eval_run_id,
+                        "bake_off": "classification",
+                        "rows": None,
+                    }
+                ),
+                web.transport,
+                clock.sleep,
+                clock,
+            )
+        )
     assert web.uploads == uploads and web.starts == starts
 
 
@@ -486,3 +513,274 @@ def test_story_3_4_a_planted_name_left_in_a_page_text_fails_the_command_and_is_r
     assert main(out, web.transport) == EXIT_REFUSED
     assert len(web.uploads) == calls
     assert "Traceback" not in capsys.readouterr().err
+
+
+SURE = "extracting"
+ASK = "awaiting_customer"
+TRIAGE = "awaiting_triage"
+WHY = "The page shows laboratory results."
+
+
+def test_story_4_3_the_page_set_is_taken_to_the_gate_once_per_contender_and_both_are_scored_on_what_was_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    case_set(tmp_path)
+    web = FakeWeb()
+    web.pages = {"case-901": ["uploaded"] * 3, "case-902": ["uploaded"] * 3}
+    leaking = ("lab_report", 0.97, f"The report of Mr {NAME.split()[1]}.", SURE)
+    # The expected labels: `case-901` medical, not, medical; `case-902`
+    # medical, medical, not.
+    web.classified = {
+        # Five of six right; four pages scored 0.90 or more, all right; two
+        # pages sent to triage by the gate.
+        ("llm", "case-901"): [
+            ("lab_report", 1.0, WHY, SURE),
+            ("other", 1.0, WHY, ASK),
+            ("other", 0.6, WHY, TRIAGE),
+        ],
+        ("llm", "case-902"): [
+            ("application_form", 0.95, WHY, SURE),
+            ("lab_report", 0.8, WHY, TRIAGE),
+            ("invoice", 1.0, WHY, ASK),
+        ],
+        # One page of its first file fails, and with it that file's case.
+        # Right on the second file, where the surname of the first case's
+        # applicant is no planted identifier; `case-902`'s own telephone
+        # number, copied into a reason, is.
+        ("doc-intelligence", "case-901"): [
+            ("lab_report", 0.97, WHY, SURE),
+            None,
+            leaking,
+        ],
+        ("doc-intelligence", "case-902"): [
+            ("lab_report", 0.97, "Call (303) 555-0190 about the results.", SURE),
+            ("lab_report", 0.97, WHY, SURE),
+            ("other", 0.97, WHY, ASK),
+        ],
+    }
+    for name, value in (
+        ("EVALS_DATA_DIR", tmp_path / "data"),
+        ("EVALS_STATE_DIR", tmp_path / "state"),
+        ("EVALS_RETRY_SECONDS", 0),
+        ("EVALS_POLL_SECONDS", 0.001),
+    ):
+        monkeypatch.setenv(name, str(value))
+    run_it = ["--bake-off", "classification", "--output-dir", str(tmp_path / "out")]
+
+    # A reason that holds a planted identifier fails the run like a leak.
+    assert main(run_it, web.transport) == EXIT_LEAK
+
+    file = tmp_path / "out" / "classification.json"
+    board = ClassificationScoreboard.model_validate_json(file.read_text())
+    assert sorted(path.name for path in (tmp_path / "out").iterdir()) == [file.name]
+    # Each file was uploaded once per contender, as the customer, and
+    # started with that contender, the run's id and the stop after the gate.
+    # The first file of `doc-intelligence` failed for an ordinary reason (a
+    # page failed): the contender is measured all the same, and its other
+    # file was uploaded.
+    assert sorted(web.uploads) == ["case-901", "case-901", "case-902", "case-902"]
+    assert sorted(
+        (case.case_key, *sorted((case.started_with or {}).items()))
+        for case in web.cases.values()
+    ) == sorted(
+        (
+            key,
+            ("classifier_contender", contender),
+            ("eval_run_id", board.run.eval_run_id),
+            ("stop_after", "gate"),
+        )
+        for key in ("case-901", "case-902")
+        for contender in ("llm", "doc-intelligence")
+    )
+    # No page waits for a person, nothing is searched and no verdict is read.
+    assert web.decisions == [] and web.searches == []
+    assert {call for call in web.roles if call[0] == "customer"} == {
+        ("customer", "POST", "cases")
+    }
+    assert not any("verdict-runs" in path for _, _, path in web.roles)
+
+    llm, classifier = board.contenders
+    assert (llm.contender, classifier.contender) == ("llm", "doc-intelligence")
+    assert (llm.right_pages, llm.pages, llm.accuracy) == (5, 6, 0.8333)
+    assert (llm.confident_right_pages, llm.confident_pages, llm.calibration) == (
+        4,
+        4,
+        1.0,
+    )
+    assert (llm.queued_pages, llm.queue_rate) == (2, 0.3333)
+    assert llm.pages_not_classified == 0 and llm.cost_per_page is None
+    # The file whose case failed counts every one of its pages as wrong.
+    assert classifier.measured and board.not_run == []
+    assert (classifier.right_pages, classifier.pages, classifier.accuracy) == (
+        3,
+        6,
+        0.5,
+    )
+    assert (classifier.confident_right_pages, classifier.confident_pages) == (3, 3)
+    assert (classifier.queued_pages, classifier.pages_not_classified) == (0, 3)
+    assert board.winner == "llm"
+    assert [case.model_dump(exclude={"case_id"}) for case in board.unscored_cases] == [
+        {
+            "contender": "doc-intelligence",
+            "case_key": "case-901",
+            "case_status": "failed",
+            "reason": "case_failed",
+            "error_code": "stage_failed",
+        }
+    ]
+    assert [page.model_dump() for page in board.unclassified_pages] == [
+        {
+            "contender": "doc-intelligence",
+            "case_key": "case-901",
+            "page_number": 2,
+            "error_code": "model_unavailable",
+        }
+    ]
+    # Every stored reason was looked through, also those of the file that
+    # failed: six of `llm`, five of the other.
+    assert board.reasons_checked == 11 and board.reasons_not_checked == []
+    assert [leak.model_dump() for leak in board.reason_leaks] == [
+        {
+            "contender": "doc-intelligence",
+            "case_key": "case-901",
+            "page_number": 3,
+            "category": "person_name",
+        },
+        {
+            "contender": "doc-intelligence",
+            "case_key": "case-902",
+            "page_number": 1,
+            "category": "phone_number",
+        },
+    ]
+    printed = capsys.readouterr()
+    for text in (file.read_text(), printed.out, printed.err):
+        assert "specimendale" not in text.lower() and "555-0190" not in text
+    assert "leak: case-901 page 3 with doc-intelligence (person_name)" in printed.out
+    assert "stand-in figures, not results" in printed.out
+    assert board.run.stand_ins and board.run.web_address == "http://localhost:8000"
+
+    # Started again with its id: no file is uploaded or started a second
+    # time for a contender. The run is no retrieval bake-off.
+    uploads, starts = len(web.uploads), len(web.starts)
+    resume = [*run_it, "--eval-run-id", board.run.eval_run_id]
+    assert main(resume, web.transport) == EXIT_LEAK
+    assert (len(web.uploads), len(web.starts)) == (uploads, starts) == (4, 4)
+    assert ClassificationScoreboard.model_validate_json(
+        file.read_text()
+    ).contenders == (board.contenders)
+    assert main(resume[2:], web.transport) == EXIT_REFUSED
+    assert len(web.uploads) == uploads
+
+    # Without the leaks, in a new run: no leak, and the run is not whole,
+    # because a file was not scored. The contender stays measured.
+    web.classified["doc-intelligence", "case-901"][2] = ("lab_report", 0.97, WHY, SURE)
+    web.classified["doc-intelligence", "case-902"][0] = ("lab_report", 0.97, WHY, SURE)
+    capsys.readouterr()
+    assert main(run_it, web.transport) == EXIT_INCOMPLETE
+    unwhole = ClassificationScoreboard.model_validate_json(file.read_text())
+    assert [score.measured for score in unwhole.contenders] == [True, True]
+    assert [case.case_key for case in unwhole.unscored_cases] == ["case-901"]
+    assert len(web.uploads) == uploads + 4
+    said = capsys.readouterr().out
+    assert "reasons: clean, 11 checked" in said
+    assert "incomplete: 2 contenders measured, 1 files not scored" in said
+
+    # A contender `classification` refuses is not measured and has no
+    # numbers; the run goes on and the other is scored. Only its first file
+    # was uploaded for it, and the file says which case showed the refusal
+    # and what it ended with. Nothing else being amiss, the run is whole.
+    web.contenders = {"llm"}
+    uploads = len(web.uploads)
+    assert main(run_it, web.transport) == EXIT_OK
+    alone = ClassificationScoreboard.model_validate_json(file.read_text())
+    assert [score.measured for score in alone.contenders] == [True, False]
+    assert alone.contenders[0] == llm
+    numbers = alone.contenders[1].model_dump(exclude={"contender", "measured"})
+    assert set(numbers.values()) == {None}
+    assert (alone.winner, alone.unscored_cases, alone.reason_leaks) == ("llm", [], [])
+    assert len(web.uploads) == uploads + 3
+    (refused,) = alone.not_run
+    assert refused.case_id is not None
+    assert refused.model_dump(exclude={"case_id"}) == {
+        "contender": "doc-intelligence",
+        "case_key": "case-901",
+        "case_status": "failed",
+        "reason": "case_failed",
+        "error_code": "stage_failed",
+    }
+    said = capsys.readouterr().out
+    assert "doc-intelligence: not measured" in said
+    assert (
+        f"cannot be run here: doc-intelligence (the case of case-901, {refused.case_id}"
+        in said
+    )
+    # The same shape with `classification` not answering the read of the
+    # case's classifications is an outage, not a refusal: the contender is
+    # measured, its files are not scored and their reasons not read.
+    web.classification_down = True
+    assert (
+        main([*run_it, "--contenders", "doc-intelligence"], web.transport)
+        == EXIT_INCOMPLETE
+    )
+    outage = ClassificationScoreboard.model_validate_json(file.read_text())
+    assert outage.contenders[1].measured and outage.not_run == []
+    assert (outage.contenders[1].right_pages, outage.contenders[1].pages) == (0, 6)
+    assert [case.case_key for case in outage.unscored_cases] == ["case-901", "case-902"]
+    assert [unread.case_key for unread in outage.reasons_not_checked] == [
+        "case-901",
+        "case-902",
+    ]
+    assert "reasons: not clean" in capsys.readouterr().out
+    web.classification_down = False
+    # A run in which no contender is measured is incomplete and writes no
+    # file: the one that stood there stays as it was.
+    before = file.read_text()
+    assert (
+        main([*run_it, "--contenders", "doc-intelligence"], web.transport)
+        == EXIT_INCOMPLETE
+    )
+    assert file.read_text() == before
+    said = capsys.readouterr().out
+    assert "incomplete: 0 contenders measured" in said
+    assert "written: nothing" in said
+
+    # One file's start gets no usable answer: that file is not scored, the
+    # other is. A file that never becomes final is wrong on every page and
+    # its reasons are not read. The command says the run is incomplete.
+    web.refused_starts = {"case-901"}
+    web.hanging = {"case-902"}
+    monkeypatch.setenv("EVALS_CASE_DEADLINE_SECONDS", "0.01")
+    assert main([*run_it, "--contenders", "llm"], web.transport) == EXIT_INCOMPLETE
+    lost = ClassificationScoreboard.model_validate_json(file.read_text())
+    assert [
+        (case.case_key, case.reason, case.error_code) for case in lost.unscored_cases
+    ] == [
+        ("case-901", "request_failed", "upstream_unavailable"),
+        ("case-902", "not_final_in_time", None),
+    ]
+    assert (lost.contenders[0].right_pages, lost.contenders[0].pages) == (0, 6)
+    assert [unread.case_key for unread in lost.reasons_not_checked] == [
+        "case-901",
+        "case-902",
+    ]
+    web.refused_starts, web.hanging = set(), {"case-902"}
+    assert main([*run_it, "--contenders", "llm"], web.transport) == EXIT_INCOMPLETE
+    hung = ClassificationScoreboard.model_validate_json(file.read_text())
+    assert [(case.case_key, case.reason) for case in hung.unscored_cases] == [
+        ("case-902", "not_final_in_time")
+    ]
+    assert (hung.contenders[0].right_pages, hung.contenders[0].pages) == (2, 6)
+
+    # The published folder takes the whole bake-off only, and only from a
+    # run against the deployed environment.
+    calls = len(web.uploads)
+    published = ["--bake-off", "classification"]
+    deployed = [*published, "--deployed", "--web-address", "https://web.example.test"]
+    for refused_run in (
+        [*published, "--output-dir", str(PUBLISHED_SCOREBOARDS)],
+        [*deployed, "--contenders", "llm"],
+        [*deployed, "--cases", "case-901"],
+    ):
+        assert main(refused_run, web.transport) == EXIT_REFUSED
+    assert len(web.uploads) == calls

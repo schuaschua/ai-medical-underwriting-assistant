@@ -11,6 +11,7 @@ import type {
   CaseStarted,
   CaseStatus,
   ClassificationList,
+  ClassificationScoreboard,
   ComparePairs,
   Decision,
   DecisionRecorded,
@@ -990,6 +991,84 @@ export async function getRedactionScoreboard(): Promise<RedactionScoreboard> {
     );
   }
   return report as unknown as RedactionScoreboard;
+}
+
+// --- The classifier scoreboard (story 4.3) --------------------------------------
+
+/** The classifier contenders, in the contracts' order: a scoreboard lists exactly these. */
+const CONTENDERS = ["llm", "doc-intelligence"];
+
+/** Whether a value has what a line of the classifier scoreboard is shown with, as that contender. */
+function isClassifierScore(value: unknown, place: number): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const figures = [value.accuracy, value.calibration, value.queue_rate];
+  const counts = [
+    value.pages,
+    value.right_pages,
+    value.confident_pages,
+    value.confident_right_pages,
+    value.queued_pages,
+    value.pages_not_classified,
+  ];
+  return (
+    value.contender === CONTENDERS[place] &&
+    typeof value.measured === "boolean" &&
+    isNullOr(isStatedFigure)(value.cost_per_page) &&
+    figures.every(isNullOr(isUnitNumber)) &&
+    // A measured contender has the counts behind its figures; one that is
+    // not measured has none.
+    (value.measured
+      ? counts.every(isCount)
+      : counts.every((count) => count === null))
+  );
+}
+
+/** Whether a value is about one of the contenders and a file of the page set. */
+function namesContender(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    CONTENDERS.some((contender) => contender === value.contender) &&
+    isText(value.case_key)
+  );
+}
+
+/**
+ * Read the classifier scoreboard: both contenders as the bake-off runner
+ * scored them on the page set, and the winner it names. Only the
+ * underwriter role may. 404 `not_found` until that bake-off has been run.
+ */
+export async function getClassificationScoreboard(): Promise<ClassificationScoreboard> {
+  const board = await request<unknown>("GET", "/scoreboards/classification");
+  if (
+    !isRecord(board) ||
+    !isScoreboardRun(board.run) ||
+    !Array.isArray(board.contenders) ||
+    board.contenders.length !== CONTENDERS.length ||
+    !board.contenders.every(isClassifierScore) ||
+    !(
+      board.winner === null ||
+      CONTENDERS.some((contender) => contender === board.winner)
+    ) ||
+    !Array.isArray(board.unclassified_pages) ||
+    !isCount(board.reasons_checked) ||
+    // What the screen words by classifier names its contender.
+    ![
+      board.not_run,
+      board.unscored_cases,
+      board.reason_leaks,
+      board.reasons_not_checked,
+    ].every((list) => Array.isArray(list) && list.every(namesContender))
+  ) {
+    throw new ApiError(
+      200,
+      null,
+      "The answer was not a classifier scoreboard.",
+      null,
+    );
+  }
+  return board as unknown as ClassificationScoreboard;
 }
 
 // --- Compare (story 3.6) --------------------------------------------------------

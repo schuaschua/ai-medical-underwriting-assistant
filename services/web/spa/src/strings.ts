@@ -2,6 +2,7 @@
 import type {
   AuditAction,
   CaseStatus,
+  ClassifierContender,
   DemoRole,
   ErrorCode,
   PageStatus,
@@ -571,7 +572,7 @@ export const strings = {
     intro: (topK: number) =>
       `Every retrieval row, scored by the bake-off on the same cases. Rule recall is the share of searches whose top ${topK} results held an expected rule. Verdict accuracy is the share of cases for which the AI's suggestion with that row was the expected verdict. The winner is the row with the highest verdict accuracy, then the highest rule recall, then the lowest latency.`,
     reading: "Reading the scoreboard…",
-    notRun: "The bake-off has not been run yet.",
+    notRun: "The retrieval bake-off has not been run yet.",
     unreadable: "The scoreboard could not be shown.",
     readAgain: "Read again",
     // `at` is the time the run ended, shown in the viewer's own time.
@@ -631,6 +632,51 @@ export const strings = {
     redactionOtherRun: (evalRunId: string) =>
       `Not available for this run. The redaction report on file is of another bake-off run (${evalRunId}) and says nothing about the figures above.`,
     redactionUnreadable: "The redaction check could not be shown.",
+  },
+  // Story 4.3: the second table of the Scoreboard screen.
+  classifierScoreboard: {
+    heading: "Classifier scoreboard",
+    intro:
+      "Both classifiers, scored by the bake-off on the same pages. Accuracy is the share of pages labelled medical or not medical as expected. Calibration is, of the pages a classifier gave a confidence of 90% or more, the share it labelled correctly. Queue rate is the share of pages sent to the underwriter's triage queue. The winner is the more accurate classifier among those with a calibration of at least 90%, then the one with the lower queue rate.",
+    notRun: "The classifier bake-off has not been run yet.",
+    unreadable: "The classifier scoreboard could not be shown.",
+    standIns:
+      "These are stand-in figures, not results. Local stand-ins stood where the AI services would be, so the figures show that the bake-off works and say nothing about the classifiers.",
+    tableLabel: "Classifiers",
+    contenderColumn: "Classifier",
+    accuracyColumn: "Accuracy",
+    calibrationColumn: "Calibration",
+    queueRateColumn: "Queue rate",
+    notClassifiedColumn: "Pages not classified",
+    costColumn: "Cost per page",
+    contenders: {
+      llm: "LLM",
+      "doc-intelligence": "Document Intelligence",
+    } satisfies Record<ClassifierContender, string>,
+    noPages: "No pages scored",
+    noConfidentPages: "No page scored 90% or more",
+    notClassified: (missing: number, pages: number) => `${missing} of ${pages}`,
+    noWinner: "No winner: no classifier has a calibration of at least 90%.",
+    noneMeasured: "No classifier was measured, so there is no winner.",
+    // The lines under the table name the classifier they are about.
+    couldNotRun: (classifier: string, caseKey: string) =>
+      `${classifier} could not be run: the case of its first file (${caseKey}) failed with no page classified, and no other file was uploaded for it.`,
+    unscoredFiles: (classifier: string, count: number) =>
+      count === 1
+        ? `${classifier}: 1 file failed or did not finish. Every page of it counts as wrong.`
+        : `${classifier}: ${count} files failed or did not finish. Every page of them counts as wrong.`,
+    reasonsClean: (count: number) =>
+      `No planted identifier was found in a classifier's reason (${count} checked).`,
+    reasonsNotClean: (count: number) =>
+      `The check of the classifiers' reasons is not clean (${count} checked).`,
+    reasonLeaks: (classifier: string, count: number) =>
+      count === 1
+        ? `${classifier}: 1 planted identifier was found in its reasons.`
+        : `${classifier}: ${count} planted identifiers were found in its reasons.`,
+    reasonsNotRead: (classifier: string, count: number) =>
+      count === 1
+        ? `${classifier}: the reasons of 1 file were not read.`
+        : `${classifier}: the reasons of ${count} files were not read.`,
   },
   notFound: {
     heading: "Page not found",

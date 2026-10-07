@@ -1,4 +1,4 @@
-"""Stories 3.4, 3.7 and 3.8: one bake-off run over synthetic cases, against the system as it really runs.
+"""Stories 3.4, 3.7, 3.8 and 4.3: one bake-off run over synthetic cases, against the system as it really runs.
 
 `web`, `workflow`, `intake`, `classification`, `extraction`, `retrieval` and
 `verdict`, against a real PostgreSQL, the Durable Task Scheduler emulator and
@@ -13,10 +13,12 @@ and its agent is scripted. The test proves the path, not the retrievers.
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from synthdata_stack import (
+    CLASSIFIER_ID,
     LocalClassification,
     LocalExtraction,
     LocalIntake,
@@ -29,10 +31,11 @@ from synthdata_stack import (
     workflow_service,
 )
 
-from bakeoff.runner import run
+from bakeoff.runner import ClassificationRunResult, run, run_classification
 from bakeoff.settings import SCRATCH, Settings
 from contracts.ids import new_id
 from contracts.models.web import (
+    ClassificationScoreboard,
     RedactionScoreboard,
     RetrievalScoreboard,
     TriageQueue,
@@ -198,4 +201,183 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
         (tmp_path / "out" / "redaction.json").read_text()
     )
     assert (written, report) == (board, redaction)
+    assert written.run.stand_ins and written.run.eval_run_id == eval_run_id
+
+
+# A mixed file (medical pages, an invoice, a payslip, a utility bill) and a
+# file with a blank page and a turned laboratory report.
+PAGE_SET_FILES = ["case-002", "case-003"]
+
+
+def test_story_4_3_the_runner_takes_the_page_set_to_the_gate_with_each_contender_and_writes_the_classifier_scoreboard(
+    workflow_service_settings: WorkflowSettings,
+    scheduler_client: DurableTaskSchedulerClient,
+    intake: LocalIntake,
+    classification: LocalClassification,
+    extraction: LocalExtraction,
+    verdict: LocalVerdict,
+    tmp_path: Path,
+) -> None:
+    # The chat stand-in is unsure of laboratory reports.
+    classification.model.mode = Mode.MIXED
+    keys = {name: answer_key(name) for name in PAGE_SET_FILES}
+    pages = sum(len(key["pages"]) for key in keys.values())
+    lab_reports = sum(
+        page["page_type"] == "lab_report"
+        for key in keys.values()
+        for page in key["pages"]
+    )
+    seen: dict[str, Any] = {}
+
+    def bake_off(eval_run_id: str) -> ClassificationRunResult:
+        """One run through `web`, with the services as `classification` is set up now."""
+        settings = Settings(
+            bake_off="classification",
+            cases=PAGE_SET_FILES,
+            eval_run_id=eval_run_id,
+            output_dir=tmp_path / "out",
+            state_dir=tmp_path / "state",
+            poll_seconds=0.1,
+            case_deadline_seconds=120.0,
+        )
+        behind_workflow = ServicesBehindSidecar(
+            intake=intake.app(),
+            classification=classification.app(),
+            extraction=extraction.app(),
+            verdict=verdict.app(),
+        )
+        case_ids: dict[str, str] = {}
+        with workflow_service(workflow_service_settings, behind_workflow) as workflow:
+            behind_web = ServicesBehindSidecar(
+                intake=intake.app(),
+                workflow=RunningService(workflow),
+                classification=classification.app(),
+            )
+            with web_service(tmp_path, behind_web) as web:
+                try:
+                    result = asyncio.run(
+                        run_classification(settings, RunningService(web))
+                    )
+                finally:
+                    state = tmp_path / "state" / f"{eval_run_id}.json"
+                    if state.is_file():
+                        case_ids = json.loads(state.read_text())["cases"]
+                    for case_id in case_ids.values():
+                        end_lifecycle(scheduler_client, case_id)
+                seen["queue"] = TriageQueue.model_validate(
+                    web.get("/api/triage", headers=UNDERWRITER).json()
+                )
+                seen["listed"] = CaseList.model_validate(
+                    web.get("/api/cases", headers=UNDERWRITER).json()
+                )
+                seen["progress"] = {
+                    name: CaseProgress.model_validate(
+                        web.get(
+                            f"/api/cases/{case_id}/progress", headers=UNDERWRITER
+                        ).json()
+                    )
+                    for name, case_id in case_ids.items()
+                }
+                seen["trail"] = AuditTrail.model_validate(
+                    web.get(
+                        f"/api/cases/{case_ids['llm:case-003']}/audit",
+                        headers=UNDERWRITER,
+                    ).json()
+                )
+        seen["case_ids"] = case_ids
+        seen["uploads"] = behind_web.paths("intake").count("/cases")
+        return result
+
+    # --- 1. `classification` is given no classifier: it refuses the second
+    # contender's commands, as the real service does. The runner reads that
+    # through `web`, records the contender as not measured with the case
+    # that showed it, uploads no other file for it, and scores `llm`.
+    without = bake_off(new_id()).classification
+    assert [score.measured for score in without.contenders] == [True, False]
+    assert without.contenders[0].pages == pages
+    assert without.contenders[0].pages_not_classified == 0
+    (refused,) = without.not_run
+    first = f"doc-intelligence:{PAGE_SET_FILES[0]}"
+    assert sorted(seen["case_ids"]) == sorted(
+        [first, *(f"llm:{name}" for name in PAGE_SET_FILES)]
+    )
+    assert (refused.contender.value, refused.case_key) == (
+        "doc-intelligence",
+        PAGE_SET_FILES[0],
+    )
+    assert refused.case_id == seen["case_ids"][first]
+    assert (refused.reason, refused.error_code) == ("case_failed", "stage_failed")
+    assert {page.page_status.value for page in seen["progress"][first].pages} == {
+        "uploaded"
+    }
+    assert without.winner is None or without.winner.value == "llm"
+    assert without.unscored_cases == [] and without.reasons_not_checked == []
+    assert without.reasons_checked == pages
+
+    # --- 2. The second contender has a classifier, as after the training
+    # job (story 4.2 proves the training; the runner trains nothing). The
+    # classifier stand-in is unsure of nothing.
+    stand_in = classification.with_classifier()
+    stand_in.classifiers[CLASSIFIER_ID] = {"classifierId": CLASSIFIER_ID}
+    eval_run_id = new_id()
+    result = bake_off(eval_run_id)
+    case_ids, progress, trail = seen["case_ids"], seen["progress"], seen["trail"]
+
+    # Each file was uploaded once per contender and started with it.
+    assert sorted(case_ids) == sorted(
+        f"{contender}:{name}"
+        for contender in ("llm", "doc-intelligence")
+        for name in PAGE_SET_FILES
+    )
+    assert seen["uploads"] == 4
+    for name, case in progress.items():
+        assert case.classifier_contender is not None
+        assert case.classifier_contender.value == name.partition(":")[0]
+        # Stopped at the gate: complete, every page left as it was routed.
+        assert case.case_status.value == "completed"
+        assert {page.page_status.value for page in case.pages} <= {
+            "extracting",
+            "awaiting_customer",
+            "awaiting_triage",
+        }
+    # No extraction and no verdict ran, and no page waits for a person: the
+    # cases are in neither of the underwriter's lists.
+    actions = {event.action.value for event in trail.events}
+    assert "page.routed" in actions
+    assert not actions & {"facts.extracted", "verdict.suggested", "page.accepted"}
+    assert {event.eval_run_id for event in trail.events} == {eval_run_id}
+    assert extraction.reads_of_intake() == []
+    assert seen["queue"].pages == [] and seen["listed"].cases == []
+
+    board = result.classification
+    llm, classifier = board.contenders
+    assert (llm.contender.value, classifier.contender.value) == (
+        "llm",
+        "doc-intelligence",
+    )
+    # Both were scored on every page of the two files, each on its own
+    # stored results: one per page and contender.
+    for score in (llm, classifier):
+        assert score.measured and score.pages == pages
+        assert score.pages_not_classified == 0
+        assert score.accuracy is not None and score.queue_rate is not None
+        # Stand-in figures: both stand-ins read the generator's headings.
+        assert score.right_pages == pages
+    assert board.reasons_checked == 2 * pages and board.reason_leaks == []
+    assert board.reasons_not_checked == [] and board.not_run == []
+    assert board.unscored_cases == [] and board.unclassified_pages == []
+    # The gate sent the pages the chat stand-in was unsure of to triage, and
+    # none of the classifier's: the queue rate is where the gate put a page.
+    assert (llm.queued_pages, classifier.queued_pages) == (lab_reports, 0)
+    assert llm.confident_pages == pages - lab_reports
+    assert classifier.confident_pages == pages
+    # Both are calibrated and equally accurate: the lower queue rate wins.
+    assert board.winner is not None and board.winner.value == "doc-intelligence"
+    # The classifier was asked for each page once.
+    assert len(stand_in.analysed) == pages
+
+    written = ClassificationScoreboard.model_validate_json(
+        (tmp_path / "out" / "classification.json").read_text()
+    )
+    assert written == board
     assert written.run.stand_ins and written.run.eval_run_id == eval_run_id

@@ -1,4 +1,4 @@
-"""Story 3.4: the shape of the scoreboard files the bake-off runner writes (AD-17)."""
+"""Stories 3.4 and 4.3: the shape of the scoreboard files the bake-off runner writes (AD-17)."""
 
 from typing import Any
 
@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.models.web import (
+    ClassificationScoreboard,
+    ClassifierScore,
     RedactionScoreboard,
     RetrievalRowScore,
     RetrievalScoreboard,
@@ -143,3 +145,100 @@ def test_story_3_4_a_scoreboard_row_has_numbers_only_when_measured_and_the_winne
     ):
         with pytest.raises(ValidationError):
             RedactionScoreboard.model_validate(wrong)
+
+    # Story 4.3: the classifier scoreboard. A contender's figures are its
+    # counts' shares over every page; one that was not run has no number.
+    def contender(name: str, measured: bool = True, **changes: Any) -> dict[str, Any]:
+        numbers: dict[str, Any] = {
+            "pages": 94,
+            "accuracy": share(90, 94),
+            "right_pages": 90,
+            "calibration": 0.975,
+            "confident_pages": 80,
+            "confident_right_pages": 78,
+            "queue_rate": share(12, 94),
+            "queued_pages": 12,
+            "pages_not_classified": 2,
+        }
+        return {
+            "contender": name,
+            "measured": measured,
+            **(numbers if measured else dict.fromkeys(numbers)),
+            "cost_per_page": None,
+            **changes,
+        }
+
+    def classifiers(**changes: Any) -> dict[str, Any]:
+        return {
+            "run": RUN,
+            "contenders": [
+                contender("llm"),
+                contender("doc-intelligence", measured=False),
+            ],
+            "winner": "llm",
+            "not_run": [],
+            "unscored_cases": [],
+            "unclassified_pages": [],
+            "reasons_checked": 92,
+            "reason_leaks": [],
+            "reasons_not_checked": [],
+            **changes,
+        }
+
+    assert ClassificationScoreboard.model_validate(classifiers()).winner == "llm"
+    # Calibrated at 0.85, or with no page scored 0.90 or more: it cannot win.
+    low = contender("llm", confident_right_pages=68, calibration=0.85)
+    none_sure = contender(
+        "llm", confident_pages=0, confident_right_pages=0, calibration=None
+    )
+    for score in (low, none_sure):
+        assert not ClassifierScore.model_validate(score).can_win
+        unable = [score, contender("doc-intelligence", measured=False)]
+        assert ClassificationScoreboard.model_validate(
+            classifiers(contenders=unable, winner=None)
+        )
+        with pytest.raises(ValidationError):
+            ClassificationScoreboard.model_validate(classifiers(contenders=unable))
+    for wrong in (
+        contender("llm", measured=False, pages=94),
+        contender("llm", accuracy=0.9),
+        contender("llm", calibration=None),
+        contender("llm", right_pages=None),
+        # More pages right than have a result.
+        contender("llm", pages_not_classified=5),
+        contender("llm", confident_right_pages=81, calibration=1.0),
+    ):
+        with pytest.raises(ValidationError):
+            ClassifierScore.model_validate(wrong)
+    # A contender that could not be run is named with the case that showed
+    # it; a measured contender is never named so.
+    tried = {
+        "case_key": "case-001",
+        "case_id": None,
+        "case_status": "failed",
+        "reason": "case_failed",
+        "error_code": "stage_failed",
+    }
+    assert ClassificationScoreboard.model_validate(
+        classifiers(not_run=[{**tried, "contender": "doc-intelligence"}])
+    )
+    for changes in (
+        {"not_run": [{**tried, "contender": "llm"}]},
+        {"winner": None},
+        {"winner": "doc-intelligence"},
+        {"contenders": classifiers()["contenders"][:1]},
+        # A leak in a reason names its place and its kind, never the value.
+        {
+            "reason_leaks": [
+                {
+                    "contender": "llm",
+                    "case_key": "case-002",
+                    "page_number": 3,
+                    "category": "person_name",
+                    "value": "Kendall",
+                }
+            ]
+        },
+    ):
+        with pytest.raises(ValidationError):
+            ClassificationScoreboard.model_validate(classifiers(**changes))

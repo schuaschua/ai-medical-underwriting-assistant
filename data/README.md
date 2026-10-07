@@ -200,6 +200,10 @@ plain page of each medical page type; at least four pages each of invoice, paysl
 recipe, utility bill, blank page, turned page and handwritten note; a page drawn turned and a
 page upside down; and a mixed file.
 
+The classification bake-off (`uv run python -m bakeoff --bake-off classification`, see
+`evals/README.md`) uploads each of these files once per classifier contender and scores every
+page on `is_medical`; the `page_type` and the `kind` are not scored.
+
 ## The training set
 
 `classifier-training/` holds 46 one-page PDFs, in a folder per `page_type`, at least five per

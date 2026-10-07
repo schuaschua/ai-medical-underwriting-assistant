@@ -1,4 +1,4 @@
-"""Story 3.4: the pure parts of the bake-off runner: what is searched, what counts, who wins."""
+"""Stories 3.4 and 4.3: the pure parts of the bake-off runner: what is searched, what counts, who wins."""
 
 from pathlib import Path
 from typing import Any
@@ -7,17 +7,30 @@ import pytest
 from bakeoff_fakes import key_entry
 from pydantic import ValidationError
 
-from bakeoff.answer_key import AnswerKeyEntry, ExpectedVerdict
+from bakeoff.answer_key import AnswerKeyEntry, ExpectedVerdict, PageSetDocument
+from bakeoff.classifiers import DocumentOutcome, StoredPage
 from bakeoff.recall import fact_searches, is_hit, percentile
 from bakeoff.redaction import RedactionCheck, leaked_categories
-from bakeoff.scoreboard import pick_winner
+from bakeoff.scoreboard import pick_classifier_winner, pick_winner, score_contender
 from bakeoff.settings import PUBLISHED_SCOREBOARDS, SCRATCH, Settings
 from bakeoff.static_metrics import read_static_metrics
 from bakeoff.verdicts import decision_for, run_is_right
-from contracts.enums import Decision, PageStatus, RetrieverConfig
+from contracts.enums import (
+    ClassifierContender,
+    Decision,
+    PageStatus,
+    RetrieverConfig,
+)
+from contracts.ids import new_id
+from contracts.models.classification import Classification
 from contracts.models.retrieval import SearchResponse
 from contracts.models.verdict import SUGGESTION_LABEL, VerdictRun
-from contracts.models.web import RetrievalRowScore
+from contracts.models.web import (
+    ClassifierScore,
+    ClassifierUnscoredCase,
+    RetrievalRowScore,
+    share,
+)
 from contracts.query import build_fact_query
 from retrieval.domain.rows import ROWS
 
@@ -113,7 +126,7 @@ def expected(verdict: str, loading_pct: int | None = None) -> ExpectedVerdict:
     )
 
 
-def test_story_3_4_a_run_is_right_on_the_expected_verdict_and_for_a_loaded_case_the_expected_loading() -> (
+def test_story_3_4_a_run_is_right_on_the_expected_verdict_and_loading_and_a_human_wait_is_answered_from_the_page_label() -> (
     None
 ):
     loaded, refer = expected("loaded", 75), expected("refer")
@@ -127,10 +140,7 @@ def test_story_3_4_a_run_is_right_on_the_expected_verdict_and_for_a_loaded_case_
     assert not run_is_right(run_of(None), refer)
     assert not run_is_right(None, refer)
 
-
-def test_story_3_4_a_human_wait_is_answered_from_the_page_label_and_nothing_else() -> (
-    None
-):
+    # A human wait is answered from the page label and nothing else.
     # The customer's wait: kept if medical, discarded if not.
     assert decision_for(PageStatus.AWAITING_CUSTOMER, True) is Decision.KEEP
     assert decision_for(PageStatus.AWAITING_CUSTOMER, False) is Decision.DISCARD
@@ -259,15 +269,30 @@ def test_story_3_4_static_metrics_describe_every_row_as_retrieval_builds_it_and_
         for figure in (facts.cost, facts.effort):
             assert figure is None or (figure.source.strip() and figure.unit.strip())
         assert facts.effort is not None, config
-    # A figure without its source, and a row left out, are refused.
+    # Story 4.3: a cost per page is stated, or left open, for every contender.
+    assert set(static.classifiers) == set(ClassifierContender)
+    for stated_of in static.classifiers.values():
+        cost = stated_of.cost_per_page
+        assert cost is None or (cost.source.strip() and cost.unit.strip())
+    # A figure without its source, a row left out, and (story 4.3) a
+    # classifier left out are refused, each in a file that is whole otherwise.
     row: dict[str, Any] = {"store": "pgvector", "chunk_set": "smart", "method": "Any"}
     stated = {"amount": "1.50", "unit": "USD per 1,000 searches"}
-    for rows in (
-        {config.value: row for config in list(RetrieverConfig)[:5]},
-        {config.value: {**row, "cost": stated} for config in RetrieverConfig},
+    every_row = {config.value: row for config in RetrieverConfig}
+    both: dict[str, Any] = {contender.value: {} for contender in ClassifierContender}
+    whole = tmp_path / "whole.yaml"
+    whole.write_text(str({"rows": every_row, "classifiers": both}), encoding="utf-8")
+    assert set(read_static_metrics(whole).classifiers) == set(ClassifierContender)
+    for rows, classifiers in (
+        ({config.value: row for config in list(RetrieverConfig)[:5]}, both),
+        ({config.value: {**row, "cost": stated} for config in RetrieverConfig}, both),
+        (every_row, {"llm": {}}),
+        (every_row, {**both, "llm": {"cost_per_page": stated}}),
     ):
         broken = tmp_path / "static-metrics.yaml"
-        broken.write_text(str({"rows": rows}), encoding="utf-8")
+        broken.write_text(
+            str({"rows": rows, "classifiers": classifiers}), encoding="utf-8"
+        )
         with pytest.raises(ValidationError):
             read_static_metrics(broken)
 
@@ -297,7 +322,161 @@ def test_story_3_4_only_a_run_against_the_deployed_environment_may_write_the_pub
         {"rows": []},
         # A part of the bake-off never replaces the published whole.
         {"web_address": "https://web.example.test", "deployed": True, "rows": ["r3"]},
+        # Story 4.3: the same for the classification bake-off, which takes
+        # contenders and no rows; the retrieval one takes no contenders.
+        {"bake_off": "classification", "output_dir": PUBLISHED_SCOREBOARDS},
+        {
+            "bake_off": "classification",
+            "web_address": "https://web.example.test",
+            "deployed": True,
+            "contenders": ["llm"],
+        },
+        {"bake_off": "classification", "rows": ["r3"]},
+        {"contenders": ["llm"]},
     )
+    whole = Settings(
+        bake_off="classification", web_address="https://web.example.test", deployed=True
+    )
+    assert whole.scoreboard_dir == PUBLISHED_SCOREBOARDS
     for refused in refusals:
         with pytest.raises(ValidationError):
             Settings(**refused)
+
+
+LLM, CLASSIFIER = ClassifierContender.LLM, ClassifierContender.DOC_INTELLIGENCE
+
+
+def stored(
+    number: int,
+    page_type: str | None,
+    confidence: float = 1.0,
+    status: PageStatus = PageStatus.EXTRACTING,
+) -> StoredPage:
+    """A page as a case left it: with the contender's result, or (no page type) a failed one."""
+    if page_type is None:
+        return StoredPage(number, PageStatus.FAILED, None, None)
+    result = Classification.model_validate(
+        {
+            "classification_id": new_id(),
+            "case_id": CASE_ID,
+            "page_id": new_id(),
+            "contender": "llm",
+            "page_type": page_type,
+            "is_medical": page_type == "lab_report",
+            "confidence": confidence,
+            "reason": "A made-up reason.",
+        }
+    )
+    return StoredPage(number, status, None, result)
+
+
+def line(
+    contender: ClassifierContender,
+    right: int,
+    sure: tuple[int, int],
+    queued: int,
+    pages: int = 94,
+) -> ClassifierScore:
+    """A contender's line from its counts: `sure` is the pages scored 0.90 or more, and those right."""
+    confident, confident_right = sure
+    return ClassifierScore(
+        contender=contender,
+        measured=True,
+        pages=pages,
+        accuracy=share(right, pages),
+        right_pages=right,
+        calibration=share(confident_right, confident) if confident else None,
+        confident_pages=confident,
+        confident_right_pages=confident_right,
+        queue_rate=share(queued, pages),
+        queued_pages=queued,
+        pages_not_classified=0,
+        cost_per_page=None,
+    )
+
+
+def test_story_4_3_each_figure_is_a_share_of_the_stored_results_and_the_winner_is_the_more_accurate_calibrated_contender() -> (
+    None
+):
+    documents = [
+        PageSetDocument.model_validate(key_entry(key, medical=medical))
+        for key, medical in (
+            ("case-901", (True, False, True, True)),
+            ("case-902", (True, False)),
+            ("case-903", (True, True)),
+        )
+    ]
+    triage = PageStatus.AWAITING_TRIAGE
+    outcomes = {
+        "case-901": DocumentOutcome(
+            LLM,
+            "case-901",
+            pages={
+                # Right and sure; wrong and sure; right, unsure, queued; failed.
+                1: stored(1, "lab_report", 0.9),
+                2: stored(2, "lab_report", 1.0),
+                3: stored(3, "lab_report", 0.8, triage),
+                4: stored(4, None),
+            },
+        ),
+        # A file that failed: every page is wrong, whatever was stored for it.
+        "case-902": DocumentOutcome(
+            LLM,
+            "case-902",
+            pages={1: stored(1, "lab_report"), 2: stored(2, None)},
+            unscored=ClassifierUnscoredCase.model_validate(
+                {
+                    "contender": "llm",
+                    "case_key": "case-902",
+                    "case_id": None,
+                    "case_status": "failed",
+                    "reason": "case_failed",
+                    "error_code": "stage_failed",
+                }
+            ),
+        ),
+        # `case-903` gave nothing at all.
+    }
+
+    score, unclassified = score_contender(LLM, documents, outcomes, None)
+
+    # Accuracy and queue rate are over every page of the set; calibration
+    # over the pages scored 0.90 or more. A page with a failed result is
+    # wrong, in no calibration count, and listed by case and page.
+    assert (score.right_pages, score.pages, score.accuracy) == (2, 8, 0.25)
+    assert (score.confident_right_pages, score.confident_pages) == (1, 2)
+    assert score.calibration == 0.5
+    assert (score.queued_pages, score.queue_rate) == (1, 0.125)
+    assert score.pages_not_classified == 5
+    assert [(page.case_key, page.page_number) for page in unclassified] == [
+        ("case-901", 4),
+        ("case-902", 2),
+    ]
+    assert not score.can_win and pick_classifier_winner([score]) is None
+
+    # The I/O matrix's figures: 90 of 94, 78 of 80, 12 of 94.
+    measured = line(LLM, 90, (80, 78), 12)
+    assert (measured.accuracy, measured.calibration, measured.queue_rate) == (
+        share(90, 94),
+        0.975,
+        share(12, 94),
+    )
+    # The more accurate of two calibrated contenders wins.
+    assert pick_classifier_winner([measured, line(CLASSIFIER, 85, (80, 80), 0)]) is LLM
+    # A tie on accuracy: the lower queue rate.
+    assert (
+        pick_classifier_winner([measured, line(CLASSIFIER, 90, (80, 72), 11)])
+        is CLASSIFIER
+    )
+    # The more accurate contender is calibrated at 0.85: the other wins.
+    assert (
+        pick_classifier_winner(
+            [line(LLM, 93, (80, 68), 0), line(CLASSIFIER, 60, (10, 9), 50)]
+        )
+        is CLASSIFIER
+    )
+    # No page scored 0.90 or more: no calibration, and it cannot win. No
+    # winner when no contender qualifies.
+    unsure = line(LLM, 94, (0, 0), 94)
+    assert unsure.calibration is None
+    assert pick_classifier_winner([unsure, line(CLASSIFIER, 60, (10, 8), 0)]) is None

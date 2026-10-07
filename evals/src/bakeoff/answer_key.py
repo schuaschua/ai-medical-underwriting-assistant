@@ -70,6 +70,43 @@ class AnswerKeyEntry(_KeyModel):
         return None
 
 
+class PageSetDocument(_KeyModel):
+    """One file of the scored page set, with the expected label of each of its pages."""
+
+    # The synthetic case's key (`case-006`): the file is that case's document.
+    case_id: NonEmptyStr
+    file_name: NonEmptyStr
+    pages: tuple[ExpectedPage, ...] = Field(min_length=1)
+
+    @property
+    def case_key(self) -> str:
+        return self.case_id
+
+
+class _PageSet(_KeyModel):
+    documents: tuple[PageSetDocument, ...] = Field(min_length=1)
+
+
+def read_page_set(path: Path, cases: list[str] | None = None) -> list[PageSetDocument]:
+    """The files of the scored page set, in their order; only the named cases when given."""
+    documents = list(
+        _PageSet.model_validate_json(path.read_text(encoding="utf-8")).documents
+    )
+    keys = [document.case_key for document in documents]
+    if len(set(keys)) != len(keys):
+        raise ValueError("the page set names a file twice")
+    for document in documents:
+        numbers = [page.page_number for page in document.pages]
+        if len(set(numbers)) != len(numbers):
+            raise ValueError(f"the page set names a page of {document.case_key} twice")
+    if cases is None:
+        return documents
+    unknown = sorted(set(cases) - set(keys))
+    if unknown:
+        raise ValueError(f"the page set has no case {', '.join(unknown)}")
+    return [document for document in documents if document.case_key in set(cases)]
+
+
 def read_answer_key(
     folder: Path, cases: list[str] | None = None
 ) -> list[AnswerKeyEntry]:

@@ -18,10 +18,11 @@ import httpx
 
 from bakeoff.settings import Settings
 from contracts.decisions import DECISION_RULES
-from contracts.enums import Decision, PageStatus
+from contracts.enums import Decision, PageStatus, PageType
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.verdict import SUGGESTION_LABEL
+from contracts.rules import is_medical
 
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 _FINAL_PAGES = frozenset(
@@ -67,9 +68,28 @@ def key_entry(
 
 
 def write_case_set(data_dir: Path, entries: list[dict[str, Any]]) -> None:
-    """Write a case set as `data/` holds one: a PDF per case and its answer key entry."""
+    """Write a case set as `data/` holds one: a PDF per case, its answer key entry, and the page set."""
     (data_dir / "cases").mkdir(parents=True)
     (data_dir / "answer-key" / "cases").mkdir(parents=True)
+    # The scored page set is the whole case set, as in `data/`.
+    (data_dir / "answer-key" / "page-set.json").write_text(
+        json.dumps(
+            {
+                "documents": [
+                    {
+                        "case_id": entry["case_id"],
+                        "file_name": entry["file_name"],
+                        "mixed": False,
+                        "pages": [
+                            {**page, "kind": "medical"} for page in entry["pages"]
+                        ],
+                    }
+                    for entry in entries
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
     for entry in entries:
         key = entry["case_id"]
         # No real document: the fake tells the cases apart by these bytes.
@@ -150,6 +170,21 @@ class FakeWeb:
     # Cases that end as failed, and cases that never become final.
     failing: set[str] = field(default_factory=set)
     hanging: set[str] = field(default_factory=set)
+    # Page texts that cannot be read, by case and page number.
+    broken_texts: set[tuple[str, int]] = field(default_factory=set)
+
+    # --- The classification bake-off (story 4.3) ---
+    # The classifier contenders `classification` can run; a case started
+    # with any other fails with no page classified.
+    contenders: set[str] = field(default_factory=lambda: {"llm", "doc-intelligence"})
+    # What a contender stored for each page of a case, in page order: the
+    # page type, the confidence, the reason and where the gate put the page.
+    # None for a page whose classification failed, which fails the case.
+    # `classification` does not answer a read of a case's classifications.
+    classification_down: bool = False
+    classified: dict[tuple[str, str], list[tuple[str, float, str, str] | None]] = field(
+        default_factory=dict
+    )
 
     cases: dict[str, _Case] = field(default_factory=dict)
     uploads: list[str] = field(default_factory=list)
@@ -200,6 +235,8 @@ class FakeWeb:
             return self._decide(case, parts[3], decision, role)
         if route[2] == "verdict-runs":
             return self._runs(case)
+        if route[2] == "classifications":
+            return self._classifications(case)
         if route == ("GET", "cases", "pages"):
             return httpx.Response(
                 200,
@@ -245,8 +282,54 @@ class FakeWeb:
         if case.case_key in self.refused_starts:
             return _refusal(ErrorCode.UPSTREAM_UNAVAILABLE)
         self.starts.append(case.case_key)
+        if case.started_with is None and options.get("stop_after") == "gate":
+            self._classify(case, options.get("classifier_contender", "llm"))
         case.started_with = case.started_with or options
         return httpx.Response(200, json={})
+
+    def _classify(self, case: _Case, contender: str) -> None:
+        """Leave the pages of a case as classification and the gate would, for one contender."""
+        if contender not in self.contenders:
+            # Every command is refused: no page is classified, none fails.
+            for page in case.pages:
+                page["page_status"] = "uploaded"
+            case.failed = True
+            return
+        # A case nothing was said of keeps its pages as they are.
+        stored = self.classified.get((contender, case.case_key), [])
+        for page, result in zip(case.pages, stored, strict=False):
+            if result is None:
+                page["page_status"] = "failed"
+                page["error_code"] = "model_unavailable"
+                case.failed = True
+            else:
+                page_type, confidence, reason, status = result
+                page["page_status"] = status
+                page["classification"] = {
+                    "classification_id": new_id(),
+                    "case_id": case.case_id,
+                    "page_id": page["page_id"],
+                    "contender": contender,
+                    "page_type": page_type,
+                    "is_medical": is_medical(PageType(page_type)),
+                    "confidence": confidence,
+                    "reason": reason,
+                }
+
+    def _classifications(self, case: _Case) -> httpx.Response:
+        if self.classification_down:
+            return _refusal(ErrorCode.UPSTREAM_UNAVAILABLE)
+        return httpx.Response(
+            200,
+            json={
+                "case_id": case.case_id,
+                "classifications": [
+                    page["classification"]
+                    for page in case.pages
+                    if "classification" in page
+                ],
+            },
+        )
 
     def _status(self, case: _Case) -> str:
         if case.failed or case.case_key in self.failing:
@@ -254,6 +337,9 @@ class FakeWeb:
             return "failed"
         if case.case_key in self.hanging:
             return "running"
+        if (case.started_with or {}).get("stop_after") == "gate":
+            # Told to stop after the gate: complete, whatever its pages wait for.
+            return "completed"
         if all(page["page_status"] in _FINAL_PAGES for page in case.pages):
             return "completed"
         return "awaiting_human"
@@ -268,8 +354,19 @@ class FakeWeb:
                 "case_id": case.case_id,
                 "case_status": status,
                 "redaction_status": "done",
-                "pages": [{**page, "error_code": None} for page in case.pages],
+                "pages": [
+                    {
+                        "page_id": page["page_id"],
+                        "page_number": page["page_number"],
+                        "page_status": page["page_status"],
+                        "error_code": page.get("error_code"),
+                    }
+                    for page in case.pages
+                ],
                 "error_code": "stage_failed" if status == "failed" else None,
+                "classifier_contender": (case.started_with or {}).get(
+                    "classifier_contender", "llm"
+                ),
             },
         )
 
@@ -341,6 +438,8 @@ class FakeWeb:
             for page in case.pages:
                 if page["page_id"] == page_id:
                     number = page["page_number"]
+                    if (case.case_key, number) in self.broken_texts:
+                        return _refusal(ErrorCode.UPSTREAM_UNAVAILABLE)
                     text = self.texts.get(case.case_key, {}).get(number, "")
                     return httpx.Response(
                         200,

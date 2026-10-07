@@ -17,8 +17,9 @@ from pydantic import ValidationError
 from bakeoff.settings import Settings
 from contracts.base import ContractModel
 from contracts.decisions import decision_rule
-from contracts.enums import Decision, DemoRole
+from contracts.enums import ClassifierContender, Decision, DemoRole
 from contracts.errors import ErrorBody, ErrorCode
+from contracts.models.classification import ClassificationList
 from contracts.models.intake import PageList, PageText
 from contracts.models.retrieval import SearchRequest, SearchResponse
 from contracts.models.verdict import VerdictRunList
@@ -73,13 +74,18 @@ def build_http_client(
     )
 
 
-def upload_key(eval_run_id: str, case_key: str) -> str:
+def upload_key(
+    eval_run_id: str, case_key: str, contender: ClassifierContender | None = None
+) -> str:
     """The idempotency key of one case's upload in one bake-off run.
 
     The same for every attempt, so an upload sent again after a lost answer
-    is answered with the case the first one created.
+    is answered with the case the first one created. The classification
+    bake-off uploads a file once per contender: the key then names the
+    contender too, so that each has a case of its own.
     """
-    return hashlib.sha256(f"{eval_run_id}:{case_key}".encode()).hexdigest()
+    named = case_key if contender is None else f"{case_key}:{contender.value}"
+    return hashlib.sha256(f"{eval_run_id}:{named}".encode()).hexdigest()
 
 
 class WebClient:
@@ -156,6 +162,13 @@ class WebClient:
         return await self._ask(
             _Call("GET", f"/api/cases/{case_id}/verdict-runs", DemoRole.UNDERWRITER),
             VerdictRunList,
+        )
+
+    async def classifications(self, case_id: str) -> ClassificationList:
+        """The stored results of a case's pages, of every contender that classified them."""
+        return await self._ask(
+            _Call("GET", f"/api/cases/{case_id}/classifications", DemoRole.UNDERWRITER),
+            ClassificationList,
         )
 
     async def pages(self, case_id: str) -> PageList:
