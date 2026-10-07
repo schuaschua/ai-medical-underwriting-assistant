@@ -13,12 +13,12 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import {
-  backoffMs,
   PROGRESS_MAX_BACKOFF_MS,
   PROGRESS_POLL_MS,
 } from "../cases/caseProgress";
 import { UPLOAD_KEY_STORAGE_KEY } from "../cases/uploadKey";
 import { CASES_STORAGE_KEY } from "../cases/sessionCases";
+import { backoffMs } from "../polling/backoff";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
 import { MAX_UPLOAD_MB, strings } from "../strings";
 import {

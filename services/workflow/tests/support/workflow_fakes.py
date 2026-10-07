@@ -16,7 +16,14 @@ from typing import Any
 import httpx
 
 from contracts.audit import AuditAction, AuditRecord, RouteDetail
-from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
+from contracts.decisions import STATUSES_AWAITING_A_DECISION
+from contracts.enums import (
+    CaseStatus,
+    ClassifierContender,
+    Decision,
+    DemoRole,
+    PageStatus,
+)
 from contracts.errors import DomainError, ErrorCode
 from contracts.ids import new_id
 from contracts.models.classification import ClassificationResult
@@ -25,11 +32,15 @@ from contracts.models.intake import RedactionResult
 from contracts.models.verdict import VerdictRunResult
 from contracts.models.workflow import (
     AuditTrail,
+    CaseList,
     CaseProgress,
+    CaseSummary,
     PageProgress,
     PageQueue,
     QueuedPage,
+    StartCaseRequest,
 )
+from workflow.domain.case_list import waiting_page_count
 from workflow.domain.case_status import case_status_after_gate, case_status_following
 from workflow.domain.decisions import case_takes_decisions
 from workflow.domain.entities import CaseRecord, PageDecision, SettledCase
@@ -40,6 +51,8 @@ from workflow.domain.recording import (
     DecisionOutcome,
     Recording,
     RecordOutcome,
+    case_completed_event,
+    case_started_event,
 )
 from workflow.domain.transitions import (
     CASE_STATUSES_TAKING_RESULTS,
@@ -50,6 +63,45 @@ from workflow.domain.transitions import (
 
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 OCCURRED_AT = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+
+
+# Story 1.13: a case is started by a person. What `web` passes on with a
+# start for the customer, as a request body and as the request itself.
+STARTED_BY = {"actor": "customer"}
+BY_CUSTOMER = StartCaseRequest(actor="customer")
+
+
+def starting(
+    case: CaseRecord, actor: DemoRole = DemoRole.CUSTOMER
+) -> tuple[CaseRecord, AuditRecord]:
+    """A case with its `case.started` event, as the start hands both to the store."""
+    return case, case_started_event(
+        case.case_id,
+        actor,
+        occurred_at=case.created_at,
+        eval_run_id=case.parameters.eval_run_id,
+        trace_id=TRACE_ID,
+    )
+
+
+def after_start(store: "MemoryCaseStore") -> list[tuple[datetime, Recording]]:
+    """What the stand-in store recorded once its cases were started.
+
+    Every case's trail begins with its one `case.started` event (story
+    1.13). The tests of the earlier stories are about what follows it: this
+    checks that each case's start is there, first and once, and leaves it out.
+    """
+    by_case: dict[str, list[AuditAction]] = {}
+    for _, recording in store.events:
+        by_case.setdefault(recording.audit.case_id, []).append(recording.audit.action)
+    for actions in by_case.values():
+        assert actions[0] is AuditAction.CASE_STARTED, actions
+        assert actions.count(AuditAction.CASE_STARTED) == 1, actions
+    return [
+        (recorded_at, recording)
+        for recorded_at, recording in store.events
+        if recording.audit.action is not AuditAction.CASE_STARTED
+    ]
 
 
 class StoreDown(Exception):
@@ -80,10 +132,14 @@ class MemoryCaseStore:
     # The audit event cannot be written: everything before it is undone.
     fail_audit_insert: bool = False
 
-    async def start(self, case: CaseRecord) -> CaseRecord:
+    async def start(self, case: CaseRecord, started: AuditRecord) -> CaseRecord:
         if self.fail:
             raise StoreDown
-        return self.cases.setdefault(case.case_id, case)
+        if case.case_id not in self.cases:
+            # As the real store: the case and its `case.started` event, together.
+            self.cases[case.case_id] = case
+            self.events.append((case.created_at, Recording(audit=started)))
+        return self.cases[case.case_id]
 
     async def status(self, case_id: str) -> CaseStatus | None:
         if self.fail:
@@ -97,6 +153,9 @@ class MemoryCaseStore:
         if self.fail:
             raise StoreDown
         audit = recording.audit
+        if recording.case_status is CaseStatus.COMPLETED:
+            # As the real store: a case is completed where its event is written.
+            raise ValueError("a recording does not complete a case")
         case = self.cases.get(audit.case_id)
         if case is None:
             return RecordOutcome.UNKNOWN_CASE
@@ -164,7 +223,14 @@ class MemoryCaseStore:
                 return audit.detail
         return None
 
-    def _follow_pages(self, case_id: str, *, at_the_gate: bool) -> SettledCase:
+    def _follow_pages(
+        self,
+        case_id: str,
+        moved_at: datetime,
+        *,
+        at_the_gate: bool,
+        trace_id: str | None,
+    ) -> SettledCase:
         case = self.cases[case_id]
         statuses = {
             page_id: page.page_status
@@ -179,6 +245,15 @@ class MemoryCaseStore:
         if wanted in CASE_TRANSITIONS[case.case_status]:
             case = replace(case, case_status=wanted)
             self.cases[case_id] = case
+            if wanted is CaseStatus.COMPLETED:
+                # As the real store: the event with the status, once.
+                completed = case_completed_event(
+                    case_id,
+                    occurred_at=moved_at,
+                    eval_run_id=case.parameters.eval_run_id,
+                    trace_id=trace_id,
+                )
+                self.events.append((moved_at, Recording(audit=completed)))
         return SettledCase(case.case_status, statuses)
 
     async def decide(self, recording: Recording, recorded_at: datetime) -> Decided:
@@ -211,22 +286,27 @@ class MemoryCaseStore:
         page.page_status = change.page_status
         page.updated_at = recorded_at
         self.decisions.append(wanted)
-        self._follow_pages(audit.case_id, at_the_gate=False)
         # The event takes the eval run of its case, as the real store sets it.
         stored_audit = audit.model_copy(
             update={"eval_run_id": case.parameters.eval_run_id}
         )
         self.events.append((recorded_at, replace(recording, audit=stored_audit)))
+        # After the decision's event: a completion is the trail's last event.
+        self._follow_pages(
+            audit.case_id, recorded_at, at_the_gate=False, trace_id=audit.trace_id
+        )
         return Decided(DecisionOutcome.RECORDED, wanted)
 
     async def settle_case(
-        self, case_id: str, settled_at: datetime
+        self, case_id: str, settled_at: datetime, trace_id: str | None
     ) -> SettledCase | None:
         if self.fail:
             raise StoreDown
         if case_id not in self.cases:
             return None
-        return self._follow_pages(case_id, at_the_gate=True)
+        return self._follow_pages(
+            case_id, settled_at, at_the_gate=True, trace_id=trace_id
+        )
 
     async def progress(self, case_id: str) -> CaseProgress | None:
         if self.fail:
@@ -322,6 +402,42 @@ class MemoryCaseStore:
                 for _, case_id, page_number, page_id in waiting[:limit]
             ],
             has_more=len(waiting) > limit,
+        )
+
+    async def case_list(self, limit: int) -> CaseList:
+        if self.fail:
+            raise StoreDown
+        newest_first = sorted(
+            (
+                case
+                for case in self.cases.values()
+                if case.parameters.eval_run_id is None
+            ),
+            key=lambda case: (case.created_at, case.case_id),
+            reverse=True,
+        )
+
+        def summary(case: CaseRecord) -> CaseSummary:
+            statuses = [
+                page.page_status
+                for page in self.pages.values()
+                if page.case_id == case.case_id
+            ]
+            return CaseSummary(
+                case_id=case.case_id,
+                case_status=case.case_status,
+                started_at=case.created_at,
+                page_count=len(statuses),
+                waiting_page_count=waiting_page_count(
+                    case.case_status,
+                    case.parameters.stop_after,
+                    sum(status in STATUSES_AWAITING_A_DECISION for status in statuses),
+                ),
+            )
+
+        return CaseList(
+            cases=[summary(case) for case in newest_first[:limit]],
+            has_more=len(newest_first) > limit,
         )
 
 

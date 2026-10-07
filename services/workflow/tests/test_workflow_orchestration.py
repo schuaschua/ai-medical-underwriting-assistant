@@ -19,8 +19,10 @@ from pydantic import ValidationError
 from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
+    after_start,
     redaction_done,
     redaction_failed,
+    starting,
 )
 
 from contracts.enums import ClassifierContender, RetrieverConfig
@@ -245,7 +247,7 @@ def service_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 def start(store: MemoryCaseStore, case_id: str) -> None:
     case = new_case(case_id, PARAMETERS, datetime.fromisoformat("2026-10-06T12:00:00Z"))
-    asyncio.run(store.start(case))
+    asyncio.run(store.start(*starting(case)))
 
 
 def test_story_1_6_the_first_activity_reports_the_started_case_as_running(
@@ -304,7 +306,7 @@ def test_story_1_6_the_failure_activity_marks_the_case_failed_with_one_event(
     # Answered, not raised: nothing can be marked for a case nobody stored.
     assert unknown == {"outcome": "ok", "recorded": "unknown_case"}
     assert store.cases[case_id].case_status.value == "failed"
-    ((_, recording),) = store.events
+    ((_, recording),) = after_start(store)
     audit = recording.audit
     assert (audit.action.value, audit.page_id, audit.ref) == (
         "stage.failed",
@@ -416,7 +418,7 @@ def test_story_1_6_stage_activities_record_their_result_through_one_path(
         second = activities.record("redact_document", result)
 
     assert (first, second) == (RecordOutcome.RECORDED, RecordOutcome.DUPLICATE)
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 def test_story_1_6_a_result_that_cannot_be_recorded_fails_the_activity_for_a_retry(
@@ -430,7 +432,7 @@ def test_story_1_6_a_result_that_cannot_be_recorded_fails_the_activity_for_a_ret
         activities = Activities(store, loop, 5.0, FakeStages())
         with pytest.raises(ActivityFailed) as raised:
             activities.record("redact_document", result)
-        assert store.events == []
+        assert after_start(store) == []
         assert store.cases[case_id].case_status.value == "running"
 
         # The retry, once the database is back.
@@ -439,7 +441,7 @@ def test_story_1_6_a_result_that_cannot_be_recorded_fails_the_activity_for_a_ret
 
     assert raised.value.activity == "redact_document"
     assert store.cases[case_id].case_status.value == "failed"
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 # --- The scheduler client ------------------------------------------------------

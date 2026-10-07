@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getProgress, startCase } from "../api/client";
 import type { CaseStatus, PageProgress } from "../api/contracts.gen";
+import { backoffMs, MAX_BACKOFF_MS } from "../polling/backoff";
 
 /** How often the progress of each case is read again. */
 export const PROGRESS_POLL_MS = 3_000;
 /** The longest wait between two reads of a case whose reads keep failing. */
-export const PROGRESS_MAX_BACKOFF_MS = 30_000;
+export const PROGRESS_MAX_BACKOFF_MS = MAX_BACKOFF_MS;
 
 export type CaseState =
   /** Nothing is known yet: the first read is under way. */
@@ -64,11 +65,6 @@ interface Reads {
   starts: number;
   /** A read was asked for while one was out: another follows it at once. */
   again: boolean;
-}
-
-/** The wait after `failures` failed reads in a row: doubled each time, to a limit. */
-export function backoffMs(failures: number): number {
-  return Math.min(PROGRESS_POLL_MS * 2 ** failures, PROGRESS_MAX_BACKOFF_MS);
 }
 
 function isHidden(): boolean {

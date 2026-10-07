@@ -40,6 +40,8 @@ class FakeSidecar:
     document_id: str = field(default_factory=new_id)
     # The cases `workflow` has been asked to start, with what each runs with.
     started: dict[str, dict[str, object]] = field(default_factory=dict)
+    # Story 1.13: the actor each case was first started by.
+    started_by: dict[str, str] = field(default_factory=dict)
     # Answers that replace the usual one, by "<METHOD> <last path part>".
     answers: dict[str, httpx.Response | Exception] = field(default_factory=dict)
     requests: list[httpx.Request] = field(default_factory=list)
@@ -60,6 +62,12 @@ class FakeSidecar:
         case_id = request.url.path.split("/")[-2]
         if key == "POST start":
             options = json.loads(body) if body else {}
+            # Story 1.13: as `workflow` does, a start that names no demo
+            # role is refused, and the first actor is the one kept.
+            actor = options.pop("actor", None)
+            if actor not in ("customer", "underwriter"):
+                return error(ErrorCode.ACTOR_NOT_HUMAN, "Only a person may start.")
+            self.started_by.setdefault(case_id, actor)
             case = self.started.setdefault(
                 case_id,
                 {
@@ -143,7 +151,8 @@ def test_story_1_6_an_upload_is_followed_by_a_start_of_that_case_in_workflow(
         f"{INVOKE}/workflow/method/cases/{sidecar.case_id}/start"
     )
     # No option was given: none is sent, and `workflow` applies its defaults.
-    assert json.loads(start_call.content) == {}
+    # Story 1.13: the start names the demo role that asked for it.
+    assert json.loads(start_call.content) == {"actor": "customer"}
     assert start_call.headers["traceparent"] == TRACEPARENT
     # The role is `web`'s business; internal services never read the header.
     assert "x-demo-role" not in start_call.headers
@@ -184,7 +193,10 @@ def test_story_1_6_start_options_are_passed_on_as_given(
 
     assert response.status_code == 200
     assert response.json() == {"case_id": case_id, "case_status": "running", **options}
-    assert json.loads(sidecar.requests[0].content) == options
+    assert json.loads(sidecar.requests[0].content) == {
+        **options,
+        "actor": "underwriter",
+    }
 
 
 @pytest.mark.parametrize(
@@ -225,8 +237,9 @@ def test_story_1_6_a_customer_start_without_options_is_let_through(
     response = client.post(f"/api/cases/{case_id}/start", json=body, headers=CUSTOMER)
 
     assert response.status_code == 200
-    # Nothing is passed on as an option, not even an explicit "not set".
-    assert json.loads(sidecar.requests[0].content) == {}
+    # Nothing is passed on as an option, not even an explicit "not set":
+    # only who asked (story 1.13).
+    assert json.loads(sidecar.requests[0].content) == {"actor": "customer"}
 
 
 def test_story_1_6_starting_twice_gives_the_same_answer(

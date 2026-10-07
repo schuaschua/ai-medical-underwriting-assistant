@@ -6,7 +6,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from contracts.enums import CaseStatus
+from contracts.decisions import human_role
+from contracts.enums import CaseStatus, DemoRole
 from contracts.errors import DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from contracts.models.workflow import (
@@ -25,6 +26,7 @@ from workflow.domain.lifecycle import (
 from workflow.domain.ports import CaseStore, EngineState, LifecycleEngine
 from workflow.domain.recording import (
     RecordOutcome,
+    case_started_event,
     lifecycle_failure,
     plan_recording,
 )
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 UNKNOWN_CASE_MESSAGE = "That case could not be found."
 UNKNOWN_PAGE_MESSAGE = "That page could not be found."
 NOT_STARTED_MESSAGE = "The case could not be started. Please try again."
+ACTOR_NOT_HUMAN_MESSAGE = "Only a person may start a case."
 
 # How many events one read of a case's trail lists at most (WORKFLOW_AUDIT_TRAIL_LIMIT).
 DEFAULT_AUDIT_TRAIL_LIMIT = 500
@@ -44,6 +47,19 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def starting_role(request: StartCaseRequest | None) -> DemoRole:
+    """The demo role that asks for a start; `actor_not_human` if the request names none (AD-9).
+
+    A case is started by a person. A start with no actor, or with one that
+    is blank or not a demo role, is refused whatever else it asks for.
+    """
+    actor = request.actor if request is not None else None
+    role = human_role(actor) if actor is not None else None
+    if role is None:
+        raise DomainError(ErrorCode.ACTOR_NOT_HUMAN, ACTOR_NOT_HUMAN_MESSAGE)
+    return role
+
+
 async def start_case(
     case_id: str,
     request: StartCaseRequest | None,
@@ -51,18 +67,44 @@ async def start_case(
     store: CaseStore,
     engine: LifecycleEngine,
     defaults: StartParameters,
+    # The trace of the request that asks, for the `case.started` event; None
+    # when there is none. Not left out: the caller says which.
+    trace_id: str | None,
     now: Callable[[], datetime] = utc_now,
 ) -> CaseStarted:
     """Start a case: store it, and give it its one orchestration (AD-5).
 
     Idempotent on `case_id`. A repeat stores nothing, starts no second
     orchestration and answers with the case as it was first started, even if
-    the repeat asks for other options. If the first call stored the case and
-    then failed to reach the engine, a repeat finishes the job.
+    the repeat asks for other options or comes from the other role. If the
+    first call stored the case and then failed to reach the engine, a repeat
+    finishes the job.
+
+    The case is stored with its `case.started` event, whose actor is the
+    demo role that asked first (AD-8). A start that names no demo role is
+    `actor_not_human`, and stores nothing.
     """
     started = time.monotonic()
+    try:
+        role = starting_role(request)
+    except DomainError as refusal:
+        # security rule 31: the id and the code. The actor is the caller's
+        # own text and is never logged.
+        logger.warning(
+            "case start refused: case_id=%s code=%s", case_id, refusal.code.value
+        )
+        raise
     wanted = new_case(case_id, resolve_start_parameters(request, defaults), now())
-    case = await store.start(wanted)
+    case = await store.start(
+        wanted,
+        case_started_event(
+            case_id,
+            role,
+            occurred_at=wanted.created_at,
+            eval_run_id=wanted.parameters.eval_run_id,
+            trace_id=trace_id,
+        ),
+    )
     try:
         state = await engine.ensure_started(case)
     except Exception as error:
@@ -214,6 +256,9 @@ async def settle_case_after_gate(
     case_id: str,
     *,
     store: CaseStore,
+    # The trace of the caller, for a `case.completed` event; None when
+    # there is none. Not left out: the caller says which.
+    trace_id: str | None,
     now: Callable[[], datetime] = utc_now,
 ) -> SettledCase:
     """Give a case the status its pages give it after the gate; answer with the case as it is now.
@@ -222,12 +267,13 @@ async def settle_case_after_gate(
     the one rule (`domain/case_status.py`): waiting for a human, running,
     or, with every page final or the case told to stop there, completed. So
     a late repeat cannot undo what a decision has changed before it, and a
-    case that has failed stays failed. The answer also says what each page
+    case that has failed stays failed. A case this completes gets its
+    `case.completed` event with the status, once. The answer also says what each page
     is at that moment, so the lifecycle waits for the pages that still wait
     and for no page that was decided already. `not_found` for a case never
     started.
     """
-    settled = await store.settle_case(case_id, now())
+    settled = await store.settle_case(case_id, now(), trace_id)
     if settled is None:
         raise DomainError(ErrorCode.NOT_FOUND, UNKNOWN_CASE_MESSAGE)
     logger.info(

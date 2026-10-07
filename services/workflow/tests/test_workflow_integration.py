@@ -37,6 +37,8 @@ from psycopg import sql
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import DBAPIError, OperationalError
 from workflow_fakes import (
+    BY_CUSTOMER,
+    STARTED_BY,
     FakeStages,
     SidecarStandIn,
     classification_done,
@@ -44,8 +46,9 @@ from workflow_fakes import (
     facts_done,
     redaction_done,
     redaction_failed,
+    starting,
 )
-from workflow_local import as_service, connect
+from workflow_local import after_the_start, as_service, connect
 
 from contracts.enums import CaseStatus, ClassifierContender, RetrieverConfig
 from contracts.errors import DomainError, ErrorBody, ErrorCode
@@ -111,11 +114,14 @@ def query(
 
 
 def audit_rows(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
-    return query(
-        settings,
-        "SELECT action, page_id::text, ref::text, error_code, detail, actor "
-        "FROM workflow.audit_event WHERE case_id = %s ORDER BY occurred_at, recorded_at",
-        case_id,
+    return after_the_start(
+        query(
+            settings,
+            "SELECT action, page_id::text, ref::text, error_code, detail, actor "
+            "FROM workflow.audit_event WHERE case_id = %s "
+            "ORDER BY audit_event_seq",
+            case_id,
+        )
     )
 
 
@@ -142,7 +148,7 @@ def a_store(settings: Settings) -> Iterator[tuple[SqlCaseStore, asyncio.Runner]]
 
 def started_case(store: SqlCaseStore, runner: asyncio.Runner) -> str:
     case_id = new_id()
-    runner.run(store.start(new_case(case_id, PARAMETERS, NOW)))
+    runner.run(store.start(*starting(new_case(case_id, PARAMETERS, NOW))))
     return case_id
 
 
@@ -217,7 +223,7 @@ def test_story_1_6_a_started_case_has_exactly_one_orchestration_named_by_its_cas
 ) -> None:
     case_id = new_id()
 
-    response = service.post(f"/cases/{case_id}/start")
+    response = service.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     assert response.status_code == 200
     started = CaseStarted.model_validate(response.json())
@@ -249,16 +255,18 @@ def test_story_1_6_starting_again_adds_no_orchestration_and_no_rows(
     # Started with nothing asked for: every page of the stand-in's case goes
     # on to extraction, so the case is `running` before, while and after its
     # lifecycle runs (story 1.9), and each answer below can be compared whole.
-    first = service.post(f"/cases/{case_id}/start")
+    first = service.post(f"/cases/{case_id}/start", json=STARTED_BY)
     # Once more straight away, and again after the orchestration has ended:
     # without the guard the scheduler would put a new run in a finished one's place.
-    again_at_once = service.post(f"/cases/{case_id}/start")
+    again_at_once = service.post(f"/cases/{case_id}/start", json=STARTED_BY)
     before = completed(scheduler_client, case_id)
     rows_before = query(
         service_settings, "SELECT * FROM workflow.case_status ORDER BY case_id"
     )
 
-    again_later = service.post(f"/cases/{case_id}/start", json={"stop_after": "gate"})
+    again_later = service.post(
+        f"/cases/{case_id}/start", json={**STARTED_BY, "stop_after": "gate"}
+    )
 
     for response in (first, again_at_once, again_later):
         assert response.status_code == 200
@@ -297,7 +305,10 @@ def test_story_1_6_starts_that_arrive_together_make_one_orchestration(
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         responses = list(
-            pool.map(lambda _: service.post(f"/cases/{case_id}/start"), range(6))
+            pool.map(
+                lambda _: service.post(f"/cases/{case_id}/start", json=STARTED_BY),
+                range(6),
+            )
         )
 
     assert {response.status_code for response in responses} == {200}
@@ -320,7 +331,7 @@ def test_story_1_6_start_options_are_stored_and_returned_by_the_real_service(
         "eval_run_id": eval_run_id,
     }
 
-    response = service.post(f"/cases/{case_id}/start", json=options)
+    response = service.post(f"/cases/{case_id}/start", json={**STARTED_BY, **options})
 
     assert response.json() == {"case_id": case_id, "case_status": "running", **options}
     assert query(
@@ -339,7 +350,7 @@ def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
     assert service.get(f"/cases/{case_id}/progress").status_code == 404
     assert service.get(f"/cases/{case_id}/audit").status_code == 404
 
-    service.post(f"/cases/{case_id}/start")
+    service.post(f"/cases/{case_id}/start", json=STARTED_BY)
     # Until the lifecycle has run as far as it goes, so the reads are of a
     # settled case.
     completed(scheduler_client, case_id)
@@ -356,7 +367,9 @@ def test_story_1_6_progress_and_audit_are_read_from_the_real_service(
         "extracting",
         "extracting",
     ]
-    assert sorted(event.action.value for event in trail.events) == [
+    # Story 1.13: the start is the trail's first event.
+    assert trail.events[0].action.value == "case.started"
+    assert sorted(event.action.value for event in trail.events[1:]) == [
         "document.redacted",
         "page.classified",
         "page.classified",
@@ -406,7 +419,7 @@ def test_story_1_6_the_orchestration_retries_an_activity_that_failed(
     case = new_case(new_id(), PARAMETERS, NOW)
     worker.start()  # type: ignore[no-untyped-call]  # the library's method has no return annotation
     try:
-        on_loop(store.inner.start(case))
+        on_loop(store.inner.start(*starting(case)))
         assert on_loop(SchedulerEngine(scheduler_client).ensure_started(case)) is (
             EngineState.CREATED
         )
@@ -441,7 +454,7 @@ def test_story_1_6_a_start_while_the_scheduler_is_down_is_502_and_a_repeat_finis
     )
 
     with TestClient(create_app(down), raise_server_exceptions=False) as client:
-        response = client.post(f"/cases/{case_id}/start")
+        response = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     assert response.status_code == 502
     assert ErrorBody.model_validate(response.json()).error.code is (
@@ -454,7 +467,9 @@ def test_story_1_6_a_start_while_the_scheduler_is_down_is_502_and_a_repeat_finis
         create_app(service_settings, sidecar=SidecarStandIn().transport()),
         raise_server_exceptions=False,
     ) as client:
-        assert client.post(f"/cases/{case_id}/start").status_code == 200
+        assert (
+            client.post(f"/cases/{case_id}/start", json=STARTED_BY).status_code == 200
+        )
         # While the service is still up: its worker runs the orchestration.
         assert completed(scheduler_client, case_id).instance_id == case_id
 
@@ -489,7 +504,11 @@ def test_story_1_6_a_done_result_is_recorded_with_its_status_change_and_one_even
         (pages[2], 3, "uploaded"),
     ]
     # The event read back is the record that came in, field for field.
-    assert trail.events == [result.audit]
+    assert [event.action.value for event in trail.events] == [
+        "case.started",
+        "document.redacted",
+    ]
+    assert trail.events[1] == result.audit
     assert audit_rows(service_settings, case_id) == [
         (
             "document.redacted",
@@ -689,7 +708,8 @@ def test_story_1_6_every_status_change_has_exactly_one_event_and_events_are_in_r
     # One event per recorded result, each exactly once, in the order they
     # were recorded (story 1.12), whatever time each names.
     recorded = [results[0], results[2], results[1], results[3]]
-    assert trail.events == [result.audit for result in recorded]
+    assert trail.events[0].action.value == "case.started"
+    assert trail.events[1:] == [result.audit for result in recorded]
     assert trail.has_more is False
     # Every status the case and its pages now have is reported by one event:
     # the redaction (pages tracked), and the last stage each page went through.
@@ -705,6 +725,7 @@ def test_story_1_6_every_status_change_has_exactly_one_event_and_events_are_in_r
     )
     assert sorted(by_subject) == sorted(
         [
+            ("case.started", None, 1),
             ("document.redacted", None, 1),
             ("page.classified", first, 1),
             ("page.classified", second, 1),
@@ -1119,7 +1140,7 @@ def test_story_1_6_when_an_activity_fails_on_every_retry_the_case_is_marked_fail
     case = new_case(new_id(), PARAMETERS, NOW)
 
     with a_worker(settings, store) as (engine, on_loop):
-        on_loop(store.inner.start(case))
+        on_loop(store.inner.start(*starting(case)))
         assert on_loop(engine.ensure_started(case)) is EngineState.CREATED
         state = completed(scheduler_client, case.case_id)
         # A repeat start now reports the case as it is.
@@ -1127,10 +1148,11 @@ def test_story_1_6_when_an_activity_fails_on_every_retry_the_case_is_marked_fail
             repeat = on_loop(
                 start_case(
                     case.case_id,
-                    None,
+                    BY_CUSTOMER,
                     store=store.inner,
                     engine=engine,
                     defaults=PARAMETERS,
+                    trace_id=None,
                 )
             )
         on_loop(database.dispose())
@@ -1195,7 +1217,14 @@ def test_story_1_6_a_repeat_start_of_a_case_whose_orchestration_was_terminated_s
         # No worker runs, so the orchestration is still waiting when an
         # operator terminates it.
         first = runner.run(
-            start_case(case_id, None, store=store, engine=engine, defaults=PARAMETERS)
+            start_case(
+                case_id,
+                BY_CUSTOMER,
+                store=store,
+                engine=engine,
+                defaults=PARAMETERS,
+                trace_id=None,
+            )
         )
         scheduler_client.terminate_orchestration(case_id)
         ended = completed(scheduler_client, case_id)
@@ -1203,12 +1232,22 @@ def test_story_1_6_a_repeat_start_of_a_case_whose_orchestration_was_terminated_s
         with caplog.at_level(logging.INFO):
             repeat = runner.run(
                 start_case(
-                    case_id, None, store=store, engine=engine, defaults=PARAMETERS
+                    case_id,
+                    BY_CUSTOMER,
+                    store=store,
+                    engine=engine,
+                    defaults=PARAMETERS,
+                    trace_id=None,
                 )
             )
             once_more = runner.run(
                 start_case(
-                    case_id, None, store=store, engine=engine, defaults=PARAMETERS
+                    case_id,
+                    BY_CUSTOMER,
+                    store=store,
+                    engine=engine,
+                    defaults=PARAMETERS,
+                    trace_id=None,
                 )
             )
 
@@ -1270,7 +1309,7 @@ def test_story_1_6_the_scheduler_itself_refuses_a_second_create_running_or_compl
     database = build_database(service_settings)
     store = SqlCaseStore(database)
     with a_worker(service_settings, store) as (_, on_loop):
-        on_loop(store.start(case))
+        on_loop(store.start(*starting(case)))
         finished = completed(scheduler_client, case.case_id)
         on_loop(database.dispose())
     assert finished.runtime_status is OrchestrationStatus.COMPLETED
@@ -1313,9 +1352,10 @@ def test_story_1_6_a_result_that_arrives_out_of_order_changes_nothing_in_the_dat
 
     assert (late, twice) == (RecordOutcome.OUT_OF_ORDER, RecordOutcome.OUT_OF_ORDER)
     # No status moved and no audit row was written for either.
-    assert len(before[0]) == 2
+    # The start, the redaction and the classification; then the extraction.
+    assert len(before[0]) == 3
     assert snapshot(service_settings) == after_extraction
-    assert len(after_extraction[0]) == 3
+    assert len(after_extraction[0]) == 4
 
 
 @pytest.mark.parametrize("final", ["extracted", "discarded", "denied", "failed"])
@@ -1402,9 +1442,10 @@ def test_story_1_6_a_missing_detail_is_stored_as_sql_null(
     assert query(
         service_settings,
         "SELECT detail IS NULL, jsonb_typeof(detail) FROM workflow.audit_event "
-        "WHERE case_id = %s",
+        "WHERE case_id = %s ORDER BY audit_event_seq",
         case_id,
-    ) == [(True, None)]
+        # The start and the failure: neither has a detail.
+    ) == [(True, None), (True, None)]
 
 
 # --- Append-only, for every role ---------------------------------------------------

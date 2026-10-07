@@ -125,7 +125,7 @@ def test_story_1_7_with_a_stand_in_told_to_fail_or_hang_the_case_fails_and_no_pa
     with workflow_service(
         workflow_service_settings, ServicesBehindSidecar(intake=intake.app())
     ) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json={"actor": "customer"})
         completed(scheduler_client, case_id)
         progress = CaseProgress.model_validate(
             client.get(f"/cases/{case_id}/progress").json()
@@ -134,8 +134,10 @@ def test_story_1_7_with_a_stand_in_told_to_fail_or_hang_the_case_fails_and_no_pa
     # The case is failed, with one `stage.failed` event, and no page exists
     # in `workflow` or in `intake`.
     assert (progress.case_status.value, progress.pages) == ("failed", [])
+    # Story 1.13: the start is there; a failed case has no `case.completed`.
     assert audit_rows(workflow_service_settings, case_id) == [
-        ("stage.failed", None, error_code, None, "intake:azure-ai-language")
+        ("case.started", None, None, None, "customer"),
+        ("stage.failed", None, error_code, None, "intake:azure-ai-language"),
     ]
     assert intake.pages(case_id).pages == []
     # Read as the database's owner: `workflow`'s own role has no right to

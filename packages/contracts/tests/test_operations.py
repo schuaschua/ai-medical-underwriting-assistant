@@ -58,6 +58,13 @@ SPINE_TABLE: list[tuple[str, str, str, set[str], tuple[str, ...]]] = [
     ("POST", "retrieval", "/searches", {"verdict", "web"}, ()),
     ("GET", "retrieval", "/rules/{rule_id}", {"verdict", "web"}, ()),
 ]
+# Operations the owner approved after the spine was written; the spine's
+# table does not list them yet (deferred-work.md). Anything beyond these is drift.
+APPROVED_ADDITIONS: list[tuple[str, str, str, set[str], tuple[str, ...]]] = [
+    # Story 1.13: the underwriter's case list (owner, 2026-10-07).
+    ("GET", "workflow", "/cases", {"web"}, ()),
+]
+REGISTERED = SPINE_TABLE + APPROVED_ADDITIONS
 
 # The query strings the table prints, by path.
 SPINE_QUERY_FIELDS = {
@@ -146,6 +153,14 @@ EXPECTED_MODELS: dict[str, tuple[str, str, str, Model, Model, Model]] = {
         workflow.StartCaseRequest,
         None,
         workflow.CaseStarted,
+    ),
+    "list_cases": (
+        "GET",
+        "workflow",
+        "/cases",
+        None,
+        None,
+        workflow.CaseList,
     ),
     "record_decision": (
         "POST",
@@ -295,9 +310,10 @@ def test_story_1_1_registry_lists_every_spine_operation_exactly_once() -> None:
 
     assert len(listed) == len(set(listed))
     assert set(listed) == {
-        (method, owner, path) for method, owner, path, _, _ in SPINE_TABLE
+        (method, owner, path) for method, owner, path, _, _ in REGISTERED
     }
-    assert len(OPERATIONS) == len(SPINE_TABLE) == 23
+    assert len(SPINE_TABLE) == 23
+    assert len(OPERATIONS) == len(REGISTERED) == 24
 
 
 def test_story_1_1_registry_names_are_unique_and_resolvable() -> None:
@@ -311,7 +327,7 @@ def test_story_1_1_registry_names_are_unique_and_resolvable() -> None:
 def test_story_1_1_registry_callers_and_keys_match_the_spine() -> None:
     expected = {
         (method, owner, path): (callers, idempotency_key)
-        for method, owner, path, callers, idempotency_key in SPINE_TABLE
+        for method, owner, path, callers, idempotency_key in REGISTERED
     }
     for operation in OPERATIONS:
         callers, idempotency_key = expected[key(operation)]

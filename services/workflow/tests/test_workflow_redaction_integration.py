@@ -17,8 +17,8 @@ import pytest
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.client import OrchestrationState, OrchestrationStatus
 from fastapi.testclient import TestClient
-from workflow_fakes import FakeStages, SidecarStandIn
-from workflow_local import connect
+from workflow_fakes import STARTED_BY, FakeStages, SidecarStandIn
+from workflow_local import after_the_start, connect
 
 from contracts.ids import new_id
 from contracts.models.workflow import AuditTrail, CaseProgress
@@ -43,11 +43,14 @@ def query(settings: Settings, statement: str, *parameters: object) -> list[Any]:
 
 
 def audit_rows(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
-    return query(
-        settings,
-        "SELECT action, page_id::text, error_code, detail, actor "
-        "FROM workflow.audit_event WHERE case_id = %s ORDER BY occurred_at, recorded_at",
-        case_id,
+    return after_the_start(
+        query(
+            settings,
+            "SELECT action, page_id::text, error_code, detail, actor "
+            "FROM workflow.audit_event WHERE case_id = %s "
+            "ORDER BY audit_event_seq",
+            case_id,
+        )
     )
 
 
@@ -99,7 +102,9 @@ def test_story_1_7_a_started_case_is_redacted_and_its_pages_are_tracked_as_uploa
     case_id, eval_run_id = new_id(), new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json={"eval_run_id": eval_run_id})
+        client.post(
+            f"/cases/{case_id}/start", json={**STARTED_BY, "eval_run_id": eval_run_id}
+        )
         state = completed(scheduler_client, case_id)
         progress = CaseProgress.model_validate(
             client.get(f"/cases/{case_id}/progress").json()
@@ -147,7 +152,7 @@ def test_story_1_7_a_failed_redaction_ends_the_case_as_failed_with_one_stage_fai
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         state = completed(scheduler_client, case_id)
         progress = CaseProgress.model_validate(
             client.get(f"/cases/{case_id}/progress").json()
@@ -175,7 +180,7 @@ def test_story_1_7_a_case_intake_does_not_hold_fails_at_redaction_without_a_retr
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         state = completed(scheduler_client, case_id)
 
     assert json.loads(state.serialized_output or "")["case_status"] == "failed"
@@ -196,7 +201,7 @@ def test_story_1_7_in_progress_is_retried_until_the_stage_answers(
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         completed(scheduler_client, case_id)
 
     assert sidecar.redactions(case_id) == 4
@@ -214,7 +219,7 @@ def test_story_1_7_when_intake_never_answers_the_case_is_marked_failed(
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         state = completed(scheduler_client, case_id)
 
     # As often as the stage policy says, then the case fails with its one event.

@@ -5,11 +5,11 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
-from contracts.audit import RouteDetail
+from contracts.audit import AuditRecord, RouteDetail
 from contracts.enums import CaseStatus, ClassifierContender, Decision, PageStatus
 from contracts.models.classification import ClassificationResult
 from contracts.models.intake import RedactionResult
-from contracts.models.workflow import AuditTrail, CaseProgress, PageQueue
+from contracts.models.workflow import AuditTrail, CaseList, CaseProgress, PageQueue
 from workflow.domain.entities import CaseRecord, SettledCase
 from workflow.domain.recording import Decided, Recording, RecordOutcome
 
@@ -17,8 +17,13 @@ from workflow.domain.recording import Decided, Recording, RecordOutcome
 class CaseStore(Protocol):
     """Case and page status and the audit trail (schema `workflow`, AD-4)."""
 
-    async def start(self, case: CaseRecord) -> CaseRecord:
-        """Store the case unless one with its id exists; return the stored one."""
+    async def start(self, case: CaseRecord, started: AuditRecord) -> CaseRecord:
+        """Store the case unless one with its id exists; return the stored one.
+
+        `started` is the case's `case.started` event. It is written in the
+        transaction that stores the case, and only then: a case that exists
+        already keeps the event it has, whoever asks now.
+        """
         ...
 
     async def status(self, case_id: str) -> CaseStatus | None:
@@ -30,6 +35,9 @@ class CaseStore(Protocol):
     ) -> RecordOutcome:
         """Write the status changes and the audit event in one transaction, or neither.
 
+        A recording never completes a case: that is done where the
+        `case.completed` event is written with the status (`decide`,
+        `settle_case`), and a recording that asks for it is a `ValueError`.
         A recording whose audit event is already in the trail writes nothing,
         and neither does one whose status change may not follow the current
         status (`domain/transitions.py`); the outcome says which.
@@ -49,7 +57,9 @@ class CaseStore(Protocol):
         Together: the decision's row, the page's new status (only from the
         status the decision needs), the case status its pages then give
         (`domain/case_status.py`) and the audit event, which takes the case's
-        eval run id. A page that holds the same decision already is answered
+        eval run id. If that status is `completed`, the case's
+        `case.completed` event is written too, after the decision's. A page
+        that holds the same decision already is answered
         with that one and nothing is written. A page that is in another
         status, or whose case takes no decision
         (`domain/decisions.py`), is left as it is.
@@ -57,7 +67,7 @@ class CaseStore(Protocol):
         ...
 
     async def settle_case(
-        self, case_id: str, settled_at: datetime
+        self, case_id: str, settled_at: datetime, trace_id: str | None
     ) -> SettledCase | None:
         """Give the case the status its pages give it after the gate; return the case as it is then.
 
@@ -65,8 +75,10 @@ class CaseStore(Protocol):
         that sets it (`domain/case_status.py`), so asking again, however
         late, never undoes what a decision has changed since. A status that
         may not follow the one the case has (`domain/transitions.py`) is not
-        set. The answer holds the status the case has and the statuses of
-        its pages as that transaction read them. None if the case is unknown.
+        set. A case moved to `completed` gets its `case.completed` event in
+        the same transaction, once. The answer holds the status the case
+        has and the statuses of its pages as that transaction read them.
+        None if the case is unknown.
         """
         ...
 
@@ -96,6 +108,16 @@ class CaseStore(Protocol):
         completed, or told to stop after the gate). `has_more` says that more
         such pages wait than are listed. Each page says how it came to wait
         (`domain/queue.py`).
+        """
+        ...
+
+    async def case_list(self, limit: int) -> CaseList:
+        """The cases, newest started first, at most `limit` of them.
+
+        Left out: every case that belongs to an eval run. Each case says how
+        many pages it has and how many of them wait for a person
+        (`domain/case_list.py`). `has_more` says that more cases exist than
+        are listed.
         """
         ...
 

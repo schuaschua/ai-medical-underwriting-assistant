@@ -243,20 +243,37 @@ def test_story_1_1_timestamp_that_is_not_utc_is_rejected(occurred_at: str) -> No
 # --- audit record
 
 
-def test_story_1_1_audit_actions_are_the_spine_catalogue() -> None:
-    assert {action.value for action in AuditAction} == {
-        "document.redacted",
-        "page.classified",
-        # Story 1.9: the gate's own action, added to the spine's catalogue.
-        "page.routed",
-        "page.kept",
-        "page.discarded",
-        "page.accepted",
-        "page.denied",
-        "facts.extracted",
-        "verdict.suggested",
-        "stage.failed",
-    }
+# The audit catalogue as the spine lists it (AD-8).
+SPINE_AUDIT_ACTIONS = {
+    "document.redacted",
+    "page.classified",
+    "page.kept",
+    "page.discarded",
+    "page.accepted",
+    "page.denied",
+    "facts.extracted",
+    "verdict.suggested",
+    "stage.failed",
+}
+# Actions the owner approved after the spine was written; the spine does not
+# list them yet (deferred-work.md). Anything beyond these is drift.
+APPROVED_AUDIT_ACTIONS = {
+    # Story 1.9: the gate's own action.
+    "page.routed",
+    # Story 1.13: who started the case, and that it was completed.
+    "case.started",
+    "case.completed",
+}
+
+
+def test_story_1_1_audit_actions_are_the_spine_catalogue_and_the_approved_additions() -> (
+    None
+):
+    assert len(SPINE_AUDIT_ACTIONS) == 9
+    assert not SPINE_AUDIT_ACTIONS & APPROVED_AUDIT_ACTIONS
+    assert {action.value for action in AuditAction} == (
+        SPINE_AUDIT_ACTIONS | APPROVED_AUDIT_ACTIONS
+    )
 
 
 @pytest.mark.parametrize("actor", ["customer", "underwriter"])
@@ -548,6 +565,7 @@ def test_story_1_1_start_request_fields_are_all_optional() -> None:
     request = StartCaseRequest.model_validate({})
 
     assert request.model_dump() == {
+        "actor": None,
         "classifier_contender": None,
         "retriever_configs": None,
         "stop_after": None,

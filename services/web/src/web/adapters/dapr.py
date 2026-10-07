@@ -19,6 +19,7 @@ from contracts.models.classification import ClassificationList
 from contracts.models.intake import CaseCreated
 from contracts.models.workflow import (
     AuditTrail,
+    CaseList,
     CaseProgress,
     CaseStarted,
     DecisionRecorded,
@@ -187,11 +188,14 @@ class ServiceClient:
     async def start_case(
         self,
         case_id: str,
-        options: StartCaseRequest | None,
+        options: StartCaseRequest,
         *,
         traceparent: str | None,
     ) -> CaseStarted:
-        """`POST /cases/{case_id}/start` on `workflow` (AD-2): idempotent on the case id."""
+        """`POST /cases/{case_id}/start` on `workflow` (AD-2): idempotent on the case id.
+
+        The request names the demo role that asks, as its actor (AD-9).
+        """
         return await self._call(
             get_operation("start_case"),
             {"case_id": case_id},
@@ -199,9 +203,17 @@ class ServiceClient:
             passed_on=_INVALID_START,
             traceparent=traceparent,
             # Only what the caller set is sent; `workflow` fills in the rest.
-            body=options.model_dump(mode="json", exclude_none=True)
-            if options is not None
-            else {},
+            body=options.model_dump(mode="json", exclude_none=True),
+        )
+
+    async def list_cases(self, *, traceparent: str | None) -> CaseList:
+        """`GET /cases` on `workflow`: the cases, newest started first."""
+        return await self._call(
+            get_operation("list_cases"),
+            {},
+            CaseList,
+            passed_on=_NO_REFUSAL,
+            traceparent=traceparent,
         )
 
     async def read_progress(

@@ -2,7 +2,7 @@
 
 import pytest
 
-from contracts.audit import HUMAN_ACTIONS, AuditAction
+from contracts.audit import DECISION_ACTIONS, AuditAction
 from contracts.decisions import (
     DECISION_RULES,
     STATUSES_AWAITING_A_DECISION,
@@ -40,7 +40,7 @@ def test_story_1_10_each_decision_has_its_role_its_page_status_and_its_action(
 def test_story_1_10_the_mapping_covers_every_decision_and_every_human_action() -> None:
     assert set(DECISION_RULES) == set(Decision)
     # AD-10: the audit actions only a human may take are exactly the four decisions'.
-    assert {rule.action for rule in DECISION_RULES.values()} == HUMAN_ACTIONS
+    assert {rule.action for rule in DECISION_RULES.values()} == DECISION_ACTIONS
     assert STATUSES_AWAITING_A_DECISION == {
         PageStatus.AWAITING_CUSTOMER,
         PageStatus.AWAITING_TRIAGE,

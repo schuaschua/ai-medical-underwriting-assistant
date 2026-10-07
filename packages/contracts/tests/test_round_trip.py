@@ -49,6 +49,13 @@ REDACTION_AUDIT = audit(
 )
 ROUTE_DETAIL = {"route": "awaiting_triage", "threshold": 0.9}
 ROUTE_AUDIT = audit("page.routed", actor="workflow:gate", detail=ROUTE_DETAIL)
+CASE_SUMMARY = {
+    "case_id": CASE,
+    "case_status": "awaiting_human",
+    "started_at": "2026-10-07T09:00:00Z",
+    "page_count": 3,
+    "waiting_page_count": 1,
+}
 QUEUED_PAGE = {
     "case_id": CASE,
     "page_id": PAGE,
@@ -207,7 +214,14 @@ SAMPLES: dict[str, dict[str, Any]] = {
             }
         ],
     },
+    "StartCaseOptions": {
+        "classifier_contender": "llm",
+        "retriever_configs": ["r3"],
+        "stop_after": "gate",
+        "eval_run_id": EVAL,
+    },
     "StartCaseRequest": {
+        "actor": "underwriter",
         "classifier_contender": "doc-intelligence",
         "retriever_configs": ["r1", "r2", "r3", "r4", "r5", "r6"],
         "stop_after": "gate",
@@ -273,6 +287,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "pages": [QUEUED_PAGE, {**QUEUED_PAGE, "queued_by": "customer"}],
         "has_more": False,
     },
+    "CaseSummary": CASE_SUMMARY,
+    "CaseList": {"cases": [CASE_SUMMARY], "has_more": True},
     "TriagePage": TRIAGE_PAGE,
     "TriageQueue": {
         "pages": [

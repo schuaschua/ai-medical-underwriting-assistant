@@ -169,10 +169,15 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         for event in trail.events
     ]
 
-    # The redaction first, by `intake` with Azure AI Language: counts per
+    # Story 1.13: the start first, by the customer who asked for it. Two
+    # pages are still being extracted, so the trail has no `case.completed`.
+    assert events[0] == ("case.started", None, ActorKind.HUMAN, "customer")
+    assert trail.events[0].ref == case_id
+    assert "case.completed" not in {action for action, _, _, _ in events}
+    # Then the redaction, by `intake` with Azure AI Language: counts per
     # category of what was redacted, and no value.
-    assert events[0] == ("document.redacted", None, ActorKind.AI, REDACTION_ACTOR)
-    counts = trail.events[0].detail
+    assert events[1] == ("document.redacted", None, ActorKind.AI, REDACTION_ACTOR)
+    counts = trail.events[1].detail
     assert isinstance(counts, dict) and counts
     assert all(isinstance(count, int) for count in counts.values())
     # Every expected event, each once: a classification and a route per
@@ -192,9 +197,9 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
         ("page.discarded", sixth, ActorKind.HUMAN, "customer"),
         ("page.denied", unsure, ActorKind.HUMAN, "underwriter"),
     ]
-    assert sorted(events[1:]) == sorted(ai_page_events + decisions)
+    assert sorted(events[2:]) == sorted(ai_page_events + decisions)
     # The decisions are in the order they were made.
-    assert [event for event in events if event[2] is ActorKind.HUMAN] == decisions
+    assert [event for event in events[1:] if event[2] is ActorKind.HUMAN] == decisions
     # Causal order, page by page: its classification, its route, then what
     # people decided about it.
     chains = {
@@ -227,7 +232,7 @@ def test_story_1_12_the_underwriter_reads_the_whole_trail_of_a_decided_case_in_c
     # (the redaction's event), the events lead each page, by allowed changes
     # only, to the status the case's progress reports for it.
     walked = {page_id: [PageStatus.UPLOADED] for page_id in page_ids}
-    for event in trail.events[1:]:
+    for event in trail.events[2:]:
         assert event.page_id is not None
         history = walked[event.page_id]
         after = status_after(event)

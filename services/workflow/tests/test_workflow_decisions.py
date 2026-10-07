@@ -24,11 +24,13 @@ from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
     StoreDown,
+    after_start,
     classification_failed,
+    starting,
 )
 
 import workflow
-from contracts.audit import HUMAN_ACTIONS
+from contracts.audit import DECISION_ACTIONS
 from contracts.decisions import DECISION_RULES
 from contracts.enums import (
     CaseStatus,
@@ -109,7 +111,7 @@ def gated_case(
     stages = FakeStages(pages=len(routes))
 
     async def scenario() -> list[str]:
-        await store.start(new_case(case_id, parameters, NOW))
+        await store.start(*starting(new_case(case_id, parameters, NOW)))
         redacted = await stages.redact_document(
             case_id, eval_run_id=parameters.eval_run_id, trace_context={}
         )
@@ -132,7 +134,7 @@ def gated_case(
                 store=store,
             )
         if settled:
-            await settle_case_after_gate(case_id, store=store)
+            await settle_case_after_gate(case_id, store=store, trace_id=None)
         return list(redacted.page_ids)
 
     return asyncio.run(scenario())
@@ -177,7 +179,7 @@ def snapshot(store: MemoryCaseStore) -> tuple[Any, ...]:
     return (
         dict(store.cases),
         {page_id: page.page_status for page_id, page in store.pages.items()},
-        len(store.events),
+        len(after_start(store)),
         list(store.decisions),
     )
 
@@ -332,7 +334,7 @@ def test_story_1_10_a_decision_is_stored_with_its_status_change_and_its_audit_ev
         [route, Route.EXTRACTION],
         parameters=replace(PARAMETERS, eval_run_id=eval_run_id),
     )
-    events_before = len(store.events)
+    events_before = len(after_start(store))
 
     recorded = decide(store, engine, case_id, page_id, decision, actor)
 
@@ -352,14 +354,14 @@ def test_story_1_10_a_decision_is_stored_with_its_status_change_and_its_audit_ev
     assert len(store.decisions) == 1
     assert store.pages[page_id].page_status is PageStatus(page_status)
     assert store.pages[other].page_status is PageStatus.EXTRACTING
-    assert len(store.events) == events_before + 1
-    audit = store.events[-1][1].audit
+    assert len(after_start(store)) == events_before + 1
+    audit = after_start(store)[-1][1].audit
     assert (audit.actor_kind.value, audit.actor, audit.action.value) == (
         "human",
         actor,
         action,
     )
-    assert audit.action in HUMAN_ACTIONS
+    assert audit.action in DECISION_ACTIONS
     assert (audit.case_id, audit.page_id, audit.ref) == (
         case_id,
         page_id,
@@ -393,7 +395,7 @@ def test_story_1_10_discard_and_keep_leave_the_trail_the_acceptance_criterion_na
     decided = [
         (event.action.value, event.actor, event.actor_kind.value, event.page_id)
         for event in trail.events
-        if event.action in HUMAN_ACTIONS
+        if event.action in DECISION_ACTIONS
     ]
     assert decided == [
         ("page.discarded", "customer", "human", first),
@@ -489,7 +491,7 @@ def test_story_1_10_a_case_started_with_stop_after_gate_ends_completed_and_takes
         refused(store, engine, case_id, customer, "keep", "customer")
         is ErrorCode.NOT_AWAITING_DECISION
     )
-    settled = asyncio.run(settle_case_after_gate(case_id, store=store))
+    settled = asyncio.run(settle_case_after_gate(case_id, store=store, trace_id=None))
     assert settled.case_status is CaseStatus.COMPLETED
     before = snapshot(store)
     assert (
@@ -727,7 +729,7 @@ def test_story_1_10_a_late_retry_of_the_settle_cannot_undo_a_decision(
     decide(store, engine, case_id, page_id, "accept", "underwriter")
     assert store.cases[case_id].case_status is CaseStatus.RUNNING
 
-    late = asyncio.run(settle_case_after_gate(case_id, store=store))
+    late = asyncio.run(settle_case_after_gate(case_id, store=store, trace_id=None))
 
     assert late.case_status is CaseStatus.RUNNING
     # It reports the pages as the decision left them.
@@ -750,7 +752,7 @@ def test_story_1_10_a_decision_made_before_the_settle_is_kept_by_it(
     decide(store, engine, case_id, second, "discard", "customer")
     assert store.cases[case_id].case_status is CaseStatus.COMPLETED
 
-    settled = asyncio.run(settle_case_after_gate(case_id, store=store))
+    settled = asyncio.run(settle_case_after_gate(case_id, store=store, trace_id=None))
     assert settled.case_status is CaseStatus.COMPLETED
     assert set(settled.page_statuses.values()) == {PageStatus.DISCARDED}
 
@@ -1023,7 +1025,7 @@ def test_story_1_10_the_route_records_a_decision_and_answers_with_it(
     assert recorded.page_status is PageStatus.DISCARDED
     assert response.headers["cache-control"] == "no-store"
     # The event carries the trace of the request (AD-8).
-    assert store.events[-1][1].audit.trace_id == TRACE_ID
+    assert after_start(store)[-1][1].audit.trace_id == TRACE_ID
     progress = client.get(f"/cases/{case_id}/progress").json()
     assert progress["case_status"] == "running"
     assert [page["page_status"] for page in progress["pages"]] == [

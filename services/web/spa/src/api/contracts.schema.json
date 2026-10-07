@@ -134,6 +134,7 @@
     },
     "AuditAction": {
       "enum": [
+        "case.started",
         "document.redacted",
         "page.classified",
         "page.routed",
@@ -143,7 +144,8 @@
         "page.denied",
         "facts.extracted",
         "verdict.suggested",
-        "stage.failed"
+        "stage.failed",
+        "case.completed"
       ],
       "title": "AuditAction",
       "type": "string"
@@ -305,6 +307,29 @@
       "title": "CaseCreated",
       "type": "object"
     },
+    "CaseList": {
+      "additionalProperties": false,
+      "description": "Response of `GET /cases`: the cases, newest started first.\n\nCases that belong to an eval run are left out. The answer is bounded:\n`has_more` says that more cases exist than are listed.",
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/CaseSummary"
+          },
+          "title": "Cases",
+          "type": "array"
+        },
+        "has_more": {
+          "title": "Has More",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cases",
+        "has_more"
+      ],
+      "title": "CaseList",
+      "type": "object"
+    },
     "CaseProgress": {
       "additionalProperties": false,
       "description": "Response of `GET /cases/{case_id}/progress`.",
@@ -414,6 +439,44 @@
       ],
       "title": "CaseStatus",
       "type": "string"
+    },
+    "CaseSummary": {
+      "additionalProperties": false,
+      "description": "One case in the underwriter's list.",
+      "properties": {
+        "case_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Case Id",
+          "type": "string"
+        },
+        "case_status": {
+          "$ref": "#/$defs/CaseStatus"
+        },
+        "page_count": {
+          "minimum": 0,
+          "title": "Page Count",
+          "type": "integer"
+        },
+        "started_at": {
+          "format": "date-time",
+          "title": "Started At",
+          "type": "string"
+        },
+        "waiting_page_count": {
+          "minimum": 0,
+          "title": "Waiting Page Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "case_id",
+        "case_status",
+        "started_at",
+        "page_count",
+        "waiting_page_count"
+      ],
+      "title": "CaseSummary",
+      "type": "object"
     },
     "ChunkSet": {
       "enum": [
@@ -1790,10 +1853,81 @@
       "title": "StageStatus",
       "type": "string"
     },
+    "StartCaseOptions": {
+      "additionalProperties": false,
+      "description": "What a case may be started with; every option is optional (settings fill the gaps).\n\nAlso the body of `web`'s `POST /api/cases/{case_id}/start`. It names no\nactor: `web` passes the request's demo role on as the actor (AD-9), so a\nbrowser cannot say who started the case.",
+      "properties": {
+        "classifier_contender": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClassifierContender"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "eval_run_id": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eval Run Id"
+        },
+        "retriever_configs": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RetrieverConfig"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retriever Configs"
+        },
+        "stop_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StopAfter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "StartCaseOptions",
+      "type": "object"
+    },
     "StartCaseRequest": {
       "additionalProperties": false,
-      "description": "Request of `POST /cases/{case_id}/start`; every field is optional (settings fill the gaps).",
+      "description": "Request of `POST /cases/{case_id}/start`: the options, and who asks.\n\n`workflow` refuses a start that names no demo role.",
       "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor"
+        },
         "classifier_contender": {
           "anyOf": [
             {

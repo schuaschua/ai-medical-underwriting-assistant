@@ -54,9 +54,9 @@ export function TriageQueue() {
     );
   }
 
-  const listed = new Set(state.queue.pages.map((page) => page.page_id));
+  const listed = new Set(state.value.pages.map((page) => page.page_id));
   const pages = [
-    ...state.queue.pages,
+    ...state.value.pages,
     ...Object.values(held).filter((page) => !listed.has(page.page_id)),
   ];
   return (
@@ -100,7 +100,7 @@ export function TriageQueue() {
           </tbody>
         </table>
       )}
-      {state.queue.has_more && <p>{strings.triage.more}</p>}
+      {state.value.has_more && <p>{strings.triage.more}</p>}
     </section>
   );
 }

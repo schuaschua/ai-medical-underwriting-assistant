@@ -19,6 +19,10 @@ from contracts.ids import CaseId, EvalRunId, PageId, Uuid7Str
 
 
 class AuditAction(StrEnum):
+    # A demo role asked for the case to be started. Added with `case.completed`
+    # on the owner's decision of 2026-10-07, so that a trail says who began
+    # the case and when it ended.
+    CASE_STARTED = "case.started"
     DOCUMENT_REDACTED = "document.redacted"
     PAGE_CLASSIFIED = "page.classified"
     # AD-7: the gate sent a classified page on. Added in story 1.9, so that the
@@ -31,16 +35,29 @@ class AuditAction(StrEnum):
     FACTS_EXTRACTED = "facts.extracted"
     VERDICT_SUGGESTED = "verdict.suggested"
     STAGE_FAILED = "stage.failed"
+    # The case reached `completed`. A failed case has `stage.failed` instead.
+    CASE_COMPLETED = "case.completed"
 
 
-# AD-10: the actions only a human role may take.
-HUMAN_ACTIONS: frozenset[AuditAction] = frozenset(
+# AD-10: the four decisions about a page, which only a human role may make.
+DECISION_ACTIONS: frozenset[AuditAction] = frozenset(
     {
         AuditAction.PAGE_KEPT,
         AuditAction.PAGE_DISCARDED,
         AuditAction.PAGE_ACCEPTED,
         AuditAction.PAGE_DENIED,
     }
+)
+
+# Every action whose actor is a person: the decisions, and the start of a
+# case, which either demo role may ask for.
+ACTIONS_BY_A_HUMAN: frozenset[AuditAction] = DECISION_ACTIONS | {
+    AuditAction.CASE_STARTED
+}
+
+# The actions about the case as a whole: no page, and the case is its own reference.
+CASE_ACTIONS: frozenset[AuditAction] = frozenset(
+    {AuditAction.CASE_STARTED, AuditAction.CASE_COMPLETED}
 )
 
 _PAGE_ACTION_PREFIX = "page."
@@ -83,7 +100,8 @@ class AuditRecord(ContractModel):
     occurred_at: UtcDatetime
     case_id: CaseId
     page_id: PageId | None
-    # Id of the owning record: classification, fact set, verdict run, human decision.
+    # Id of the owning record: classification, fact set, verdict run, human
+    # decision; for `case.started` and `case.completed`, the case itself.
     ref: Uuid7Str
     # For `document.redacted`, category to count, never the values; for
     # `page.routed`, the route and the threshold; otherwise null.
@@ -133,9 +151,20 @@ class AuditRecord(ContractModel):
 
     @model_validator(mode="after")
     def _human_actions_come_from_humans(self) -> Self:
-        if (self.action in HUMAN_ACTIONS) != (self.actor_kind is ActorKind.HUMAN):
+        if (self.action in ACTIONS_BY_A_HUMAN) != (self.actor_kind is ActorKind.HUMAN):
             raise ValueError(
-                "keep, discard, accept and deny come from a human, and nothing else does"
+                "keep, discard, accept, deny and the start of a case come from "
+                "a human, and nothing else does"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _case_actions_are_about_the_case(self) -> Self:
+        if self.action in CASE_ACTIONS and (
+            self.page_id is not None or self.ref != self.case_id
+        ):
+            raise ValueError(
+                "case.started and case.completed name no page, and their ref is the case"
             )
         return self
 

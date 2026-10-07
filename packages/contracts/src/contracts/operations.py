@@ -188,6 +188,15 @@ OPERATIONS: tuple[Operation, ...] = (
         response_model=workflow.PageQueue,
         query_model=workflow.PageQueueQuery,
     ),
+    Operation(
+        name="list_cases",
+        callers=_WEB,
+        owner=Service.WORKFLOW,
+        method=HttpMethod.GET,
+        path="/cases",
+        request_model=None,
+        response_model=workflow.CaseList,
+    ),
     # classification
     Operation(
         name="classify_page",

@@ -27,7 +27,9 @@ from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
     SidecarStandIn,
+    after_start,
     redaction_done,
+    starting,
 )
 
 from contracts.enums import ClassifierContender, RetrieverConfig, StopAfter
@@ -285,7 +287,7 @@ def service_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 def start(store: MemoryCaseStore, case_id: str) -> None:
     case = new_case(case_id, PARAMETERS, datetime.fromisoformat("2026-10-06T12:00:00Z"))
-    asyncio.run(store.start(case))
+    asyncio.run(store.start(*starting(case)))
 
 
 def redact(
@@ -326,7 +328,7 @@ def test_story_1_7_a_done_redaction_is_recorded_with_its_pages_and_one_event(
         for page_id in result.page_ids
     ] == [(page_id, n, "uploaded") for n, page_id in enumerate(result.page_ids, 1)]
     # One `document.redacted` event: counts per category, never a value.
-    ((_, recording),) = store.events
+    ((_, recording),) = after_start(store)
     audit = recording.audit
     assert audit.action.value == "document.redacted"
     assert audit.actor == "intake:azure-ai-language"
@@ -363,7 +365,7 @@ def test_story_1_7_the_redaction_activity_waits_the_stage_timeout_not_the_genera
 
     # Waited for with the stage's 200 s setting (here 5 s), so it is heard.
     assert (answer["outcome"], answer["case_status"]) == ("ok", "running")
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 def test_story_1_7_a_failed_redaction_fails_the_case_with_one_case_level_event(
@@ -378,7 +380,7 @@ def test_story_1_7_a_failed_redaction_fails_the_case_with_one_case_level_event(
     case = store.cases[case_id]
     assert (case.case_status.value, case.redaction_status.value) == ("failed", "failed")
     assert store.pages == {}
-    ((_, recording),) = store.events
+    ((_, recording),) = after_start(store)
     assert recording.audit.action.value == "stage.failed"
     assert recording.audit.page_id is None
     assert recording.error_code is ErrorCode.STAGE_TIMEOUT
@@ -398,7 +400,7 @@ def test_story_1_7_in_progress_fails_the_activity_so_the_engine_sends_the_comman
             with pytest.raises(ActivityFailed) as raised:
                 activities.redact_document(task.ActivityContext(case_id, 2), command)
             reasons.append(raised.value.reason)
-        assert store.events == []
+        assert after_start(store) == []
         # The attempt after those: the stage has ended, and answers.
         answer = activities.redact_document(task.ActivityContext(case_id, 2), command)
 
@@ -410,7 +412,7 @@ def test_story_1_7_in_progress_fails_the_activity_so_the_engine_sends_the_comman
     ) in caplog.text
     assert (answer["outcome"], answer["case_status"]) == ("ok", "running")
     assert len(stages.calls) == 3
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 def test_story_1_7_a_case_intake_does_not_hold_is_refused_without_a_retry(
@@ -424,7 +426,7 @@ def test_story_1_7_a_case_intake_does_not_hold_is_refused_without_a_retry(
     # Answered, not raised: the engine would only run a raised failure again.
     assert answer == {"outcome": "refused", "reason": "not_found"}
     assert len(stages.calls) == 1
-    assert store.events == []
+    assert after_start(store) == []
     assert store.cases[case_id].case_status.value == "running"
 
 
@@ -444,7 +446,7 @@ def test_story_1_7_a_result_the_trail_cannot_take_is_refused_not_left_running(
     (answer,) = redact(store, FakeStages(), case_id)
 
     assert answer["outcome"] == "refused"
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 def test_story_1_7_the_command_carries_the_eval_run_id_and_the_trace_context(
@@ -470,7 +472,7 @@ def test_story_1_7_the_command_carries_the_eval_run_id_and_the_trace_context(
     # Read on the activity's thread and handed over to the service's loop.
     assert context["traceparent"].split("-")[1] == trace_id
     # The audit record keeps the run id the stage was given.
-    assert store.events[0][1].audit.eval_run_id == eval_run_id
+    assert after_start(store)[0][1].audit.eval_run_id == eval_run_id
 
 
 # --- The client module: `intake` through the Dapr sidecar ----------------------------------

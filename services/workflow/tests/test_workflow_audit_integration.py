@@ -20,11 +20,13 @@ from alembic import command
 from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from fastapi.testclient import TestClient
 from workflow_fakes import (
+    STARTED_BY,
     FakeStages,
     SidecarStandIn,
     classification_done,
     classification_failed,
     redaction_done,
+    starting,
 )
 from workflow_local import as_service, connect, wait_for_case_status
 
@@ -168,7 +170,7 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         waiting = wait_for_case_status(client, case_id, "awaiting_human")
         first, second, third, fourth = (page["page_id"] for page in waiting["pages"])
         # One page discarded, one kept and then accepted, one denied.
@@ -184,10 +186,12 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
 
     assert trail.has_more is False
     actions = [(event.action.value, event.page_id) for event in trail.events]
-    # The redaction first, once; then per page its classification, its route
-    # and its decisions, each cause before its effect.
-    assert actions[0] == ("document.redacted", None)
-    assert sorted(actions[1:]) == sorted(
+    # Story 1.13: the start first, by the role that asked for it. Then the
+    # redaction, once; then per page its classification, its route and its
+    # decisions, each cause before its effect. Two pages are still being
+    # extracted, so the case is not completed and the trail does not say so.
+    assert actions[:2] == [("case.started", None), ("document.redacted", None)]
+    assert sorted(actions[2:]) == sorted(
         [("page.classified", page) for page in (first, second, third, fourth)]
         + [("page.routed", page) for page in (first, second, third, fourth)]
         + [
@@ -210,6 +214,7 @@ def test_story_1_12_the_trail_of_a_decided_case_lists_every_step_in_causal_order
         (event.action.value, event.actor_kind, event.actor) for event in trail.events
     }
     assert actors == {
+        ("case.started", ActorKind.HUMAN, "customer"),
         ("document.redacted", ActorKind.AI, "intake:azure-ai-language"),
         ("page.classified", ActorKind.AI, "classification:chat-main"),
         ("page.routed", ActorKind.AI, "workflow:gate"),
@@ -252,7 +257,7 @@ def test_story_1_12_a_failed_stage_is_in_the_trail_with_its_error_code(
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         progress = CaseProgress.model_validate(
             wait_for_case_status(client, case_id, "failed")
         )
@@ -287,7 +292,7 @@ def test_story_1_12_a_route_is_listed_after_its_classification_whatever_the_cloc
     ahead = datetime.now(UTC) + timedelta(minutes=5)
 
     async def scenario(store: SqlCaseStore) -> AuditTrail:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(redaction_done(case_id, [page_id]), store=store)
         classified = classification_done(case_id, page_id, occurred_at=ahead)
         await record_stage_result(classified, store=store)
@@ -305,11 +310,12 @@ def test_story_1_12_a_route_is_listed_after_its_classification_whatever_the_cloc
         trail = runner.run(scenario(store))
 
     assert [event.action.value for event in trail.events] == [
+        "case.started",
         "document.redacted",
         "page.classified",
         "page.routed",
     ]
-    classified_event, routed_event = trail.events[1:]
+    classified_event, routed_event = trail.events[2:]
     # Each still shows the time its work was done.
     assert classified_event.occurred_at == ahead
     assert routed_event.occurred_at < classified_event.occurred_at
@@ -325,7 +331,7 @@ def test_story_1_12_the_real_store_lists_the_first_events_up_to_the_limit(
     page_ids = [new_id() for _ in range(3)]
 
     async def scenario(store: SqlCaseStore) -> list[AuditTrail]:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(redaction_done(case_id, page_ids), store=store)
         await record_stage_result(
             classification_done(case_id, page_ids[0]), store=store
@@ -336,14 +342,15 @@ def test_story_1_12_the_real_store_lists_the_first_events_up_to_the_limit(
         )
         return [
             await read_audit_trail(case_id, store=store, limit=limit)
-            for limit in (3, 2, 1)
+            for limit in (4, 2, 1)
         ]
 
     with a_store(service_settings) as (store, runner):
         whole, two, one = runner.run(scenario(store))
 
-    assert (len(whole.events), whole.has_more) == (3, False)
-    assert whole.events[2].error_code is ErrorCode.INVALID_MODEL_OUTPUT
+    # The start, the redaction and the two classifications.
+    assert (len(whole.events), whole.has_more) == (4, False)
+    assert whole.events[3].error_code is ErrorCode.INVALID_MODEL_OUTPUT
     assert (two.events, two.has_more) == (whole.events[:2], True)
     assert (one.events, one.has_more) == (whole.events[:1], True)
 
@@ -355,7 +362,7 @@ def test_story_1_12_the_service_lists_no_more_events_than_its_setting_allows(
     page_ids = [new_id(), new_id()]
 
     async def record_three(store: SqlCaseStore) -> None:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(redaction_done(case_id, page_ids), store=store)
         for page_id in page_ids:
             await record_stage_result(
@@ -370,8 +377,8 @@ def test_story_1_12_the_service_lists_no_more_events_than_its_setting_allows(
         unknown = client.get(f"/cases/{new_id()}/audit")
 
     assert [event["action"] for event in answer["events"]] == [
+        "case.started",
         "document.redacted",
-        "page.classified",
     ]
     assert answer["has_more"] is True
     assert (unknown.status_code, unknown.json()["error"]["code"]) == (404, "not_found")
@@ -396,7 +403,7 @@ def test_story_1_12_events_recorded_at_the_same_instant_are_listed_in_the_order_
     page_ids = [new_id() for _ in range(8)]
 
     async def scenario(store: SqlCaseStore) -> AuditTrail:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         # One clock value for every event: nothing but the order of
         # writing tells them apart.
         await record_stage_result(
@@ -411,7 +418,7 @@ def test_story_1_12_events_recorded_at_the_same_instant_are_listed_in_the_order_
     with a_store(service_settings) as (store, runner):
         trail = runner.run(scenario(store))
 
-    assert [event.page_id for event in trail.events] == [None, *page_ids]
+    assert [event.page_id for event in trail.events] == [None, None, *page_ids]
     rows = stored_order(service_settings, case_id)
     assert {row[3] for row in rows} == {NOW}
     numbers = [row[2] for row in rows]
@@ -427,7 +434,7 @@ def test_story_1_12_an_event_written_later_with_an_earlier_record_time_is_listed
     clock = iter([NOW, NOW - timedelta(seconds=30), NOW - timedelta(seconds=60)])
 
     async def scenario(store: SqlCaseStore) -> AuditTrail:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(
             redaction_done(case_id, [page_id]), store=store, now=lambda: next(clock)
         )
@@ -450,11 +457,13 @@ def test_story_1_12_an_event_written_later_with_an_earlier_record_time_is_listed
         trail = runner.run(scenario(store))
 
     assert [event.action.value for event in trail.events] == [
+        "case.started",
         "document.redacted",
         "page.classified",
         "page.routed",
     ]
-    record_times = [row[3] for row in stored_order(service_settings, case_id)]
+    # The start was recorded at NOW, as the redaction after it.
+    record_times = [row[3] for row in stored_order(service_settings, case_id)][1:]
     assert record_times == sorted(record_times, reverse=True)
     assert len(set(record_times)) == 3
 
@@ -561,7 +570,7 @@ def test_story_1_12_a_stored_row_that_breaks_the_error_code_rule_does_not_fail_t
     page_ids = [new_id(), new_id()]
 
     async def record_two(store: SqlCaseStore) -> None:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(redaction_done(case_id, page_ids), store=store)
         await record_stage_result(
             classification_failed(case_id, page_ids[0], "model_unavailable"),
@@ -590,6 +599,7 @@ def test_story_1_12_a_stored_row_that_breaks_the_error_code_rule_does_not_fail_t
             trail = runner.run(read_audit_trail(case_id, store=store))
 
     assert [(event.action.value, event.error_code) for event in trail.events] == [
+        ("case.started", None),
         ("document.redacted", None),
         ("stage.failed", ErrorCode.MODEL_UNAVAILABLE),
         ("page.classified", None),

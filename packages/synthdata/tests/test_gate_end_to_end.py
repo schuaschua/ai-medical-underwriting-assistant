@@ -64,7 +64,10 @@ def test_story_1_9_a_case_with_medical_and_other_pages_is_routed_page_by_page(
     listed = {
         item.page_id: item for item in classification.listed(case_id).classifications
     }
-    assert trail.events[0].action.value == "document.redacted"
+    assert [event.action.value for event in trail.events[:2]] == [
+        "case.started",
+        "document.redacted",
+    ]
     for page, route in zip(progress.pages, expected, strict=True):
         events = [event for event in trail.events if event.page_id == page.page_id]
         assert [event.action.value for event in events] == [
@@ -78,7 +81,7 @@ def test_story_1_9_a_case_with_medical_and_other_pages_is_routed_page_by_page(
             "route": route,
             "threshold": 0.9,
         }
-    assert len(trail.events) == 1 + 2 * len(expected)
+    assert len(trail.events) == 2 + 2 * len(expected)
     # The gate is `workflow`'s alone: nothing but the classify commands went
     # to `classification`, and no command carried a threshold or a route.
     assert sidecar.paths("classification") == ["/classifications"] * len(expected)
@@ -212,6 +215,8 @@ def test_story_1_9_a_case_started_with_stop_after_gate_ends_at_the_gate(
     assert [page.page_status.value for page in progress.pages] == ["extracting"] * 3
     assert progress.case_status.value == "completed"
     assert output["case_status"] == "completed"
-    assert [event.action.value for event in trail.events].count("page.routed") == len(
-        progress.pages
-    )
+    actions = [event.action.value for event in trail.events]
+    assert actions.count("page.routed") == len(progress.pages)
+    # Story 1.13: the trail says who started the case and that it was completed.
+    assert (actions[0], actions[-1]) == ("case.started", "case.completed")
+    assert actions.count("case.completed") == 1

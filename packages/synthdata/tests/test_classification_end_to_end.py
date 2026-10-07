@@ -113,11 +113,16 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         assert (item.case_id, item.contender.value) == (case_id, "llm")
     assert {item.is_medical for item in listed} == {True, False}
 
-    # The audit trail: one `page.classified` event per page, whose actor
-    # names the service and the model deployment, after the redaction.
-    assert trail.events[0].action.value == "document.redacted"
-    # Then one `page.routed` event per page (story 1.9): thirteen events in all.
+    # The audit trail: the start (story 1.13), then one `page.classified`
+    # event per page, whose actor names the service and the model
+    # deployment, after the redaction.
+    assert [event.action.value for event in trail.events[:2]] == [
+        "case.started",
+        "document.redacted",
+    ]
+    # Then one `page.routed` event per page (story 1.9): fourteen events in all.
     assert sorted(event.action.value for event in trail.events) == [
+        "case.started",
         "document.redacted",
         *["page.classified"] * 6,
         *["page.routed"] * 6,
@@ -235,8 +240,8 @@ def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_
     # other pages' failures write nothing.
     assert (progress.case_status.value, output["case_status"]) == ("failed", "failed")
     events = audit_rows(workflow_service_settings, case_id)
-    assert events[0][0] == "document.redacted"
-    ((action, page_id, code, detail, actor),) = events[1:]
+    assert [event[0] for event in events[:2]] == ["case.started", "document.redacted"]
+    ((action, page_id, code, detail, actor),) = events[2:]
     assert (action, code, detail, actor) == ("stage.failed", error_code, None, ACTOR)
     assert page_id in page_ids
     statuses = {page.page_id: page.page_status.value for page in progress.pages}
@@ -260,7 +265,8 @@ def test_story_1_8_a_case_started_with_the_doc_intelligence_contender_fails(
 
     with workflow_service(workflow_service_settings, sidecar) as client:
         client.post(
-            f"/cases/{case_id}/start", json={"classifier_contender": "doc-intelligence"}
+            f"/cases/{case_id}/start",
+            json={"actor": "underwriter", "classifier_contender": "doc-intelligence"},
         )
         state = completed(scheduler_client, case_id)
 
@@ -268,7 +274,10 @@ def test_story_1_8_a_case_started_with_the_doc_intelligence_contender_fails(
     # 422, once per page, and the case fails.
     assert json.loads(state.serialized_output or "")["case_status"] == "failed"
     assert sidecar.paths("classification") == ["/classifications"] * 3
-    assert audit_rows(workflow_service_settings, case_id)[1:] == [
+    # The start, by the role that asked; the redaction; and the failure.
+    events = audit_rows(workflow_service_settings, case_id)
+    assert events[0] == ("case.started", None, None, None, "underwriter")
+    assert events[2:] == [
         ("stage.failed", None, "stage_failed", None, "workflow:case-lifecycle")
     ]
     assert classification_rows(workflow_admin) == []

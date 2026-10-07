@@ -214,7 +214,9 @@ page's classification always comes before its route and its route before a decis
 event still carries its `occurred_at`. A `stage.failed` event carries the `error_code` stored with
 it (the audit record has that field now; it is null for every other action, and a stage's own
 record may leave it out). One read lists the first `WORKFLOW_AUDIT_TRAIL_LIMIT` events (default 500)
-and says with `has_more` when the case has more. A stored row whose code is outside the catalogue is
+and says with `has_more` when the case has more. Because it is the first events that are listed, a
+trail longer than the limit never shows its last ones: the `case.completed` event of story 1.13 is
+then not on the screen, and the case's status says whether it was completed. A stored row whose code is outside the catalogue is
 answered as `stage_failed`, and a code on a row that is no failure is left out; both are logged with
 the case id and the event id. Nothing new writes to the audit table. Migration `0004` numbers the
 events already there in the order they were read in before (record time, then id), with the
@@ -242,6 +244,45 @@ orders nothing and works out no status or actor. To see it locally, run
 `FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`, upload `data/cases/case-002.pdf` as the customer,
 discard a page and keep one, then switch to the underwriter, accept the kept page in the triage
 queue and follow "Audit trail" on a row (or copy the case id from the upload screen into the field).
+
+**Case events and the case list (story 1.13).** A trail now says who started its case and when the
+case was completed. Two audit actions were added to the contracts' catalogue: `case.started` (actor
+kind `human`, the actor is the demo role that asked for the start) and `case.completed` (actor kind
+`ai`, the actor is `workflow:case-lifecycle`). Both are about the whole case: no page, no detail, and
+the case id as their reference. `workflow` writes `case.started` in the transaction that stores the
+case, and `case.completed` in the transaction that moves the case to `completed` (the last decision
+that leaves every page final, or the settle after the gate of a case started with
+`stop_after: gate`), after the decision's own event, so it is the trail's last. A repeated start, by
+the same role or the other, adds no event and the first actor stands; a repeated decision or settle
+adds no second completion. A failed case keeps its `stage.failed` event and gets no `case.completed`.
+Nothing is recorded when a case begins to wait for a person or runs again. Migration `0005` adds two
+partial unique indexes on `workflow.audit_event`, so the database itself takes one `case.started` and
+one `case.completed` row per case, whatever reference a row names. A recording of a stage result
+that asked to complete a case is refused in the store: a case is completed only where the event is
+written with the status.
+
+The start request `workflow` takes carries an `actor`. `web` sets it from `X-Demo-Role`, as it does
+for a decision. The body the browser sends to `POST /api/cases/<case_id>/start` is the start options
+only (`StartCaseOptions`): it has no `actor`, and a body that names one is refused with 422.
+`workflow` refuses a start whose actor is missing, blank or not a demo role with 403
+`actor_not_human`, and stores nothing; so anything that calls `workflow`'s start directly must name
+a role in the body, for example `{"actor": "underwriter"}`.
+
+`GET /cases` on `workflow` lists the cases newest first: case id, case status, when it was started
+(`started_at`), how many pages it has (`page_count`) and how many of them wait for a person
+(`waiting_page_count`, which is 0 for a case that takes no decision any more: failed, completed, or
+told to stop after the gate). Cases of an eval run are left out. One read lists at most
+`WORKFLOW_CASE_LIST_LIMIT` cases (default 100) and says with `has_more` when more exist; there is no
+filter, search or paging. `web` passes the list on at `GET /api/cases`, for the underwriter only (the
+customer role is refused with `role_not_allowed`). The underwriter's "Cases" screen
+(`/underwriter/cases`) shows the list in the server's order and reads it again every few seconds
+while the tab is visible; each row links to the case's audit trail, which is how a finished case is
+found. Once the server refuses the read itself (a 4xx other than 429) the screen shows the server's
+message and reads no more until "Check again" is chosen; the triage queue now does the same. An empty list reads "No cases yet." The audit trail screen words the two new actions as "Case
+started" and "Case completed". To see it locally, run `FOUNDRY_STANDIN_MODE=disagree ./tools/dev.sh`,
+upload `data/cases/case-001.pdf` as the customer, switch to the underwriter, deny every page in the
+triage queue, then open "Cases" and follow "Audit trail" on the case's row: the trail starts with
+"Case started" by the customer and ends with "Case completed".
 
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
@@ -297,7 +338,7 @@ add to it, and the database refuses it an `UPDATE` or a `DELETE`.
 | `web`'s Dapr sidecar | `http://localhost:3500` |
 | `intake` (`/health`, `/ready`, `POST /cases`, `POST /cases/<case_id>/redaction`, `GET /cases/<case_id>/pages`, `GET /pages/<page_id>/text`, `/boxes` and `/thumbnail`, `GET /documents/<document_id>/file`), and its Dapr sidecar | `http://localhost:8001`, `http://localhost:3501` |
 | Stand-in for Azure AI Language (this machine only) | `http://localhost:5100` |
-| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`, `POST /cases/<case_id>/pages/<page_id>/decisions`, `GET /pages?status=<status>`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
+| `workflow` (`/health`, `/ready`, `POST /cases/<case_id>/start`, `GET /cases`, `GET /cases/<case_id>/progress`, `GET /cases/<case_id>/audit`, `POST /cases/<case_id>/pages/<page_id>/decisions`, `GET /pages?status=<status>`), and its Dapr sidecar | `http://localhost:8002`, `http://localhost:3502` |
 | `classification` (`/health`, `/ready`, `POST /classifications`, `GET /cases/<case_id>/classifications`), and its Dapr sidecar | `http://localhost:8003`, `http://localhost:3503` |
 | Stand-in for the Foundry chat deployment (this machine only) | `http://localhost:5101` |
 | PostgreSQL (database and user `aiuw`, and the role `workflow`; no password, this machine only) | `localhost:5432` |

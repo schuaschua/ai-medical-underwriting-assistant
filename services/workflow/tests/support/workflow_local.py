@@ -54,3 +54,19 @@ def wait_for_case_status(
     raise AssertionError(
         f"case {case_id} did not reach {wanted}: {progress.get('case_status')}"
     )
+
+
+def after_the_start(rows: list[Any]) -> list[Any]:
+    """A case's stored events, in the order written, without the start they begin with.
+
+    Every trail begins with its one `case.started` event (story 1.13). The
+    tests of the earlier stories are about what follows it: this checks that
+    the start is there, first and once, and leaves it out. The action is
+    each row's first column. A case with no event at all has no start.
+    """
+    actions = [row[0] for row in rows]
+    if not actions:
+        return []
+    assert actions[0] == "case.started", actions
+    assert actions.count("case.started") == 1, actions
+    return list(rows[1:])

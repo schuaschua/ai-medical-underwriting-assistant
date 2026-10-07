@@ -629,7 +629,8 @@ def test_story_1_5_logs_carry_no_file_name_and_no_content(
 # --- Methods, the route table and the framework's own errors ------------------
 
 
-@pytest.mark.parametrize("method", ["PUT", "GET", "PATCH", "DELETE"])
+# GET is the underwriter's case list since story 1.13.
+@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
 def test_story_1_5_wrong_method_on_cases_is_405_in_the_error_shape(
     client: TestClient, sidecar: FakeSidecar, method: str
 ) -> None:
@@ -692,6 +693,8 @@ def test_story_1_5_no_route_returns_a_document_file(settings: Settings) -> None:
         ("HEAD", "/api/health"),
         ("GET", "/api/me"),
         ("POST", "/api/cases"),
+        # Story 1.13: the underwriter's list of cases: ids, statuses and counts.
+        ("GET", "/api/cases"),
         # Story 1.6: the case's lifecycle, read from and started in `workflow`.
         ("POST", "/api/cases/{case_id}/start"),
         ("GET", "/api/cases/{case_id}/progress"),

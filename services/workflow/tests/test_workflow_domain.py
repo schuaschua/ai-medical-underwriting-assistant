@@ -8,8 +8,10 @@ from datetime import datetime, timedelta
 import pytest
 from pydantic import ValidationError
 from workflow_fakes import (
+    BY_CUSTOMER,
     FakeEngine,
     MemoryCaseStore,
+    after_start,
     classification_done,
     classification_failed,
     facts_done,
@@ -18,7 +20,7 @@ from workflow_fakes import (
     verdict_done,
 )
 
-from contracts.audit import HUMAN_ACTIONS, AuditAction
+from contracts.audit import ACTIONS_BY_A_HUMAN, AuditAction
 from contracts.enums import (
     CaseStatus,
     ClassifierContender,
@@ -78,8 +80,17 @@ def start(
     engine: FakeEngine,
     request: StartCaseRequest | None = None,
 ) -> CaseStarted:
+    # Story 1.13: a start names the demo role that asks for it.
+    by_customer = (request or BY_CUSTOMER).model_copy(update={"actor": "customer"})
     return asyncio.run(
-        start_case(case_id, request, store=store, engine=engine, defaults=DEFAULTS)
+        start_case(
+            case_id,
+            by_customer,
+            store=store,
+            engine=engine,
+            defaults=DEFAULTS,
+            trace_id=None,
+        )
     )
 
 
@@ -291,7 +302,7 @@ def test_story_1_6_no_stage_result_can_carry_a_human_action(case_id: str) -> Non
         verdict_done(case_id),
         redaction_failed(case_id),
     ):
-        assert plan_recording(result).audit.action not in HUMAN_ACTIONS
+        assert plan_recording(result).audit.action not in ACTIONS_BY_A_HUMAN
 
 
 # --- Recording -----------------------------------------------------------------
@@ -326,7 +337,11 @@ def test_story_1_6_a_recorded_result_changes_status_and_adds_one_event(
         (pages[1], 2, PageStatus.UPLOADED),
     ]
     trail = asyncio.run(read_audit_trail(case_id, store=store))
-    assert trail.events == [result.audit]
+    assert [event.action.value for event in trail.events] == [
+        "case.started",
+        "document.redacted",
+    ]
+    assert trail.events[1] == result.audit
 
 
 def test_story_1_6_recording_the_same_result_twice_writes_nothing_new(
@@ -345,7 +360,7 @@ def test_story_1_6_recording_the_same_result_twice_writes_nothing_new(
         assert record(result, store, fixed_now) is False
 
     assert asyncio.run(read_progress(case_id, store=store)) == before
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
     assert f"stage result duplicate: case_id={case_id}" in caplog.text
 
 
@@ -362,7 +377,7 @@ def test_story_1_6_a_failed_result_fails_the_case_with_one_stage_failed_event(
     assert progress.case_status is CaseStatus.FAILED
     assert progress.redaction_status is StageStatus.FAILED
     assert progress.pages == []
-    ((_, recording),) = store.events
+    ((_, recording),) = after_start(store)
     assert recording.audit.action is AuditAction.STAGE_FAILED
     assert recording.error_code is ErrorCode.REDACTION_FAILED
 
@@ -379,7 +394,7 @@ def test_story_1_6_a_recording_that_fails_is_raised_and_leaves_nothing(
         record(redaction_failed(case_id), store, fixed_now)
 
     assert asyncio.run(read_progress(case_id, store=store)) == before
-    assert store.events == []
+    assert after_start(store) == []
 
 
 def test_story_1_6_a_result_for_an_unknown_case_or_page_is_not_found(
@@ -393,7 +408,7 @@ def test_story_1_6_a_result_for_an_unknown_case_or_page_is_not_found(
     with pytest.raises(DomainError) as unknown_page:
         record(classification_done(case_id, new_id()), store, fixed_now)
     assert unknown_page.value.code is ErrorCode.NOT_FOUND
-    assert store.events == []
+    assert after_start(store) == []
 
 
 def test_story_1_12_events_are_read_in_the_order_they_were_recorded_whatever_their_clocks_say(
@@ -414,8 +429,8 @@ def test_story_1_12_events_are_read_in_the_order_they_were_recorded_whatever_the
     trail = asyncio.run(read_audit_trail(case_id, store=store))
 
     # The order `workflow` recorded them in, and each still shows its own time.
-    assert [event.page_id for event in trail.events] == [None, second, first]
-    assert [event.occurred_at for event in trail.events[1:]] == [later, earlier]
+    assert [event.page_id for event in trail.events] == [None, None, second, first]
+    assert [event.occurred_at for event in trail.events[2:]] == [later, earlier]
     assert trail.has_more is False
 
 
@@ -445,11 +460,12 @@ def test_story_1_12_a_route_recorded_after_its_classification_is_listed_after_it
     trail = asyncio.run(read_audit_trail(case_id, store=store))
 
     assert [event.action.value for event in trail.events] == [
+        "case.started",
         "document.redacted",
         "page.classified",
         "page.routed",
     ]
-    assert trail.events[2].occurred_at < trail.events[1].occurred_at
+    assert trail.events[3].occurred_at < trail.events[2].occurred_at
 
 
 def test_story_1_12_a_failed_stage_event_carries_its_error_code_and_no_other_event_does(
@@ -464,6 +480,7 @@ def test_story_1_12_a_failed_stage_event_carries_its_error_code_and_no_other_eve
     trail = asyncio.run(read_audit_trail(case_id, store=store))
 
     assert [(event.action.value, event.error_code) for event in trail.events] == [
+        ("case.started", None),
         ("document.redacted", None),
         ("stage.failed", ErrorCode.MODEL_UNAVAILABLE),
     ]
@@ -480,10 +497,11 @@ def test_story_1_12_the_trail_lists_the_first_events_up_to_the_limit_and_says_mo
             record_stage_result(classification_done(case_id, page_id), store=store)
         )
 
-    whole = asyncio.run(read_audit_trail(case_id, store=store, limit=4))
+    # The start, the redaction and three classifications.
+    whole = asyncio.run(read_audit_trail(case_id, store=store, limit=5))
     bounded = asyncio.run(read_audit_trail(case_id, store=store, limit=3))
 
-    assert (len(whole.events), whole.has_more) == (4, False)
+    assert (len(whole.events), whole.has_more) == (5, False)
     assert bounded.events == whole.events[:3]
     assert bounded.has_more is True
 
@@ -555,14 +573,14 @@ def test_story_1_6_a_result_that_arrives_out_of_order_changes_nothing(
     # under another ref, arrives late.
     record(classification_done(case_id, page_id), store, fixed_now)
     store.pages[page_id].page_status = PageStatus.EXTRACTING
-    events = len(store.events)
+    events = len(after_start(store))
 
     outcome = outcome_of(classification_done(case_id, page_id), store, fixed_now)
 
     assert outcome is RecordOutcome.OUT_OF_ORDER
     # Not moved back, and no audit row for a change that did not happen.
     assert store.pages[page_id].page_status is PageStatus.EXTRACTING
-    assert len(store.events) == events
+    assert len(after_start(store)) == events
     # Extraction before the page was sent to extraction is out of order too.
     store.pages[page_id].page_status = PageStatus.CLASSIFIED
     assert (
@@ -581,7 +599,7 @@ def test_story_1_6_a_result_for_a_page_in_a_final_status_changes_nothing(
 ) -> None:
     page_id = tracked_page(case_id, store, engine, fixed_now)
     store.pages[page_id].page_status = final
-    events = len(store.events)
+    events = len(after_start(store))
 
     for result in (
         classification_done(case_id, page_id),
@@ -593,7 +611,7 @@ def test_story_1_6_a_result_for_a_page_in_a_final_status_changes_nothing(
 
     assert store.pages[page_id].page_status is final
     assert store.cases[case_id].case_status is CaseStatus.RUNNING
-    assert len(store.events) == events
+    assert len(after_start(store)) == events
 
 
 def test_story_1_6_a_failed_case_takes_no_further_result(
@@ -603,7 +621,7 @@ def test_story_1_6_a_failed_case_takes_no_further_result(
     first, second = new_id(), new_id()
     record(redaction_done(case_id, [first, second]), store, fixed_now)
     record(classification_failed(case_id, first), store, fixed_now)
-    events = len(store.events)
+    events = len(after_start(store))
 
     for result in (
         classification_done(case_id, second),
@@ -614,7 +632,7 @@ def test_story_1_6_a_failed_case_takes_no_further_result(
 
     assert store.cases[case_id].case_status is CaseStatus.FAILED
     assert store.pages[second].page_status is PageStatus.UPLOADED
-    assert len(store.events) == events
+    assert len(after_start(store)) == events
 
 
 def test_story_1_6_a_second_redaction_result_does_not_track_the_pages_again(
@@ -631,7 +649,7 @@ def test_story_1_6_a_second_redaction_result_does_not_track_the_pages_again(
         RecordOutcome.PAGES_ALREADY_TRACKED,
     )
     assert list(store.pages) == [page_id]
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 def test_story_1_6_a_result_whose_audit_record_names_another_page_is_refused(
@@ -658,7 +676,7 @@ def test_story_1_6_a_result_whose_audit_record_names_another_page_is_refused(
             outcome_of(result, store, fixed_now)
         assert raised.value.code is ErrorCode.VALIDATION_FAILED
 
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
     assert store.pages[second].page_status is PageStatus.UPLOADED
 
 
@@ -697,7 +715,7 @@ def test_story_1_6_failing_a_case_changes_its_status_with_one_event_however_ofte
     # An unknown case is answered, not raised: no retry could find it.
     assert unknown is RecordOutcome.UNKNOWN_CASE
     assert store.cases[case_id].case_status is CaseStatus.FAILED
-    ((_, recording),) = store.events
+    ((_, recording),) = after_start(store)
     assert recording.audit.action is AuditAction.STAGE_FAILED
 
 
@@ -729,7 +747,7 @@ def test_story_1_6_a_repeat_start_reports_the_case_as_it_is_now(
     assert repeat.case_status is status
     assert once_more == repeat
     assert store.cases[case_id].case_status is status
-    assert len(store.events) == events
+    assert len(after_start(store)) == events
     # The state is logged by id.
     assert (
         f"case started: case_id={case_id} orchestration={existing.value} "

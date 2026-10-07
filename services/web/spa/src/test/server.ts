@@ -128,6 +128,23 @@ export function triagePage(
   };
 }
 
+/** One case of the underwriter's list, as `workflow` lists it. */
+export function caseSummary(
+  caseId: string,
+  caseStatus = "running",
+  pageCount = 0,
+  waitingPageCount = 0,
+  startedAt = "2026-10-07T09:00:00Z",
+) {
+  return {
+    case_id: caseId,
+    case_status: caseStatus,
+    started_at: startedAt,
+    page_count: pageCount,
+    waiting_page_count: waitingPageCount,
+  };
+}
+
 /** A thumbnail as `web` serves it. The bytes are no picture and need not be. */
 export function thumbnail(): Response {
   return new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
@@ -200,6 +217,17 @@ export function fakeServer(
       if (call.path === "/api/cases" && call.method === "POST") {
         return call.role === "customer"
           ? json(201, UPLOADED)
+          : json(
+              403,
+              errorBody(
+                "role_not_allowed",
+                "This action is not open to your role.",
+              ),
+            );
+      }
+      if (call.path === "/api/cases" && call.method === "GET") {
+        return call.role === "underwriter"
+          ? json(200, { cases: [], has_more: false })
           : json(
               403,
               errorBody(

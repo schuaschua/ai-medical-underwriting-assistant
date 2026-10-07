@@ -21,8 +21,10 @@ from pydantic import ValidationError
 from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
+    after_start,
     classification_failed,
     redaction_failed,
+    starting,
 )
 
 from contracts.audit import AuditAction, RouteDetail
@@ -284,7 +286,7 @@ def classified_case(
     stages = FakeStages(pages=pages, readings=readings or {})
 
     async def scenario() -> list[str]:
-        await store.start(new_case(case_id, parameters, NOW))
+        await store.start(*starting(new_case(case_id, parameters, NOW)))
         redacted = await stages.redact_document(
             case_id, eval_run_id=None, trace_context={}
         )
@@ -308,7 +310,7 @@ def test_story_1_9_a_recorded_route_moves_the_page_with_one_event_however_often(
 ) -> None:
     stages, (first, second, _) = classified_case(store, case_id)
     ref = stages.classifications[(case_id, first)].classification_id
-    events_before = len(store.events)
+    events_before = len(after_start(store))
 
     async def route(to: Route = Route.TRIAGE) -> tuple[RecordOutcome, Route | None]:
         return await record_route(
@@ -328,7 +330,7 @@ def test_story_1_9_a_recorded_route_moves_the_page_with_one_event_however_often(
         (RecordOutcome.DUPLICATE, Route.TRIAGE),
         (RecordOutcome.DUPLICATE, Route.TRIAGE),
     ]
-    assert len(store.events) == events_before + 1
+    assert len(after_start(store)) == events_before + 1
     assert store.pages[first].page_status is PageStatus.AWAITING_TRIAGE
     assert store.pages[second].page_status is PageStatus.CLASSIFIED
     # The page's `page.routed` event comes after its `page.classified` event.
@@ -434,7 +436,9 @@ def test_story_1_9_the_case_is_given_its_status_after_the_gate(
     gated_case(store, case_id, routes, replace(PARAMETERS, stop_after=stop_after))
 
     async def settle() -> CaseStatus:
-        return (await settle_case_after_gate(case_id, store=store)).case_status
+        return (
+            await settle_case_after_gate(case_id, store=store, trace_id=None)
+        ).case_status
 
     # Safe to repeat: the second call finds the status set.
     assert [asyncio.run(settle()), asyncio.run(settle())] == [kept, kept]
@@ -445,13 +449,15 @@ def test_story_1_9_a_failed_case_stays_failed_after_the_gate(
     store: MemoryCaseStore, case_id: str
 ) -> None:
     async def scenario() -> CaseStatus:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(redaction_failed(case_id), store=store)
-        return (await settle_case_after_gate(case_id, store=store)).case_status
+        return (
+            await settle_case_after_gate(case_id, store=store, trace_id=None)
+        ).case_status
 
     assert asyncio.run(scenario()) is CaseStatus.FAILED
     with pytest.raises(DomainError) as raised:
-        asyncio.run(settle_case_after_gate(new_id(), store=store))
+        asyncio.run(settle_case_after_gate(new_id(), store=store, trace_id=None))
     assert raised.value.code is ErrorCode.NOT_FOUND
 
 
@@ -957,7 +963,7 @@ def service_loop() -> Iterator[asyncio.AbstractEventLoop]:
 def test_story_1_9_the_confirm_activity_hands_the_case_the_threshold_in_force(
     store: MemoryCaseStore, case_id: str
 ) -> None:
-    asyncio.run(store.start(new_case(case_id, PARAMETERS, NOW)))
+    asyncio.run(store.start(*starting(new_case(case_id, PARAMETERS, NOW))))
 
     with service_loop() as loop:
         context = task.ActivityContext(case_id, 1)
@@ -981,7 +987,7 @@ def test_story_1_9_the_classify_activity_hands_on_what_the_gate_needs_and_no_mor
     store: MemoryCaseStore, case_id: str
 ) -> None:
     stages = FakeStages(pages=1, readings={1: ("invoice", False, 0.8)})
-    asyncio.run(store.start(new_case(case_id, PARAMETERS, NOW)))
+    asyncio.run(store.start(*starting(new_case(case_id, PARAMETERS, NOW))))
 
     with service_loop() as loop:
         activities = Activities(store, loop, 5.0, stages, 5.0)
@@ -1032,7 +1038,7 @@ def test_story_1_9_the_route_activity_records_the_route_once_however_often_it_ru
     command = route_command(
         stages, case_id, first, "awaiting_customer", eval_run_id=eval_run_id
     )
-    events_before = len(store.events)
+    events_before = len(after_start(store))
 
     with service_loop() as loop:
         activities = Activities(store, loop, 5.0, stages, 5.0)
@@ -1044,8 +1050,8 @@ def test_story_1_9_the_route_activity_records_the_route_once_however_often_it_ru
     # Each answer names the route the trail holds for the page.
     assert answers == [routed("awaiting_customer")] * 2
     assert store.pages[first].page_status is PageStatus.AWAITING_CUSTOMER
-    assert len(store.events) == events_before + 1
-    audit = store.events[-1][1].audit
+    assert len(after_start(store)) == events_before + 1
+    audit = after_start(store)[-1][1].audit
     assert (audit.action.value, audit.actor, audit.actor_kind.value) == (
         "page.routed",
         "workflow:gate",
@@ -1088,7 +1094,7 @@ def test_story_1_9_a_retry_under_a_changed_setting_keeps_the_route_that_was_stor
     assert store.pages[first].page_status is PageStatus.AWAITING_TRIAGE
     routes = [
         recording.audit.model_dump(mode="json")["detail"]
-        for _, recording in store.events
+        for _, recording in after_start(store)
         if recording.audit.action.value == "page.routed"
     ]
     assert routes == [{"route": "awaiting_triage", "threshold": 0.9}]
@@ -1165,7 +1171,7 @@ def test_story_1_9_the_route_activity_answers_what_no_retry_can_mend(
     assert case_failed == {"outcome": "ok", "case_status": "failed"}
     assert store.pages[first].page_status is PageStatus.CLASSIFIED
     assert "page.routed" not in {
-        recording.audit.action.value for _, recording in store.events
+        recording.audit.action.value for _, recording in after_start(store)
     }
     assert "retry=True" not in caplog.text
 
@@ -1278,7 +1284,7 @@ def test_story_1_9_progress_shows_the_routed_statuses_and_no_failure_reason(
                 THRESHOLD,
                 store=store,
             )
-        await settle_case_after_gate(case_id, store=store)
+        await settle_case_after_gate(case_id, store=store, trace_id=None)
 
     asyncio.run(gate_the_case())
 
@@ -1319,7 +1325,7 @@ def test_story_1_9_progress_of_a_case_whose_page_stage_failed_names_the_code_on_
     )
 
     async def scenario() -> None:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         redacted_result = await stages.redact_document(
             case_id, eval_run_id=None, trace_context={}
         )
@@ -1354,7 +1360,7 @@ def test_story_1_9_progress_of_a_case_whose_redaction_failed_names_the_code_on_t
     client: TestClient, store: MemoryCaseStore, case_id: str
 ) -> None:
     async def scenario() -> None:
-        await store.start(new_case(case_id, PARAMETERS, NOW))
+        await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
         await record_stage_result(
             redaction_failed(case_id, "stage_timeout"), store=store
         )

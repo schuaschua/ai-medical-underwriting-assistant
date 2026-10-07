@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
-import { backoffMs } from "../cases/caseProgress";
+import { backoffMs } from "../polling/backoff";
 import { THUMBNAIL_RETRIES } from "../components/PageThumbnail";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
 import {

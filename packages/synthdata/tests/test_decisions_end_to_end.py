@@ -205,7 +205,14 @@ def test_story_1_10_the_customer_discards_or_keeps_a_sure_non_medical_page_throu
 
     # The trail: the customer's two answers first, each a human's, about
     # its page, after that page's route.
-    decided = [event for event in trail["events"] if event["actor_kind"] == "human"]
+    # The start is a person's too (story 1.13): the customer's, first of all.
+    first_event = trail["events"][0]
+    assert (first_event["action"], first_event["actor"]) == ("case.started", "customer")
+    decided = [
+        event
+        for event in trail["events"]
+        if event["actor_kind"] == "human" and event["action"] != "case.started"
+    ]
     assert [
         (event["action"], event["actor"], event["page_id"]) for event in decided
     ] == [

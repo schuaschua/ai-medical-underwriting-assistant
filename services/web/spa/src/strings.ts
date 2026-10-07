@@ -57,6 +57,7 @@ export const strings = {
     home: "Home",
     upload: "Upload a document",
     triage: "Triage queue",
+    cases: "Cases",
     audit: "Audit trail",
   },
   home: {
@@ -64,7 +65,7 @@ export const strings = {
     customerIntro: "Use “Upload a document” to send us a PDF.",
     underwriterHeading: "Underwriter home",
     underwriterIntro:
-      "Use “Triage queue” to accept or deny the pages that are waiting, and “Audit trail” to read what was done to a case.",
+      "Use “Triage queue” to accept or deny the pages that are waiting, “Cases” to find a case, and “Audit trail” to read what was done to it.",
     checking: "Checking with the server…",
     confirmed: (role: string) => `The server sees you as: ${role}.`,
   },
@@ -98,6 +99,10 @@ export const strings = {
     pagesOf: (caseId: string) => `Pages of case ${caseId}`,
     pageBadge: (pageNumber: number, status: string) =>
       `Page ${pageNumber}: ${status}`,
+  },
+  // A time is shown in the viewer's own; this words the UTC time beside it.
+  time: {
+    utc: (date: string, time: string) => `${date} ${time} UTC`,
   },
   caseStatus: {
     running: "Running",
@@ -190,6 +195,29 @@ export const strings = {
     tryAgainFor: (pageNumber: number, caseId: string) =>
       `Try again to save your decision for page ${pageNumber} of case ${caseId}`,
   },
+  // The underwriter's list of cases. Which cases it holds, their order and
+  // every number in it are the server's.
+  cases: {
+    heading: "Cases",
+    intro:
+      "Every case that was started, newest first. Open a case's audit trail to read what was done to it.",
+    reading: "Reading the cases…",
+    empty: "No cases yet.",
+    more: "More cases exist than are shown here. Only the newest are listed.",
+    // A read failed after the list was shown: what is shown may be out of date.
+    stale:
+      "The cases could not be read again. What is shown may be out of date.",
+    checkAgain: "Check again",
+    tableLabel: "Cases, newest first",
+    caseColumn: "Case",
+    statusColumn: "Status",
+    startedColumn: "Started",
+    pagesColumn: "Pages",
+    waitingColumn: "Pages waiting for a person",
+    trailColumn: "Audit trail",
+    trail: "Audit trail",
+    trailFor: (caseId: string) => `Audit trail of case ${caseId}`,
+  },
   audit: {
     heading: "Audit trail",
     intro:
@@ -220,7 +248,6 @@ export const strings = {
     actionColumn: "Action",
     pageColumn: "Page",
     detailColumn: "Detail",
-    utc: (date: string, time: string) => `${date} ${time} UTC`,
     // A person: the demo role, as recorded.
     human: (role: string) => `${role} (a person)`,
     // An AI step: the service, and what did the work inside it. Both show.
@@ -254,6 +281,7 @@ export const strings = {
       "workflow:case-lifecycle": "Workflow service, the case's lifecycle",
     },
     action: {
+      "case.started": "Case started",
       "document.redacted": "Document redacted",
       "page.classified": "Page classified",
       "page.routed": "Page sent on by the gate",
@@ -264,6 +292,7 @@ export const strings = {
       "facts.extracted": "Facts extracted",
       "verdict.suggested": "Verdict suggested",
       "stage.failed": "Step failed",
+      "case.completed": "Case completed",
     } satisfies Record<AuditAction, string>,
     actionOnPage: (action: string, pageNumber: number) =>
       `${action} (page ${pageNumber})`,

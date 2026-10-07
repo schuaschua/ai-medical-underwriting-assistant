@@ -5,7 +5,13 @@ from typing import Annotated, Self
 from pydantic import Field, model_validator
 
 from contracts.audit import AuditRecord
-from contracts.base import ContractModel, NonEmptyStr, PageNumber, UtcDatetime
+from contracts.base import (
+    ContractModel,
+    Count,
+    NonEmptyStr,
+    PageNumber,
+    UtcDatetime,
+)
 from contracts.enums import (
     CaseStatus,
     ClassifierContender,
@@ -29,8 +35,13 @@ def _require_distinct(configs: list[RetrieverConfig]) -> None:
         raise ValueError("retriever_configs must not repeat a value")
 
 
-class StartCaseRequest(ContractModel):
-    """Request of `POST /cases/{case_id}/start`; every field is optional (settings fill the gaps)."""
+class StartCaseOptions(ContractModel):
+    """What a case may be started with; every option is optional (settings fill the gaps).
+
+    Also the body of `web`'s `POST /api/cases/{case_id}/start`. It names no
+    actor: `web` passes the request's demo role on as the actor (AD-9), so a
+    browser cannot say who started the case.
+    """
 
     classifier_contender: ClassifierContender | None = None
     retriever_configs: RetrieverConfigs | None = None
@@ -42,6 +53,20 @@ class StartCaseRequest(ContractModel):
         if self.retriever_configs is not None:
             _require_distinct(self.retriever_configs)
         return self
+
+
+class StartCaseRequest(StartCaseOptions):
+    """Request of `POST /cases/{case_id}/start`: the options, and who asks.
+
+    `workflow` refuses a start that names no demo role.
+    """
+
+    # AD-9: `web` passes the demo role on as the human actor who asked for
+    # the start. Any text is taken here, blank too, and the field may be
+    # left out, so that an actor that is missing, blank or no demo role
+    # reaches `workflow`'s domain rule and is refused there as
+    # `actor_not_human` (AD-10), and not as a request that is merely not valid.
+    actor: str | None = None
 
 
 class CaseStarted(ContractModel):
@@ -162,4 +187,34 @@ class PageQueue(ContractModel):
     """
 
     pages: list[QueuedPage]
+    has_more: bool
+
+
+class CaseSummary(ContractModel):
+    """One case in the underwriter's list."""
+
+    case_id: CaseId
+    case_status: CaseStatus
+    # When the case was first started.
+    started_at: UtcDatetime
+    # The pages `workflow` tracks for the case; none until redaction is done.
+    page_count: Count
+    # How many of them wait for a person, the customer or the underwriter.
+    waiting_page_count: Count
+
+    @model_validator(mode="after")
+    def _waiting_pages_are_among_the_pages(self) -> Self:
+        if self.waiting_page_count > self.page_count:
+            raise ValueError("waiting_page_count must not exceed page_count")
+        return self
+
+
+class CaseList(ContractModel):
+    """Response of `GET /cases`: the cases, newest started first.
+
+    Cases that belong to an eval run are left out. The answer is bounded:
+    `has_more` says that more cases exist than are listed.
+    """
+
+    cases: list[CaseSummary]
     has_more: bool

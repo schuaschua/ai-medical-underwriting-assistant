@@ -3,7 +3,9 @@
 import type { ReactElement } from "react";
 import type { DemoRole } from "./api/contracts.gen";
 import { AUDIT_PATH } from "./audit/auditPath";
+import { CASE_LIST_PATH } from "./cases/caseList";
 import { AuditTrail } from "./screens/AuditTrail";
+import { CaseList } from "./screens/CaseList";
 import { CustomerHome } from "./screens/CustomerHome";
 import { TriageQueue } from "./screens/TriageQueue";
 import { UnderwriterHome } from "./screens/UnderwriterHome";
@@ -44,6 +46,12 @@ export const SCREENS: Record<DemoRole, readonly Screen[]> = {
       path: `${HOME_PATHS.underwriter}/triage`,
       label: strings.navigation.triage,
       element: <TriageQueue />,
+    },
+    {
+      // AD-9: for the underwriter only; the customer has no such screen.
+      path: CASE_LIST_PATH,
+      label: strings.navigation.cases,
+      element: <CaseList />,
     },
     {
       // AD-9: for the underwriter only; the customer has no such screen.

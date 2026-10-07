@@ -19,14 +19,16 @@ from durabletask.azuremanaged.client import DurableTaskSchedulerClient
 from durabletask.client import OrchestrationState, OrchestrationStatus
 from fastapi.testclient import TestClient
 from workflow_fakes import (
+    STARTED_BY,
     FakeStages,
     SidecarStandIn,
     classification_done,
     classification_failed,
     redaction_done,
     redaction_failed,
+    starting,
 )
-from workflow_local import connect, wait_for_case_status
+from workflow_local import after_the_start, connect, wait_for_case_status
 
 from contracts.enums import (
     CaseStatus,
@@ -92,12 +94,14 @@ def query(settings: Settings, statement: str, *parameters: object) -> list[Any]:
 
 
 def audit_rows(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
-    return query(
-        settings,
-        "SELECT action, page_id::text, ref::text, detail, actor, actor_kind "
-        "FROM workflow.audit_event WHERE case_id = %s "
-        "ORDER BY occurred_at, recorded_at, audit_event_id",
-        case_id,
+    return after_the_start(
+        query(
+            settings,
+            "SELECT action, page_id::text, ref::text, detail, actor, actor_kind "
+            "FROM workflow.audit_event WHERE case_id = %s "
+            "ORDER BY audit_event_seq",
+            case_id,
+        )
     )
 
 
@@ -138,7 +142,9 @@ def test_story_1_9_every_page_of_a_started_case_leaves_classified_for_its_route(
     case_id, eval_run_id = new_id(), new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json={"eval_run_id": eval_run_id})
+        client.post(
+            f"/cases/{case_id}/start", json={**STARTED_BY, "eval_run_id": eval_run_id}
+        )
         # Story 1.10: pages wait for people, so the lifecycle does not end
         # here. It waits, and the case says so.
         progress = CaseProgress.model_validate(
@@ -177,7 +183,10 @@ def test_story_1_9_every_page_of_a_started_case_leaves_classified_for_its_route(
         }
         assert routed.eval_run_id == eval_run_id
         assert routed.occurred_at >= classified.occurred_at
-    assert len(trail.events) == 1 + 2 * 6
+    # The start, the redaction, and a classification and a route per page.
+    assert len(trail.events) == 2 + 2 * 6
+    assert trail.events[0].action.value == "case.started"
+    assert trail.events[0].eval_run_id == eval_run_id
     # Every page status change has its event: the detail is stored as JSON.
     stored_details = [
         row[3]
@@ -196,7 +205,7 @@ def test_story_1_9_a_case_started_with_another_threshold_is_routed_with_that_one
     with workflow_service(
         service_settings, sidecar.transport(), gate_threshold=0.5
     ) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         state = completed(scheduler_client, case_id)
         progress = CaseProgress.model_validate(
             client.get(f"/cases/{case_id}/progress").json()
@@ -221,11 +230,15 @@ def test_story_1_9_a_case_started_with_stop_after_gate_ends_completed(
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        first = client.post(f"/cases/{case_id}/start", json={"stop_after": "gate"})
+        first = client.post(
+            f"/cases/{case_id}/start", json={**STARTED_BY, "stop_after": "gate"}
+        )
         state = completed(scheduler_client, case_id)
         # A repeat of the start, once the lifecycle has ended: what the case
         # was started with, and the status it has now.
-        again = client.post(f"/cases/{case_id}/start", json={"stop_after": "gate"})
+        again = client.post(
+            f"/cases/{case_id}/start", json={**STARTED_BY, "stop_after": "gate"}
+        )
         progress = CaseProgress.model_validate(
             client.get(f"/cases/{case_id}/progress").json()
         )
@@ -257,13 +270,13 @@ def test_story_1_9_progress_of_a_failed_case_carries_the_failure_reason(
     page_failed, case_failed, never_started = new_id(), new_id(), new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{page_failed}/start")
+        client.post(f"/cases/{page_failed}/start", json=STARTED_BY)
         completed(scheduler_client, page_failed)
         of_page = CaseProgress.model_validate(
             client.get(f"/cases/{page_failed}/progress").json()
         )
     with workflow_service(service_settings, failed_redaction.transport()) as client:
-        client.post(f"/cases/{case_failed}/start")
+        client.post(f"/cases/{case_failed}/start", json=STARTED_BY)
         completed(scheduler_client, case_failed)
         of_case = client.get(f"/cases/{case_failed}/progress").json()
         unknown = client.get(f"/cases/{never_started}/progress")
@@ -305,7 +318,7 @@ def test_story_1_9_the_real_store_records_a_route_once_and_only_from_classified(
         database = build_database(service_settings)
         store = SqlCaseStore(database)
         try:
-            await store.start(new_case(case_id, PARAMETERS, NOW))
+            await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
             await record_stage_result(
                 redaction_done(case_id, [first, second, third]), store=store
             )
@@ -331,19 +344,25 @@ def test_story_1_9_the_real_store_records_a_route_once_and_only_from_classified(
             # Worked out from the stored pages (story 1.10): one of them
             # waits for the customer.
             statuses = [
-                (await settle_case_after_gate(case_id, store=store)).case_status,
-                (await settle_case_after_gate(case_id, store=store)).case_status,
+                (
+                    await settle_case_after_gate(case_id, store=store, trace_id=None)
+                ).case_status,
+                (
+                    await settle_case_after_gate(case_id, store=store, trace_id=None)
+                ).case_status,
             ]
             # A later stage fails a page: the case fails, and stays failed.
             await record_stage_result(
                 classification_failed(case_id, third, "model_unavailable"), store=store
             )
             statuses.append(
-                (await settle_case_after_gate(case_id, store=store)).case_status
+                (
+                    await settle_case_after_gate(case_id, store=store, trace_id=None)
+                ).case_status
             )
             progress = await store.progress(case_id)
             assert progress is not None
-            assert await store.settle_case(new_id(), NOW) is None
+            assert await store.settle_case(new_id(), NOW, None) is None
             return outcomes, statuses, progress
         finally:
             await database.dispose()
@@ -391,7 +410,7 @@ def test_story_1_9_a_failed_redaction_is_the_reason_the_real_store_reports(
         database = build_database(service_settings)
         store = SqlCaseStore(database)
         try:
-            await store.start(new_case(case_id, PARAMETERS, NOW))
+            await store.start(*starting(new_case(case_id, PARAMETERS, NOW)))
             before = await store.progress(case_id)
             assert before is not None and before.error_code is None
             await record_stage_result(redaction_failed(case_id), store=store)

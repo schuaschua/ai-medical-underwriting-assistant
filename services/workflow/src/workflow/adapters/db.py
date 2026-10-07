@@ -32,6 +32,7 @@ from sqlalchemy import (
     Uuid,
     event,
     exists,
+    func,
     insert,
     select,
     update,
@@ -43,6 +44,7 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from contracts.audit import AuditAction, AuditRecord, RouteDetail
+from contracts.decisions import STATUSES_AWAITING_A_DECISION
 from contracts.enums import (
     ActorKind,
     CaseStatus,
@@ -58,13 +60,16 @@ from contracts.errors import ErrorCode
 from contracts.ids import new_id
 from contracts.models.workflow import (
     AuditTrail,
+    CaseList,
     CaseProgress,
+    CaseSummary,
     PageProgress,
     PageQueue,
     QueuedPage,
 )
 from workflow.adapters.credential import azure_credential
 from workflow.adapters.telemetry import adapter_span
+from workflow.domain.case_list import waiting_page_count
 from workflow.domain.case_status import case_status_after_gate, case_status_following
 from workflow.domain.decisions import (
     CASE_STATUSES_TAKING_DECISIONS,
@@ -82,6 +87,7 @@ from workflow.domain.recording import (
     DecisionOutcome,
     Recording,
     RecordOutcome,
+    case_completed_event,
 )
 from workflow.domain.transitions import (
     CASE_STATUSES_TAKING_RESULTS,
@@ -108,6 +114,11 @@ HUMAN_DECISION_TABLE = "human_decision"
 # AD-8: one event per case, page, action and reference; a null page counts as
 # one value, so a case-level event cannot be written twice either.
 AUDIT_EVENT_UNIQUE = "uq_workflow_audit_event_subject"
+# A case is started once and completed once, whatever reference a row names
+# (migration 0005): the trail is append-only, so a second such event could
+# never be taken back.
+ONE_CASE_STARTED = "uq_workflow_audit_event_case_started"
+ONE_CASE_COMPLETED = "uq_workflow_audit_event_case_completed"
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +205,18 @@ audit_event_table = Table(
     ),
     Index(
         "ix_workflow_audit_event_case_id_audit_event_seq", "case_id", "audit_event_seq"
+    ),
+    Index(
+        ONE_CASE_STARTED,
+        "case_id",
+        unique=True,
+        postgresql_where=sa_text(f"action = '{AuditAction.CASE_STARTED.value}'"),
+    ),
+    Index(
+        ONE_CASE_COMPLETED,
+        "case_id",
+        unique=True,
+        postgresql_where=sa_text(f"action = '{AuditAction.CASE_COMPLETED.value}'"),
     ),
 )
 
@@ -527,12 +550,16 @@ async def _follow_pages(
     moved_at: datetime,
     *,
     at_the_gate: bool,
+    eval_run_id: str | None,
+    trace_id: str | None,
 ) -> SettledCase:
     """Give a case the status its stored pages give it; return the case as it is afterwards.
 
     The caller holds the lock on the case's row, so the pages read here and
     the status set here belong together. A status that may not follow the
-    current one (domain/transitions.py) is not set.
+    current one (domain/transitions.py) is not set. A case moved to
+    `completed` gets its `case.completed` event here, with the status
+    (AD-8); nothing follows `completed`, so the case gets it once.
     """
     pages = await connection.execute(
         select(page_status_table.c.page_id, page_status_table.c.page_status).where(
@@ -561,6 +588,15 @@ async def _follow_pages(
         .where(case_status_table.c.case_id == case_id)
         .values(case_status=wanted.value, updated_at=moved_at)
     )
+    if wanted is CaseStatus.COMPLETED:
+        completed = case_completed_event(
+            case_id, occurred_at=moved_at, eval_run_id=eval_run_id, trace_id=trace_id
+        )
+        await connection.execute(
+            insert(audit_event_table).values(
+                **_audit_values(Recording(audit=completed), moved_at, eval_run_id)
+            )
+        )
     return SettledCase(wanted, page_statuses)
 
 
@@ -574,12 +610,15 @@ class SqlCaseStore:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    async def start(self, case: CaseRecord) -> CaseRecord:
-        """Insert the case unless its id is taken; return the stored case either way."""
+    async def start(self, case: CaseRecord, started: AuditRecord) -> CaseRecord:
+        """Insert the case, with its `case.started` event, unless its id is taken.
+
+        Returns the stored case either way.
+        """
         parameters = case.parameters
         with adapter_span(tracer, "workflow.db.start_case"):
             async with self._database.begin() as connection:
-                await connection.execute(
+                inserted = await connection.execute(
                     upsert(case_status_table)
                     .values(
                         case_id=case.case_id,
@@ -600,7 +639,23 @@ class SqlCaseStore:
                     .on_conflict_do_nothing(
                         index_elements=[case_status_table.c.case_id]
                     )
+                    .returning(case_status_table.c.case_id)
                 )
+                if inserted.first() is not None:
+                    # AD-8: the event is written where the row is, and only
+                    # when it is: a repeat of the start, by whichever role,
+                    # finds the case and adds nothing. A start that stores
+                    # the case and then cannot reach the scheduler has its
+                    # event all the same.
+                    await connection.execute(
+                        insert(audit_event_table).values(
+                            **_audit_values(
+                                Recording(audit=started),
+                                case.created_at,
+                                parameters.eval_run_id,
+                            )
+                        )
+                    )
                 result = await connection.execute(
                     select(*_CASE_COLUMNS).where(
                         case_status_table.c.case_id == case.case_id
@@ -636,6 +691,12 @@ class SqlCaseStore:
         self, connection: AsyncConnection, recording: Recording, recorded_at: datetime
     ) -> None:
         audit = recording.audit
+        if recording.case_status is CaseStatus.COMPLETED:
+            # A case is completed where its `case.completed` event is
+            # written with the status (`_follow_pages`), and nowhere else.
+            raise ValueError(
+                "a recording does not complete a case: the case status follows its pages"
+            )
         # The case's row is locked first, so two recordings for one case run
         # one after the other and the check below cannot be raced.
         locked = await connection.execute(
@@ -832,7 +893,16 @@ class SqlCaseStore:
                 occurred_at=wanted.occurred_at,
             )
         )
+        # In the same transaction, as for every recording: if this insert
+        # fails, all of the above is rolled back with it.
+        await connection.execute(
+            insert(audit_event_table).values(
+                **_audit_values(recording, recorded_at, case.eval_run_id)
+            )
+        )
         # The case status follows the pages, here and not later (AD-5).
+        # After the decision's own event, so that a decision that completes
+        # the case leaves `case.completed` as the trail's last event.
         await _follow_pages(
             connection,
             audit.case_id,
@@ -840,13 +910,8 @@ class SqlCaseStore:
             stop_after,
             recorded_at,
             at_the_gate=False,
-        )
-        # Last, as for every recording: if this insert fails, all of the
-        # above is rolled back with it.
-        await connection.execute(
-            insert(audit_event_table).values(
-                **_audit_values(recording, recorded_at, case.eval_run_id)
-            )
+            eval_run_id=case.eval_run_id,
+            trace_id=audit.trace_id,
         )
         return Decided(DecisionOutcome.RECORDED, wanted)
 
@@ -868,7 +933,7 @@ class SqlCaseStore:
         return RouteDetail.model_validate(detail) if detail is not None else None
 
     async def settle_case(
-        self, case_id: str, settled_at: datetime
+        self, case_id: str, settled_at: datetime, trace_id: str | None
     ) -> SettledCase | None:
         """Give the case the status its pages give it after the gate; return the case as it is now."""
         with adapter_span(tracer, "workflow.db.settle_case"):
@@ -879,6 +944,7 @@ class SqlCaseStore:
                     select(
                         case_status_table.c.case_status,
                         case_status_table.c.stop_after,
+                        case_status_table.c.eval_run_id,
                     )
                     .where(case_status_table.c.case_id == case_id)
                     .with_for_update()
@@ -893,6 +959,8 @@ class SqlCaseStore:
                     StopAfter(case.stop_after) if case.stop_after is not None else None,
                     settled_at,
                     at_the_gate=True,
+                    eval_run_id=case.eval_run_id,
+                    trace_id=trace_id,
                 )
 
     async def progress(self, case_id: str) -> CaseProgress | None:
@@ -1045,6 +1113,68 @@ class SqlCaseStore:
                     page_status=status,
                     classifier_contender=ClassifierContender(row.classifier_contender),
                     queued_by=queued_by(status, bool(row.kept_by_customer)),
+                )
+                for row in rows[:limit]
+            ],
+            has_more=len(rows) > limit,
+        )
+
+    async def case_list(self, limit: int) -> CaseList:
+        """The cases outside any eval run, newest started first, at most `limit`."""
+        pages_of_the_case = page_status_table.c.case_id == case_status_table.c.case_id
+        page_count = (
+            select(func.count())
+            .select_from(page_status_table)
+            .where(pages_of_the_case)
+            .scalar_subquery()
+        )
+        awaiting_count = (
+            select(func.count())
+            .select_from(page_status_table)
+            .where(
+                pages_of_the_case,
+                page_status_table.c.page_status.in_(
+                    _values(STATUSES_AWAITING_A_DECISION)
+                ),
+            )
+            .scalar_subquery()
+        )
+        statement = (
+            select(
+                case_status_table.c.case_id,
+                case_status_table.c.case_status,
+                case_status_table.c.stop_after,
+                case_status_table.c.created_at,
+                page_count.label("page_count"),
+                awaiting_count.label("awaiting_count"),
+            )
+            # AD-17: the cases of an eval run are not the underwriter's to open.
+            .where(case_status_table.c.eval_run_id.is_(None))
+            # Newest first by when the case was started; the id settles a tie.
+            .order_by(
+                case_status_table.c.created_at.desc(),
+                case_status_table.c.case_id.desc(),
+            )
+            # One more than is listed: that one says more cases exist.
+            .limit(limit + 1)
+        )
+        with adapter_span(tracer, "workflow.db.read_case_list"):
+            async with self._database.connect() as connection:
+                rows = (await connection.execute(statement)).all()
+        return CaseList(
+            cases=[
+                CaseSummary(
+                    case_id=row.case_id,
+                    case_status=CaseStatus(row.case_status),
+                    started_at=_utc(row.created_at),
+                    page_count=row.page_count,
+                    waiting_page_count=waiting_page_count(
+                        CaseStatus(row.case_status),
+                        StopAfter(row.stop_after)
+                        if row.stop_after is not None
+                        else None,
+                        row.awaiting_count,
+                    ),
                 )
                 for row in rows[:limit]
             ],

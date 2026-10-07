@@ -78,7 +78,8 @@ def audit_rows(settings: WorkflowSettings, case_id: str) -> list[tuple[Any, ...]
     return query(
         settings,
         "SELECT action, page_id::text, error_code, detail, actor "
-        "FROM workflow.audit_event WHERE case_id = %s ORDER BY occurred_at, recorded_at",
+        # In the order `workflow` wrote them (story 1.12).
+        "FROM workflow.audit_event WHERE case_id = %s ORDER BY audit_event_seq",
         case_id,
     )
 
@@ -278,7 +279,13 @@ def start_and_wait(
     with workflow_service(workflow_settings, sidecar) as client:
         try:
             assert (
-                client.post(f"/cases/{case_id}/start", json=options).status_code == 200
+                client.post(
+                    # Story 1.13: a start names the demo role that asks, as
+                    # `web` passes it on.
+                    f"/cases/{case_id}/start",
+                    json={"actor": "customer", **options},
+                ).status_code
+                == 200
             )
             output: dict[str, Any] = {}
             if waits_for_a_human:

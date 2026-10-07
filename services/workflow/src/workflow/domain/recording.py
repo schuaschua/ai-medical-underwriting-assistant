@@ -12,7 +12,7 @@ from enum import StrEnum
 from types import MappingProxyType
 
 from contracts.audit import AuditAction, AuditRecord
-from contracts.enums import ActorKind, CaseStatus, PageStatus, StageStatus
+from contracts.enums import ActorKind, CaseStatus, DemoRole, PageStatus, StageStatus
 from contracts.errors import NO_TRACE_ID, DomainError, ErrorCode
 from contracts.models._stage import StageResult
 from contracts.models.intake import RedactionResult
@@ -144,6 +144,60 @@ def plan_recording(result: StageResult) -> Recording:
             audit=audit, page_change=PageChange(audit.page_id, page_status)
         )
     return Recording(audit=audit)
+
+
+def case_started_event(
+    case_id: str,
+    actor: DemoRole,
+    *,
+    occurred_at: datetime,
+    eval_run_id: str | None = None,
+    trace_id: str | None = None,
+) -> AuditRecord:
+    """The event that says who started a case: a person, in one of the demo roles (AD-9).
+
+    Case-level, with the case as its reference: a case has it once, however
+    often its start is asked for. The store writes it with the case's row.
+    """
+    return AuditRecord(
+        actor_kind=ActorKind.HUMAN,
+        actor=actor.value,
+        action=AuditAction.CASE_STARTED,
+        occurred_at=occurred_at,
+        case_id=case_id,
+        page_id=None,
+        ref=case_id,
+        detail=None,
+        trace_id=trace_id or NO_TRACE_ID,
+        eval_run_id=eval_run_id,
+    )
+
+
+def case_completed_event(
+    case_id: str,
+    *,
+    occurred_at: datetime,
+    eval_run_id: str | None = None,
+    trace_id: str | None = None,
+) -> AuditRecord:
+    """The event that says a case was completed; the lifecycle is its actor.
+
+    Case-level, with the case as its reference. The store writes it in the
+    transaction that moves the case to `completed`, and only there: a case
+    that fails has its `stage.failed` event and never this one.
+    """
+    return AuditRecord(
+        actor_kind=ActorKind.AI,
+        actor=LIFECYCLE_ACTOR,
+        action=AuditAction.CASE_COMPLETED,
+        occurred_at=occurred_at,
+        case_id=case_id,
+        page_id=None,
+        ref=case_id,
+        detail=None,
+        trace_id=trace_id or NO_TRACE_ID,
+        eval_run_id=eval_run_id,
+    )
 
 
 def lifecycle_failure(

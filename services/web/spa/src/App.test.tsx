@@ -57,6 +57,7 @@ describe("1.3 role switcher", () => {
     expect(navigationLinks()).toEqual([
       "/underwriter",
       "/underwriter/triage",
+      "/underwriter/cases",
       "/underwriter/audit",
     ]);
     expect(server.calls.length).toBeGreaterThan(0);
@@ -84,6 +85,7 @@ describe("1.3 role switcher", () => {
     expect(navigationLinks()).toEqual([
       "/underwriter",
       "/underwriter/triage",
+      "/underwriter/cases",
       "/underwriter/audit",
     ]);
     expect(
@@ -196,6 +198,7 @@ describe("1.3 role switcher", () => {
     expect(navigationLinks()).toEqual([
       "/underwriter",
       "/underwriter/triage",
+      "/underwriter/cases",
       "/underwriter/audit",
     ]);
     await screen.findByText("The server sees you as: Underwriter.");

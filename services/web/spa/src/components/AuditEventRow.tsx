@@ -4,6 +4,7 @@ import type {
   RouteDetail,
 } from "../api/contracts.gen";
 import { exactPercentage, strings } from "../strings";
+import { LocalTime } from "./LocalTime";
 
 // W3C trace context: the all-zero id means "no trace".
 const NO_TRACE_ID = "0".repeat(32);
@@ -42,23 +43,6 @@ function actorText(event: AuditRecord): string {
         part,
       )
     : strings.audit.otherActor(serviceWords, part);
-}
-
-/** The time the work was done: local to the viewer, with the UTC time as its title. */
-function Time({ occurredAt }: { occurredAt: string }) {
-  const time = new Date(occurredAt);
-  if (Number.isNaN(time.getTime())) {
-    return <>{occurredAt}</>;
-  }
-  const utc = time.toISOString();
-  return (
-    <time
-      dateTime={occurredAt}
-      title={strings.audit.utc(utc.slice(0, 10), utc.slice(11, 19))}
-    >
-      {time.toLocaleString()}
-    </time>
-  );
 }
 
 function isRouteDetail(detail: AuditRecord["detail"]): detail is RouteDetail {
@@ -119,7 +103,7 @@ export function AuditEventRow({
   return (
     <tr>
       <td>
-        <Time occurredAt={event.occurred_at} />
+        <LocalTime at={event.occurred_at} />
       </td>
       <td>{actorText(event)}</td>
       <td>

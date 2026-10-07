@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { AUDIT_POLL_MS } from "../audit/auditTrail";
 import { auditTrailPath, parseCaseId } from "../audit/auditPath";
-import { backoffMs } from "../cases/caseProgress";
+import { backoffMs } from "../polling/backoff";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
 import {
   caseProgress,
@@ -227,6 +227,51 @@ describe("1.12 the audit trail of a case", () => {
     expect(server.calls.every((call) => call.role === "underwriter")).toBe(
       true,
     );
+  });
+
+  it("1.13 words the start and the completion of a case in plain language", async () => {
+    const events = [
+      auditEvent("case.started", "customer", null, { ref: CASE }),
+      ...decidedTrail(),
+      auditEvent("case.completed", "workflow:case-lifecycle", null, {
+        ref: CASE,
+      }),
+    ];
+    trailServer(events, {
+      caseStatus: "completed",
+      pages: [pageProgress(1, "discarded"), pageProgress(2, "denied")],
+    });
+
+    openTrail();
+
+    const listed = (await rows()).map((cells) => cells.slice(1));
+    // Who started the case comes first, and that it was completed comes last.
+    expect(listed[0]).toEqual([
+      "Customer (a person)",
+      "Case started",
+      "Whole case",
+      "",
+    ]);
+    expect(listed.at(-1)).toEqual([
+      "Workflow service, the case's lifecycle",
+      "Case completed",
+      "Whole case",
+      "",
+    ]);
+    expect(listed).toHaveLength(events.length);
+    expect(screen.getByText(/Case status: Completed\./)).toBeVisible();
+  });
+
+  it("1.13 names the underwriter when it was the underwriter who started the case", async () => {
+    trailServer([
+      auditEvent("case.started", "underwriter", null, { ref: CASE }),
+    ]);
+
+    openTrail();
+
+    expect((await rows()).map((cells) => cells.slice(1))).toEqual([
+      ["Underwriter (a person)", "Case started", "Whole case", ""],
+    ]);
   });
 
   it("shows each time in the viewer's local time, with the UTC time as its title", async () => {

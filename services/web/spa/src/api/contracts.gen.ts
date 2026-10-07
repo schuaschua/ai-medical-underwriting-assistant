@@ -8,6 +8,7 @@ export type JsonValue = unknown;
  */
 export type ToolName = "list_facts" | "search_rules" | "read_rule";
 export type AuditAction =
+  | "case.started"
   | "document.redacted"
   | "page.classified"
   | "page.routed"
@@ -17,7 +18,8 @@ export type AuditAction =
   | "page.denied"
   | "facts.extracted"
   | "verdict.suggested"
-  | "stage.failed";
+  | "stage.failed"
+  | "case.completed";
 /**
  * Every `error.code` a service may return.
  */
@@ -122,9 +124,11 @@ export interface Contracts {
   AuditRecord: AuditRecord;
   AuditTrail: AuditTrail;
   CaseCreated: CaseCreated;
+  CaseList: CaseList;
   CaseProgress: CaseProgress;
   CaseStarted: CaseStarted;
   CaseStatus: CaseStatus;
+  CaseSummary: CaseSummary;
   ChunkSet: ChunkSet;
   Classification: Classification;
   ClassificationList: ClassificationList;
@@ -177,6 +181,7 @@ export interface Contracts {
   SearchRulesArguments: SearchRulesArguments;
   Service: Service;
   StageStatus: StageStatus;
+  StartCaseOptions: StartCaseOptions;
   StartCaseRequest: StartCaseRequest;
   StopAfter: StopAfter;
   SystemReason: SystemReason;
@@ -274,6 +279,26 @@ export interface AuditTrail {
 export interface CaseCreated {
   case_id: string;
   document_id: string;
+}
+/**
+ * Response of `GET /cases`: the cases, newest started first.
+ *
+ * Cases that belong to an eval run are left out. The answer is bounded:
+ * `has_more` says that more cases exist than are listed.
+ */
+export interface CaseList {
+  cases: CaseSummary[];
+  has_more: boolean;
+}
+/**
+ * One case in the underwriter's list.
+ */
+export interface CaseSummary {
+  case_id: string;
+  case_status: CaseStatus;
+  page_count: number;
+  started_at: string;
+  waiting_page_count: number;
 }
 /**
  * Response of `GET /cases/{case_id}/progress`.
@@ -612,9 +637,25 @@ export interface SearchRulesArguments {
   query: string;
 }
 /**
- * Request of `POST /cases/{case_id}/start`; every field is optional (settings fill the gaps).
+ * What a case may be started with; every option is optional (settings fill the gaps).
+ *
+ * Also the body of `web`'s `POST /api/cases/{case_id}/start`. It names no
+ * actor: `web` passes the request's demo role on as the actor (AD-9), so a
+ * browser cannot say who started the case.
+ */
+export interface StartCaseOptions {
+  classifier_contender?: ClassifierContender | null;
+  eval_run_id?: string | null;
+  retriever_configs?: [RetrieverConfig, ...RetrieverConfig[]] | null;
+  stop_after?: StopAfter | null;
+}
+/**
+ * Request of `POST /cases/{case_id}/start`: the options, and who asks.
+ *
+ * `workflow` refuses a start that names no demo role.
  */
 export interface StartCaseRequest {
+  actor?: string | null;
   classifier_contender?: ClassifierContender | null;
   eval_run_id?: string | null;
   retriever_configs?: [RetrieverConfig, ...RetrieverConfig[]] | null;

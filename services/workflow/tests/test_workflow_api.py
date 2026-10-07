@@ -8,9 +8,11 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from workflow_fakes import (
+    STARTED_BY,
     FakeEngine,
     MemoryCaseStore,
     MemorySchemaRevision,
+    after_start,
     classification_done,
     redaction_done,
     redaction_failed,
@@ -39,7 +41,7 @@ def error_of(response_json: object) -> tuple[str, str, str]:
 def test_story_1_6_start_answers_with_the_case_as_started(
     client: TestClient, case_id: str, store: MemoryCaseStore, engine: FakeEngine
 ) -> None:
-    response = client.post(f"/cases/{case_id}/start")
+    response = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     assert response.status_code == 200
     started = CaseStarted.model_validate(response.json())
@@ -57,14 +59,14 @@ def test_story_1_6_start_answers_with_the_case_as_started(
 def test_story_1_6_start_twice_is_one_case_one_orchestration_and_the_same_answer(
     client: TestClient, case_id: str, store: MemoryCaseStore, engine: FakeEngine
 ) -> None:
-    first = client.post(f"/cases/{case_id}/start", json={})
-    second = client.post(f"/cases/{case_id}/start", json={})
+    first = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
+    second = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     assert (first.status_code, second.status_code) == (200, 200)
     assert second.json() == first.json()
     assert len(store.cases) == 1
     assert list(engine.instances) == [case_id]
-    assert store.events == []
+    assert after_start(store) == []
 
 
 def test_story_1_6_start_options_are_stored_with_the_case_and_returned(
@@ -78,7 +80,7 @@ def test_story_1_6_start_options_are_stored_with_the_case_and_returned(
         "eval_run_id": eval_run_id,
     }
 
-    response = client.post(f"/cases/{case_id}/start", json=options)
+    response = client.post(f"/cases/{case_id}/start", json={**STARTED_BY, **options})
 
     assert response.status_code == 200
     assert response.json() == {"case_id": case_id, "case_status": "running", **options}
@@ -118,7 +120,9 @@ def test_story_1_6_an_invalid_start_option_is_422_and_starts_nothing(
     options: dict[str, object],
 ) -> None:
     response = client.post(
-        f"/cases/{case_id}/start", json=options, headers={"traceparent": TRACEPARENT}
+        f"/cases/{case_id}/start",
+        json={**STARTED_BY, **options},
+        headers={"traceparent": TRACEPARENT},
     )
 
     assert response.status_code == 422
@@ -143,7 +147,7 @@ def test_story_1_6_a_case_id_that_is_not_a_uuid7_is_422(
     client: TestClient, engine: FakeEngine, bad_id: str
 ) -> None:
     for response in (
-        client.post(f"/cases/{bad_id}/start"),
+        client.post(f"/cases/{bad_id}/start", json=STARTED_BY),
         client.get(f"/cases/{bad_id}/progress"),
         client.get(f"/cases/{bad_id}/audit"),
     ):
@@ -161,7 +165,7 @@ def test_story_1_6_a_start_that_cannot_reach_the_engine_is_502_in_the_error_shap
     engine.fail = True
 
     with caplog.at_level(logging.ERROR):
-        response = client.post(f"/cases/{case_id}/start")
+        response = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     assert response.status_code == 502
     assert error_of(response.json())[0] == "upstream_unavailable"
@@ -179,7 +183,7 @@ def test_story_1_6_a_database_failure_is_a_plain_500(
 
     with caplog.at_level(logging.ERROR):
         responses = [
-            client.post(f"/cases/{case_id}/start"),
+            client.post(f"/cases/{case_id}/start", json=STARTED_BY),
             client.get(f"/cases/{case_id}/progress"),
             client.get(f"/cases/{case_id}/audit"),
         ]
@@ -199,7 +203,7 @@ def test_story_1_6_a_database_failure_is_a_plain_500(
 def test_story_1_6_progress_of_a_started_case_has_its_status_and_no_pages_yet(
     client: TestClient, case_id: str
 ) -> None:
-    client.post(f"/cases/{case_id}/start")
+    client.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     response = client.get(f"/cases/{case_id}/progress")
 
@@ -220,7 +224,7 @@ def test_story_1_6_progress_lists_the_pages_once_they_exist(
     store: MemoryCaseStore,
     dependencies: Dependencies,
 ) -> None:
-    client.post(f"/cases/{case_id}/start")
+    client.post(f"/cases/{case_id}/start", json=STARTED_BY)
     pages = [new_id(), new_id()]
     asyncio.run(record_stage_result(redaction_done(case_id, pages), store=store))
 
@@ -239,12 +243,11 @@ def test_story_1_6_progress_lists_the_pages_once_they_exist(
 def test_story_1_6_audit_lists_the_recorded_events(
     client: TestClient, case_id: str, store: MemoryCaseStore
 ) -> None:
-    client.post(f"/cases/{case_id}/start")
-    assert client.get(f"/cases/{case_id}/audit").json() == {
-        "case_id": case_id,
-        "events": [],
-        "has_more": False,
-    }
+    client.post(f"/cases/{case_id}/start", json=STARTED_BY)
+    # Story 1.13: a started case's trail holds its start, and nothing else yet.
+    at_start = AuditTrail.model_validate(client.get(f"/cases/{case_id}/audit").json())
+    assert [event.action.value for event in at_start.events] == ["case.started"]
+    assert at_start.has_more is False
     result = redaction_failed(case_id)
     asyncio.run(record_stage_result(result, store=store))
 
@@ -252,9 +255,10 @@ def test_story_1_6_audit_lists_the_recorded_events(
 
     # Story 1.12: the event is the stage's record, with the failure's code.
     assert trail.events == [
-        result.audit.model_copy(update={"error_code": ErrorCode.REDACTION_FAILED})
+        *at_start.events,
+        result.audit.model_copy(update={"error_code": ErrorCode.REDACTION_FAILED}),
     ]
-    assert trail.events[0].action.value == "stage.failed"
+    assert trail.events[1].action.value == "stage.failed"
     assert trail.has_more is False
 
 
@@ -264,15 +268,14 @@ def test_story_1_12_the_audit_route_lists_the_first_events_up_to_its_limit(
     app = create_app(settings, dependencies=replace(dependencies, audit_trail_limit=2))
     page_ids = [new_id(), new_id()]
     with TestClient(app) as limited:
-        limited.post(f"/cases/{case_id}/start")
+        limited.post(f"/cases/{case_id}/start", json=STARTED_BY)
         redacted = redaction_done(case_id, page_ids)
         asyncio.run(record_stage_result(redacted, store=store))
-        first = classification_done(case_id, page_ids[0])
-        asyncio.run(record_stage_result(first, store=store))
 
+        # The start and the redaction.
         exact = AuditTrail.model_validate(limited.get(f"/cases/{case_id}/audit").json())
         asyncio.run(
-            record_stage_result(classification_done(case_id, page_ids[1]), store=store)
+            record_stage_result(classification_done(case_id, page_ids[0]), store=store)
         )
         bounded = AuditTrail.model_validate(
             limited.get(f"/cases/{case_id}/audit").json()
@@ -282,10 +285,9 @@ def test_story_1_12_the_audit_route_lists_the_first_events_up_to_its_limit(
     assert (len(exact.events), exact.has_more) == (2, False)
     # One more than the limit: the first two, and a note that more exist.
     assert [event.action.value for event in bounded.events] == [
+        "case.started",
         "document.redacted",
-        "page.classified",
     ]
-    assert bounded.events[1].page_id == page_ids[0]
     assert bounded.has_more is True
 
 
@@ -318,6 +320,7 @@ def test_story_1_6_no_route_takes_a_stage_result_or_changes_the_audit_trail(
     # Stage results come from the orchestration's activities, never over
     # HTTP (AD-2).
     assert routes == [
+        ("GET", "/cases"),
         ("GET", "/cases/{case_id}/audit"),
         ("GET", "/cases/{case_id}/progress"),
         ("GET", "/health"),
@@ -374,7 +377,7 @@ def test_story_1_6_ready_only_when_the_schema_is_at_the_bundled_head(
 def test_story_1_6_an_unknown_path_is_404_in_the_error_shape(
     client: TestClient,
 ) -> None:
-    response = client.get("/cases")
+    response = client.get("/case-files")
 
     assert response.status_code == 404
     assert error_of(response.json())[0] == "not_found"

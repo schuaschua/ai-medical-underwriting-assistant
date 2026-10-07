@@ -526,7 +526,9 @@ class Activities:
             case = self._run(
                 SETTLE_CASE_AFTER_GATE,
                 case_id,
-                settle_case_after_gate(case_id, store=self._store),
+                settle_case_after_gate(
+                    case_id, store=self._store, trace_id=current_trace_id(None)
+                ),
             )
         except ActivityRefused as refused:
             return {OUTCOME: REFUSED, "reason": refused.code.value}

@@ -18,6 +18,7 @@ from workflow_fakes import (
     MemoryCaseStore,
     classification_done,
     redaction_done,
+    starting,
 )
 
 from contracts.decisions import STATUSES_AWAITING_A_DECISION
@@ -76,7 +77,7 @@ def routed_case(
     page_ids = [new_id() for _ in routes]
 
     async def scenario() -> None:
-        await store.start(new_case(case_id, parameters, NOW))
+        await store.start(*starting(new_case(case_id, parameters, NOW)))
         await record_stage_result(
             redaction_done(case_id, page_ids), store=store, now=lambda: NOW
         )
@@ -92,7 +93,9 @@ def routed_case(
                 store=store,
                 now=partial(minutes, minute),
             )
-        await settle_case_after_gate(case_id, store=store, now=lambda: minutes(60))
+        await settle_case_after_gate(
+            case_id, store=store, trace_id=None, now=lambda: minutes(60)
+        )
 
     asyncio.run(scenario())
     return case_id, page_ids

@@ -23,14 +23,16 @@ from durabletask.client import OrchestrationStatus
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError
 from workflow_fakes import (
+    STARTED_BY,
     FakeEngine,
     FakeStages,
     SidecarStandIn,
     classification_done,
     classification_failed,
     redaction_done,
+    starting,
 )
-from workflow_local import connect, wait_for_case_status
+from workflow_local import after_the_start, connect, wait_for_case_status
 
 from contracts.enums import (
     CaseStatus,
@@ -99,12 +101,14 @@ def decision_rows(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
 
 
 def human_events(settings: Settings, case_id: str) -> list[tuple[Any, ...]]:
-    return query(
-        settings,
-        "SELECT action, actor, actor_kind, page_id::text, ref::text, eval_run_id::text "
-        "FROM workflow.audit_event WHERE case_id = %s AND actor_kind = 'human' "
-        "ORDER BY occurred_at, recorded_at, audit_event_id",
-        case_id,
+    return after_the_start(
+        query(
+            settings,
+            "SELECT action, actor, actor_kind, page_id::text, ref::text, eval_run_id::text "
+            "FROM workflow.audit_event WHERE case_id = %s AND actor_kind = 'human' "
+            "ORDER BY audit_event_seq",
+            case_id,
+        )
     )
 
 
@@ -171,7 +175,9 @@ def test_story_1_10_decisions_move_a_started_case_page_by_page_to_its_end(
     case_id, eval_run_id = new_id(), new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start", json={"eval_run_id": eval_run_id})
+        client.post(
+            f"/cases/{case_id}/start", json={**STARTED_BY, "eval_run_id": eval_run_id}
+        )
         waiting = wait_for_case_status(client, case_id, "awaiting_human")
         first, second, third, fourth = (page["page_id"] for page in waiting["pages"])
         assert [page["page_status"] for page in waiting["pages"]] == [
@@ -288,7 +294,7 @@ def test_story_1_10_a_case_whose_waiting_pages_are_all_discarded_is_completed(
     case_id = new_id()
 
     with workflow_service(service_settings, sidecar.transport()) as client:
-        client.post(f"/cases/{case_id}/start")
+        client.post(f"/cases/{case_id}/start", json=STARTED_BY)
         waiting = wait_for_case_status(client, case_id, "awaiting_human")
         for page in waiting["pages"]:
             assert (
@@ -334,7 +340,7 @@ def gated_case(
     page_ids = [new_id() for _ in routes]
 
     async def scenario() -> None:
-        await store.start(new_case(case_id, parameters, NOW))
+        await store.start(*starting(new_case(case_id, parameters, NOW)))
         await record_stage_result(redaction_done(case_id, page_ids), store=store)
         for page_id, route in zip(page_ids, routes, strict=True):
             done = classification_done(case_id, page_id)
@@ -379,7 +385,9 @@ def test_story_1_10_the_real_store_keeps_the_case_status_in_step_with_the_pages(
         # A decision before the settle: the customer was quick.
         decide(store, runner, engine, case_id, first, "keep", "customer")
         seen.append(case_status(service_settings, case_id))
-        settled_early = runner.run(settle_case_after_gate(case_id, store=store))
+        settled_early = runner.run(
+            settle_case_after_gate(case_id, store=store, trace_id=None)
+        )
         seen.append(settled_early.case_status.value)
         decide(store, runner, engine, case_id, first, "accept", "underwriter")
         seen.append(case_status(service_settings, case_id))
@@ -387,7 +395,7 @@ def test_story_1_10_the_real_store_keeps_the_case_status_in_step_with_the_pages(
         seen.append(case_status(service_settings, case_id))
         # Story 1.9's deferred item: the settle, run again late, finds the
         # pages as the decisions left them and undoes nothing.
-        late = runner.run(settle_case_after_gate(case_id, store=store))
+        late = runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
         # The same decision again: the stored one, and no second row or event.
         first_time = decision_rows(service_settings, case_id)
         again = decide(store, runner, engine, case_id, second, "deny", "underwriter")
@@ -435,7 +443,7 @@ def test_story_1_10_the_real_store_completes_a_case_whose_pages_are_all_final(
         case_id, (first, second) = gated_case(
             store, runner, [Route.CUSTOMER, Route.TRIAGE]
         )
-        runner.run(settle_case_after_gate(case_id, store=store))
+        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
         decide(store, runner, engine, case_id, first, "discard", "customer")
         between = case_status(service_settings, case_id)
         decide(store, runner, engine, case_id, second, "deny", "underwriter")
@@ -459,7 +467,7 @@ def test_story_1_10_the_real_store_answers_a_repeat_before_it_looks_at_the_case(
     engine = FakeEngine()
     with a_store(service_settings) as (store, runner):
         case_id, (page_id,) = gated_case(store, runner, [Route.CUSTOMER])
-        runner.run(settle_case_after_gate(case_id, store=store))
+        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
         # The discard completes the case, which then takes no decision.
         first = decide(store, runner, engine, case_id, page_id, "discard", "customer")
         completed = case_status(service_settings, case_id)
@@ -506,7 +514,7 @@ def test_story_1_10_two_decisions_at_once_are_settled_by_the_database(
         case_id, (same, contested, _) = gated_case(
             store, runner, [Route.CUSTOMER, Route.CUSTOMER, Route.EXTRACTION]
         )
-        runner.run(settle_case_after_gate(case_id, store=store))
+        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
         twice = runner.run(both(store, case_id, same, ("discard", "discard")))
         rivals = runner.run(both(store, case_id, contested, ("keep", "discard")))
 
@@ -550,7 +558,9 @@ def test_story_1_10_a_case_status_the_pages_ask_for_but_may_not_follow_is_logged
                 (page_id,),
             )
         with caplog.at_level(logging.WARNING, logger="workflow.adapters.db"):
-            settled = runner.run(settle_case_after_gate(case_id, store=store))
+            settled = runner.run(
+                settle_case_after_gate(case_id, store=store, trace_id=None)
+            )
 
     # A completed case stays completed, and the log says what was wanted.
     assert settled.case_status is CaseStatus.COMPLETED
@@ -568,7 +578,7 @@ def test_story_1_10_the_real_store_takes_no_decision_for_a_failed_or_stopped_cas
         failed_case, (waiting, failing) = gated_case(
             store, runner, [Route.CUSTOMER, Route.EXTRACTION]
         )
-        runner.run(settle_case_after_gate(failed_case, store=store))
+        runner.run(settle_case_after_gate(failed_case, store=store, trace_id=None))
         runner.run(
             record_stage_result(
                 classification_failed(failed_case, failing), store=store
@@ -594,7 +604,9 @@ def test_story_1_10_the_real_store_takes_no_decision_for_a_failed_or_stopped_cas
             with pytest.raises(DomainError) as raised:
                 decide(store, runner, engine, case_id, page_id, decision, actor)
             codes.append(raised.value.code)
-        settled = runner.run(settle_case_after_gate(stopped_case, store=store))
+        settled = runner.run(
+            settle_case_after_gate(stopped_case, store=store, trace_id=None)
+        )
 
     assert codes == [ErrorCode.NOT_AWAITING_DECISION] * 2
     assert settled.case_status is CaseStatus.COMPLETED
@@ -615,7 +627,7 @@ def test_story_1_10_when_the_audit_insert_fails_the_whole_decision_is_rolled_bac
     engine = FakeEngine()
     with a_store(service_settings) as (store, runner):
         case_id, (page_id,) = gated_case(store, runner, [Route.CUSTOMER])
-        runner.run(settle_case_after_gate(case_id, store=store))
+        runner.run(settle_case_after_gate(case_id, store=store, trace_id=None))
         with connect(migrated_database, autocommit=True) as connection:
             connection.execute(
                 "CREATE FUNCTION workflow.refuse_insert() RETURNS trigger "

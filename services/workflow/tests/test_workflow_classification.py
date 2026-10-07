@@ -30,7 +30,9 @@ from workflow_fakes import (
     FakeStages,
     MemoryCaseStore,
     SidecarStandIn,
+    after_start,
     classification_done,
+    starting,
 )
 
 from contracts.enums import ClassifierContender, PageStatus, RetrieverConfig
@@ -328,7 +330,7 @@ def redacted_case(
 ) -> list[str]:
     """A started case whose redaction is recorded; returns its page ids in order."""
     case = new_case(case_id, PARAMETERS, datetime.fromisoformat("2026-10-06T12:00:00Z"))
-    asyncio.run(store.start(case))
+    asyncio.run(store.start(*starting(case)))
     with service_loop() as loop:
         answer = Activities(store, loop, 5.0, stages, 5.0).redact_document(
             task.ActivityContext(case_id, 2), {"case_id": case_id, "eval_run_id": None}
@@ -387,9 +389,9 @@ def test_story_1_8_a_done_classification_moves_its_page_to_classified_with_one_e
     assert store.pages[second].page_status is PageStatus.UPLOADED
     # The case goes on running: nothing routes the page yet.
     assert store.cases[case_id].case_status.value == "running"
-    (_, recording) = store.events[-1]
+    (_, recording) = after_start(store)[-1]
     audit = recording.audit
-    assert len(store.events) == 2
+    assert len(after_start(store)) == 2
     assert (audit.action.value, audit.page_id) == ("page.classified", first)
     # AD-8: the actor names the service and the model deployment; the
     # reference is the classification, and there is no detail.
@@ -421,7 +423,7 @@ def test_story_1_8_the_classify_activity_waits_the_stage_timeout_not_the_general
         case = new_case(
             case_id, PARAMETERS, datetime.fromisoformat("2026-10-06T12:00:00Z")
         )
-        asyncio.run(store.start(case))
+        asyncio.run(store.start(*starting(case)))
         # The redaction's own wait is the stage's too (story 1.7).
         activities = Activities(store, loop, general_timeout, stages, 5.0)
         (page_id,) = activities.redact_document(
@@ -475,7 +477,7 @@ def test_story_1_8_a_failed_classification_fails_its_page_and_the_case_with_one_
     ]
     failures = [
         recording
-        for _, recording in store.events
+        for _, recording in after_start(store)
         if recording.audit.action.value == "stage.failed"
     ]
     (failure,) = failures
@@ -536,7 +538,7 @@ def test_story_1_8_a_page_the_stage_does_not_know_is_refused_without_a_retry(
     assert answer == {"outcome": "refused", "reason": reason}
     assert len(stages.classify_calls) == 1
     assert store.pages[page_id].page_status is PageStatus.UPLOADED
-    assert len(store.events) == 1
+    assert len(after_start(store)) == 1
 
 
 def test_story_1_8_a_page_of_another_case_is_refused(
@@ -592,7 +594,7 @@ def test_story_1_8_a_result_the_trail_cannot_take_is_refused_not_left_running(
     (answer,) = classify(store, stages, case_id, page_id)
 
     assert answer == {"outcome": "refused", "reason": "out_of_order"}
-    assert len(store.events) == 2
+    assert len(after_start(store)) == 2
 
 
 def test_story_1_8_the_command_carries_the_eval_run_id_and_the_trace_context(
@@ -630,7 +632,7 @@ def test_story_1_8_the_command_carries_the_eval_run_id_and_the_trace_context(
     # Read on the activity's thread and handed over to the service's loop.
     assert context["traceparent"].split("-")[1] == trace_id
     # The audit record keeps the run id the stage was given.
-    assert store.events[-1][1].audit.eval_run_id == eval_run_id
+    assert after_start(store)[-1][1].audit.eval_run_id == eval_run_id
 
 
 # --- The client module: `classification` through the Dapr sidecar ----------------------------

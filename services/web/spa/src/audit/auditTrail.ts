@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getAuditTrail, getProgress } from "../api/client";
 import type { AuditTrail, CaseProgress } from "../api/contracts.gen";
-import { backoffMs, isFinalStatus } from "../cases/caseProgress";
+import { isFinalStatus } from "../cases/caseProgress";
+import { backoffMs, isRefusal } from "../polling/backoff";
 
 /** How often the trail of a case that still moves is read again. */
 export const AUDIT_POLL_MS = 3_000;
@@ -33,21 +34,6 @@ function isHidden(): boolean {
 
 function isUnknownCase(error: unknown): boolean {
   return error instanceof ApiError && error.code === "not_found";
-}
-
-const TOO_MANY_REQUESTS = 429;
-
-/**
- * Whether the server refused the read itself (a 4xx): asking again as it is
- * gets the same answer. Too many requests is the one refusal that passes.
- */
-function isRefusal(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    error.status >= 400 &&
-    error.status < 500 &&
-    error.status !== TOO_MANY_REQUESTS
-  );
 }
 
 /**

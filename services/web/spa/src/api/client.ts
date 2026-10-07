@@ -1,9 +1,11 @@
 // The one API client (AD-19, coding-style.md rule 15). Every call to the
 // server goes through `request`, which adds the demo role header.
+import { parseCaseId } from "../audit/auditPath";
 import { getRole } from "../role/roleStore";
 import { strings } from "../strings";
 import type {
   AuditTrail,
+  CaseList,
   CaseProgress,
   CaseStarted,
   CaseStatus,
@@ -438,6 +440,48 @@ export async function getThumbnail(address: string): Promise<Blob> {
     throw new ApiError(200, null, "The answer was not a picture.", null);
   }
   return picture;
+}
+
+/** Whether a value is a whole number that is not negative, as a count is. */
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/** Whether a value has what a row of the case list is shown with. */
+function isCaseSummary(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const listed = value as Record<string, unknown>;
+  return (
+    // The id goes into the address of the case's trail: a case id, or nothing.
+    isText(listed.case_id) &&
+    parseCaseId(listed.case_id) === listed.case_id &&
+    isText(listed.case_status) &&
+    isText(listed.started_at) &&
+    isCount(listed.page_count) &&
+    isCount(listed.waiting_page_count) &&
+    // No more pages wait than the case has.
+    listed.waiting_page_count <= listed.page_count
+  );
+}
+
+/**
+ * Read the cases, newest first as the server orders them, and whether more
+ * exist than are listed. Only the underwriter role may.
+ */
+export async function getCaseList(): Promise<CaseList> {
+  const list = await request<unknown>("GET", "/cases");
+  // `request` has refused an answer that is no JSON object, null included.
+  const record = list as Record<string, unknown>;
+  if (
+    !Array.isArray(record.cases) ||
+    !record.cases.every(isCaseSummary) ||
+    typeof record.has_more !== "boolean"
+  ) {
+    throw new ApiError(200, null, "The answer was not a case list.", null);
+  }
+  return list as CaseList;
 }
 
 /** Whether a value has what an event of the audit trail is shown with. */

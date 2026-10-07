@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setRole } from "../role/roleStore";
 import {
   caseProgress,
+  caseSummary,
   classification,
   decisionRecorded,
   errorBody,
@@ -17,6 +18,7 @@ import {
   ApiError,
   decidePage,
   getAuditTrail,
+  getCaseList,
   getClassifications,
   getMe,
   getProgress,
@@ -852,5 +854,75 @@ describe("1.12 API client", () => {
       status: 404,
       code: "not_found",
     });
+  });
+});
+
+describe("1.13 API client", () => {
+  const CASE = UPLOADED.case_id;
+
+  it("reads the case list as the underwriter, with the role header", async () => {
+    const cases = [
+      caseSummary(CASE, "awaiting_human", 6, 3),
+      caseSummary("019a0000-0000-7000-8000-000000000009", "completed", 3, 0),
+    ];
+    const server = fakeServer((call) =>
+      call.path === "/api/cases" && call.method === "GET"
+        ? json(200, { cases, has_more: true })
+        : undefined,
+    );
+    setRole("underwriter");
+
+    await expect(getCaseList()).resolves.toEqual({ cases, has_more: true });
+
+    expect(server.calls).toEqual([
+      {
+        path: "/api/cases",
+        method: "GET",
+        role: "underwriter",
+        contentType: null,
+        body: null,
+      },
+    ]);
+  });
+
+  it("turns the refusal of the customer into an ApiError with the server's code", async () => {
+    fakeServer();
+    setRole("customer");
+
+    await expect(getCaseList()).rejects.toMatchObject({
+      status: 403,
+      code: "role_not_allowed",
+    });
+  });
+
+  it("refuses an answer that is not a case list, or lists half a case", async () => {
+    const whole = caseSummary(CASE, "running", 2, 1);
+    const answers: unknown[] = [
+      { cases: [whole] },
+      { cases: "none", has_more: false },
+      { cases: [whole], has_more: "no" },
+      { cases: [{ ...whole, case_id: "" }], has_more: false },
+      { cases: [{ ...whole, case_status: null }], has_more: false },
+      { cases: [{ ...whole, started_at: 1 }], has_more: false },
+      { cases: [{ ...whole, page_count: "2" }], has_more: false },
+      { cases: [{ ...whole, page_count: -1 }], has_more: false },
+      { cases: [{ ...whole, waiting_page_count: 0.5 }], has_more: false },
+      { cases: [null], has_more: false },
+      // An id that is no case id would go into the address of a trail.
+      { cases: [{ ...whole, case_id: "../../triage" }], has_more: false },
+      { cases: [{ ...whole, case_id: CASE.toUpperCase() }], has_more: false },
+      // More pages waiting than the case has.
+      { cases: [{ ...whole, waiting_page_count: 3 }], has_more: false },
+      // No object at all.
+      null,
+      [],
+      "cases",
+    ];
+    setRole("underwriter");
+
+    for (const answer of answers) {
+      fakeServer(() => json(200, answer));
+      await expect(getCaseList()).rejects.toBeInstanceOf(ApiError);
+    }
   });
 });

@@ -1,12 +1,12 @@
-"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, decisions and triage.
+"""The `/api` routes: health, the role echo, the upload, the case's lifecycle, the case list, decisions and triage.
 
 `web` holds no rule of its own about a case (spine AD-2): it hands the upload
-to `intake`, asks `workflow` to start the case, reads progress and the audit
-trail from `workflow` and the classifications from `classification`, and
-passes a person's decision about a page on to `workflow` with the request's
-demo role as the actor (AD-9, AD-10). The underwriter's triage queue is
-`workflow`'s queue joined with `classification`'s readings
-(`adapters/http/triage.py`).
+to `intake`, asks `workflow` to start the case, reads progress, the audit
+trail and the case list from `workflow` and the classifications from
+`classification`, and passes a start and a person's decision about a page on
+to `workflow` with the request's demo role as the actor (AD-9, AD-10). The
+underwriter's triage queue is `workflow`'s queue joined with
+`classification`'s readings (`adapters/http/triage.py`).
 
 A route is added to `role_checked`, never to `router` itself, so that it
 cannot be reached without a valid `X-Demo-Role` (spine AD-9). A route for one
@@ -34,10 +34,12 @@ from contracts.models.web import (
 )
 from contracts.models.workflow import (
     AuditTrail,
+    CaseList,
     CaseProgress,
     CaseStarted,
     DecisionRecorded,
     DecisionRequest,
+    StartCaseOptions,
     StartCaseRequest,
 )
 from contracts.operations import get_operation
@@ -108,6 +110,19 @@ async def upload_case(
     return UploadedCase(case_id=created.case_id, document_id=created.document_id)
 
 
+# The underwriter's list of cases, newest first: how a case, also a finished
+# one, is found and its audit trail opened. For the underwriter only (AD-9).
+# Which cases are listed, and how many, is `workflow`'s to say. The same
+# resource path as on the owning service; the upload above is its POST.
+@role_checked.get(get_operation("list_cases").path)
+async def list_cases(
+    request: Request, _role: Annotated[DemoRole, Depends(underwriter_only)]
+) -> CaseList:
+    return await _services(request).list_cases(
+        traceparent=request.headers.get("traceparent")
+    )
+
+
 # AD-2: the second half of an upload. `workflow` makes it idempotent on the
 # case id, so a caller that got no answer simply asks again. Either role may
 # start a case; how it runs (classifier, retriever configurations, where it
@@ -117,17 +132,21 @@ async def start_case(
     case_id: CaseIdPath,
     request: Request,
     role: Annotated[DemoRole, Depends(any_role)],
-    # Every option is optional, and so is the body itself.
-    options: Annotated[StartCaseRequest | None, Body()] = None,
+    # Every option is optional, and so is the body itself. The body names
+    # no actor: a browser cannot say who started the case.
+    options: Annotated[StartCaseOptions | None, Body()] = None,
 ) -> CaseStarted:
-    if (
-        role is not DemoRole.UNDERWRITER
-        and options is not None
-        and options.model_dump(exclude_none=True)
+    wanted = options.model_dump() if options is not None else {}
+    if role is not DemoRole.UNDERWRITER and any(
+        value is not None for value in wanted.values()
     ):
         raise DomainError(ErrorCode.ROLE_NOT_ALLOWED, START_OPTIONS_MESSAGE)
     return await _services(request).start_case(
-        case_id, options, traceparent=request.headers.get("traceparent")
+        case_id,
+        # AD-9: the actor is the demo role the request was checked for, as
+        # for a decision.
+        StartCaseRequest(**wanted, actor=role.value),
+        traceparent=request.headers.get("traceparent"),
     )
 
 

@@ -1,4 +1,4 @@
-"""The routes of `workflow`: the probes, the start of a case, its progress, its audit trail, decisions and the queues.
+"""The routes of `workflow`: the probes, the start of a case, the case list, progress, audit trail, decisions and the queues.
 
 Only `web` calls these, through Dapr (spine, Operations). Stage results are
 not posted here: the orchestration's activities record them (AD-2, AD-8).
@@ -19,6 +19,7 @@ from contracts.ids import UUID7_PATTERN
 from contracts.models.web import Health
 from contracts.models.workflow import (
     AuditTrail,
+    CaseList,
     CaseProgress,
     CaseStarted,
     DecisionRecorded,
@@ -29,6 +30,7 @@ from contracts.models.workflow import (
 )
 from contracts.operations import get_operation
 from workflow.adapters.telemetry import current_trace_id
+from workflow.domain.case_list import DEFAULT_CASE_LIST_LIMIT, read_case_list
 from workflow.domain.cases import (
     DEFAULT_AUDIT_TRAIL_LIMIT,
     read_audit_trail,
@@ -79,6 +81,8 @@ class Dependencies:
     page_queue_limit: int = DEFAULT_PAGE_QUEUE_LIMIT
     # How many events one read of a case's audit trail lists at most.
     audit_trail_limit: int = DEFAULT_AUDIT_TRAIL_LIMIT
+    # How many cases one read of the case list holds at most.
+    case_list_limit: int = DEFAULT_CASE_LIST_LIMIT
     now: Callable[[], datetime] = field(default=utc_now)
 
 
@@ -122,10 +126,13 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             raise DomainError(ErrorCode.UPSTREAM_UNAVAILABLE, NOT_READY_MESSAGE)
         return Health()
 
+    # The actor is in the body, as `web` passed it on (AD-9); the domain
+    # refuses a start that names no demo role, so the body may be left out
+    # here and is refused there.
     @router.post(get_operation("start_case").path)
     async def start_case_route(
         case_id: CaseIdPath,
-        # Every field is optional, and so is the body itself.
+        http_request: Request,
         request: Annotated[StartCaseRequest | None, Body()] = None,
     ) -> CaseStarted:
         return await start_case(
@@ -134,7 +141,16 @@ def build_router(dependencies: Dependencies) -> APIRouter:
             store=dependencies.store,
             engine=dependencies.engine,
             defaults=dependencies.defaults,
+            trace_id=current_trace_id(http_request.headers.get("traceparent")),
             now=dependencies.now,
+        )
+
+    # The underwriter's case list: every case outside an eval run, newest
+    # first, bounded by a setting.
+    @router.get(get_operation("list_cases").path)
+    async def case_list_route() -> CaseList:
+        return await read_case_list(
+            store=dependencies.store, limit=dependencies.case_list_limit
         )
 
     @router.get(get_operation("read_progress").path)

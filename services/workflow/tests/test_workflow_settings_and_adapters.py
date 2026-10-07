@@ -23,6 +23,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import SpanKind, StatusCode, format_trace_id
 from pydantic import SecretStr
 from sqlalchemy import create_engine, event
+from workflow_fakes import STARTED_BY
 
 import workflow.__main__ as entry
 from contracts.enums import ClassifierContender, RetrieverConfig
@@ -433,8 +434,9 @@ def test_story_1_6_the_bundled_head_is_the_newest_migration_in_the_package() -> 
         "v0002_audit_event_is_append_only.py",
         "v0003_human_decision.py",
         "v0004_audit_event_sequence.py",
+        "v0005_one_case_started_and_one_case_completed.py",
     ]
-    assert bundled_head() == "0004"
+    assert bundled_head() == "0005"
     # Inside the package, so the image carries it.
     assert MIGRATIONS_DIR.parent.name == "workflow"
     assert (MIGRATIONS_DIR / "env.py").is_file()
@@ -565,6 +567,7 @@ def test_story_1_6_probes_are_not_traced_and_a_start_is(
 
     response = client.post(
         f"/cases/{case_id}/start",
+        json=STARTED_BY,
         headers={
             "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
         },
@@ -591,7 +594,7 @@ def test_story_1_6_unhandled_error_is_a_plain_500_recorded_on_the_span(
     client, exporter = traced_client(settings, dependencies)
 
     with caplog.at_level(logging.ERROR):
-        response = client.post(f"/cases/{case_id}/start")
+        response = client.post(f"/cases/{case_id}/start", json=STARTED_BY)
 
     assert response.status_code == 500
     body = ErrorBody.model_validate(response.json())

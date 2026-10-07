@@ -22,6 +22,7 @@ from pydantic.json_schema import models_json_schema
 
 import contracts
 from contracts.base import ContractModel
+from contracts.models.workflow import StartCaseOptions
 from contracts.operations import OPERATIONS
 
 SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
@@ -64,6 +65,8 @@ def build_schema() -> dict[str, Any]:
         for model in (operation.request_model, operation.query_model)
         if model is not None
     }
+    # Sent by the browser to a path of `web`'s own, with fields it may leave out.
+    sent.add(StartCaseOptions)
     modes: list[tuple[type[ContractModel], Literal["validation", "serialization"]]] = [
         (model, "validation" if model in sent else "serialization")
         for model in _subclasses(ContractModel)
