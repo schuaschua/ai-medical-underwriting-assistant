@@ -56,6 +56,10 @@ function Value({ text }: { text: string }) {
 
 /** What the agent called the tool with: each argument by its name, as recorded. */
 function Arguments({ step }: { step: AgentStep }) {
+  if (step.tool === null) {
+    // Of a call to a tool that does not exist, only the name is logged.
+    return <>{strings.steps.argumentsNotKept}</>;
+  }
   const given = Object.entries(step.arguments);
   if (given.length === 0) {
     return <>{strings.steps.noArguments}</>;
@@ -96,7 +100,16 @@ function StepRow({
   return (
     <tr>
       <th scope="row">{step.step_no}</th>
-      <td>{worded(strings.steps.tool, step.tool)}</td>
+      <td>
+        {step.tool === null ? (
+          // The name is the model's own text: shown as text (security rule 22).
+          <>
+            {strings.steps.unknownTool} <Value text={step.asked_tool ?? ""} />
+          </>
+        ) : (
+          worded(strings.steps.tool, step.tool)
+        )}
+      </td>
       <td>
         <Arguments step={step} />
       </td>

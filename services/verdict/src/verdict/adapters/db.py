@@ -54,7 +54,12 @@ from contracts.enums import (
     Verdict,
 )
 from contracts.errors import ErrorCode
-from contracts.models.verdict import AgentStep, Reason, VerdictRun
+from contracts.models.verdict import (
+    MAX_ASKED_TOOL_CHARS,
+    AgentStep,
+    Reason,
+    VerdictRun,
+)
 from verdict.adapters.credential import azure_credential
 from verdict.adapters.telemetry import adapter_span
 from verdict.domain.entities import KeyRow, RunKey, Suggestion
@@ -139,7 +144,9 @@ reason_table = Table(
     ),
 )
 
-# AD-15: the agent's step log, one row per tool call. Append-only: this
+# AD-15: the agent's step log, one row per tool call. `tool` is one of the
+# three tools, or null for a call to a tool that does not exist: then
+# `asked_tool` holds the name the model asked for (migration 0002). Append-only: this
 # module has an INSERT for it and no UPDATE or DELETE, the service's
 # database role is granted neither, and a trigger refuses both for every
 # role (migration 0001). No foreign key to the run: a step is written while
@@ -151,7 +158,8 @@ agent_step_table = Table(
     Column("verdict_run_id", Uuid(as_uuid=False), nullable=False),
     Column("step_no", Integer, nullable=False),
     Column("case_id", Uuid(as_uuid=False), nullable=False),
-    Column("tool", Text, nullable=False),
+    Column("tool", Text, nullable=True),
+    Column("asked_tool", Text, nullable=True),
     Column("arguments", JSONB, nullable=False),
     Column("fact_id", Uuid(as_uuid=False), nullable=True),
     # The rules the call returned or read.
@@ -166,6 +174,14 @@ agent_step_table = Table(
     Column("agent_step_seq", BigInteger, Identity(always=True), nullable=False),
     PrimaryKeyConstraint("verdict_run_id", "step_no", name="pk_verdict_agent_step"),
     Index("ix_verdict_agent_step_case_id_agent_step_seq", "case_id", "agent_step_seq"),
+    CheckConstraint(
+        "(tool IS NULL) = (asked_tool IS NOT NULL)",
+        name="ck_verdict_agent_step_asked_tool_stands_in_for_no_tool",
+    ),
+    CheckConstraint(
+        f"char_length(asked_tool) <= {MAX_ASKED_TOOL_CHARS}",
+        name="ck_verdict_agent_step_asked_tool_is_bounded",
+    ),
 )
 
 # Alembic's own table, in the service's schema (Conventions, Database).
@@ -347,7 +363,8 @@ def _step(row: Row[Any]) -> AgentStep:
         verdict_run_id=row.verdict_run_id,
         case_id=row.case_id,
         step_no=row.step_no,
-        tool=ToolName(row.tool),
+        tool=ToolName(row.tool) if row.tool is not None else None,
+        asked_tool=row.asked_tool,
         arguments=row.arguments,
         fact_id=row.fact_id,
         rule_ids=list(row.rule_ids),
@@ -508,7 +525,8 @@ class SqlRunRepository:
                         verdict_run_id=step.verdict_run_id,
                         step_no=step.step_no,
                         case_id=step.case_id,
-                        tool=step.tool.value,
+                        tool=step.tool.value if step.tool is not None else None,
+                        asked_tool=step.asked_tool,
                         arguments=step.arguments,
                         fact_id=step.fact_id,
                         rule_ids=list(step.rule_ids),
@@ -632,6 +650,8 @@ def _matching(tool: ToolName | None, rule_id: str | None) -> list[ColumnElement[
     """The two filters of the step reads, as conditions on the step log."""
     only: list[ColumnElement[bool]] = []
     if tool is not None:
+        # One of the three tools: a step that asked for a tool that does
+        # not exist has none, and is listed only when no tool is named.
         only.append(agent_step_table.c.tool == tool.value)
     if rule_id is not None:
         # The rule is among those the call returned or read.

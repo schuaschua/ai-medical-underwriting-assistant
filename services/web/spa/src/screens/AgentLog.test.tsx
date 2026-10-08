@@ -217,6 +217,42 @@ describe("2.8 the agent's log", () => {
     expect(opener).toHaveFocus();
   });
 
+  it("shows a call to a tool that does not exist plainly, the name asked for as text", async () => {
+    const asked = "<img src=x onerror=alert(1)>";
+    logServer(() =>
+      json(200, {
+        steps: [
+          step(1, {
+            tool: null,
+            asked_tool: asked,
+            arguments: {},
+            fact_id: null,
+            rule_ids: [],
+            outcome: "refused",
+            error_code: "not_found",
+            latency_ms: 0,
+          }),
+        ],
+        has_more: false,
+      }),
+    );
+    await openSteps(userEvent.setup());
+
+    expect(await stepRows()).toEqual([
+      [
+        "1",
+        `Asked for a tool that does not exist: ${asked}`,
+        "Not kept",
+        "None",
+        "None",
+        "Refused. What the step needed could not be found.",
+        "0 ms",
+      ],
+    ]);
+    // Text, never markup (security rule 22).
+    expect(document.querySelector("img")).toBeNull();
+  });
+
   it("asks the server to narrow by tool and by rule, and for the steps after the last one shown", async () => {
     // The server narrows and cuts; the browser shows what it is given.
     const server = logServer((asked) => {

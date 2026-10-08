@@ -37,6 +37,12 @@ SUGGESTION_LABEL: Literal["AI suggestion, not a decision"] = (
 MAX_STEP_NUMBER = 2**31 - 1
 StepNumber = Annotated[int, Field(ge=1, le=MAX_STEP_NUMBER)]
 
+# The name of a tool the model asked for and the agent does not have. The
+# model wrote it, so it is text and nothing more (security rules 14 and 15):
+# never a `ToolName`, and never longer than this.
+MAX_ASKED_TOOL_CHARS = 64
+AskedTool = Annotated[str, StringConstraints(max_length=MAX_ASKED_TOOL_CHARS)]
+
 
 class Reason(ContractModel):
     """One cited reason: a rule, the facts it was applied to, and its effect."""
@@ -159,12 +165,23 @@ class VerdictRunList(ContractModel):
 
 
 class AgentStep(ContractModel):
-    """One tool call of the verdict agent, as logged in `verdict.agent_step`."""
+    """One tool call of the verdict agent, as logged in `verdict.agent_step`.
+
+    A call to a tool the agent does not have is a step too (owner,
+    2026-10-08): `tool` is then null, `asked_tool` is the name the model
+    asked for, and the step is refused. Its arguments are not kept: they
+    are of no known shape.
+    """
 
     verdict_run_id: VerdictRunId
     case_id: CaseId
     step_no: StepNumber
-    tool: ToolName
+    # One of the agent's three tools; null when, and only when, the model
+    # asked for a tool that does not exist.
+    tool: ToolName | None
+    # Set when, and only when, `tool` is null: the name asked for, cut to
+    # its bound. Untrusted text, to be shown as text.
+    asked_tool: AskedTool | None = None
     arguments: dict[str, JsonValue]
     fact_id: FactId | None
     # The rules the call returned or read.
@@ -186,11 +203,28 @@ class AgentStep(ContractModel):
             raise ValueError("a call that was refused or failed returned no rules")
         return self
 
+    @model_validator(mode="after")
+    def _asked_tool_stands_in_for_no_tool(self) -> Self:
+        if (self.tool is None) != (self.asked_tool is not None):
+            raise ValueError("asked_tool is set when, and only when, tool is null")
+        if self.tool is None and (
+            self.outcome is not StepOutcome.REFUSED
+            or self.arguments
+            or self.fact_id is not None
+        ):
+            raise ValueError(
+                "a call to a tool that does not exist is refused, and nothing "
+                "of it is kept but the name asked for"
+            )
+        return self
+
 
 class RunStepQuery(ContractModel):
     """Query of `GET /verdict-runs/{verdict_run_id}/steps`; every field is optional.
 
     `tool` and `rule_id` narrow the run's steps as they narrow a case's.
+    `tool` names one of the three tools: a step that asked for a tool that
+    does not exist is listed only when no tool is named.
     `after_step_no` is the cursor: the last step number seen, so that the
     steps beyond one answer's limit can be read.
     """

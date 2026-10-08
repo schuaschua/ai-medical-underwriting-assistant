@@ -534,6 +534,10 @@ export const strings = {
       search_rules: "Search the manual",
       read_rule: "Read a rule",
     } satisfies Record<ToolName, string>,
+    // The agent's model asked for a tool it does not have; the name it
+    // asked for follows, as text.
+    unknownTool: "Asked for a tool that does not exist:",
+    argumentsNotKept: "Not kept",
     outcome: {
       done: "Done",
       refused: "Refused",

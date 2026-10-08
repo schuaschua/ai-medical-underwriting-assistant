@@ -75,7 +75,7 @@ class Result:
     run_id: str = field(default_factory=new_id)
 
     def steps(self) -> dict[str, Any]:
-        """The agent's log as `verdict` answers it: a refused read of a rule, and more to come."""
+        """The agent's log as `verdict` answers it: a refused read of a rule, a tool that does not exist, and more to come."""
         return {
             "steps": [
                 {
@@ -83,6 +83,7 @@ class Result:
                     "case_id": self.case_id,
                     "step_no": 3,
                     "tool": "read_rule",
+                    "asked_tool": None,
                     "arguments": {"rule_id": RULE_ID},
                     "fact_id": None,
                     "rule_ids": [],
@@ -90,7 +91,23 @@ class Result:
                     "error_code": "rule_not_seen",
                     "latency_ms": 2,
                     "occurred_at": "2026-10-08T09:00:00Z",
-                }
+                },
+                {
+                    # Owner, 2026-10-08: the model asked for a tool that
+                    # does not exist; the name is passed on as text.
+                    "verdict_run_id": self.run_id,
+                    "case_id": self.case_id,
+                    "step_no": 4,
+                    "tool": None,
+                    "asked_tool": "delete_case",
+                    "arguments": {},
+                    "fact_id": None,
+                    "rule_ids": [],
+                    "outcome": "refused",
+                    "error_code": "not_found",
+                    "latency_ms": 0,
+                    "occurred_at": "2026-10-08T09:00:01Z",
+                },
             ],
             "has_more": True,
         }

@@ -84,11 +84,11 @@ class Run:
     answer: AgentAnswer | None = None
     error: BaseException | None = None
 
-    def steps(self) -> list[tuple[int, str, str, str | None]]:
+    def steps(self) -> list[tuple[int, str | None, str, str | None]]:
         return [
             (
                 step.step_no,
-                step.tool.value,
+                step.tool.value if step.tool is not None else None,
                 step.outcome.value,
                 step.error_code.value if step.error_code is not None else None,
             )
@@ -314,25 +314,62 @@ def test_story_2_5_a_tool_call_with_invalid_arguments_is_a_refused_step_and_the_
     }
 
 
-def test_story_2_5_a_fourth_tool_does_not_exist_and_is_no_step(
+def test_story_2_5_a_fourth_tool_does_not_exist_and_asking_for_it_is_a_refused_step(
     settings: Settings,
 ) -> None:
     proposal = final_answer()
+    # A name of the model's own making: longer than the log keeps, with a
+    # character no text of the database holds.
+    long_name = "drop_table\x00" + "x" * 100
+    unknown = {"case_id": "SECRET-ARGUMENT"}
 
     run = run_agent(
         settings,
-        [tool_call("delete_case", {"case_id": "SECRET-ARGUMENT"})],
+        [
+            tool_call("delete_case", unknown),
+            list_facts_call(),
+            tool_call(long_name, unknown),
+        ],
         [list_facts_call()],
         proposal,
     )
+    # A model that asks for nothing else is stopped by the step limit.
+    stopped = run_agent(
+        settings,
+        [tool_call("delete_case", unknown)],
+        [tool_call("delete_case", unknown), list_facts_call()],
+        proposal,
+        step_limit=1,
+    )
 
+    # The run carries on to its answer; each attempt is a step in its place.
     assert run.error is None
     assert run.answer == AgentAnswer(proposal, "stop")
-    # The log holds the calls of the three tools, and nothing was run.
-    assert run.steps() == [(1, "list_facts", "done", None)]
+    assert run.steps() == [
+        (1, None, "refused", "not_found"),
+        (2, "list_facts", "done", None),
+        (3, None, "refused", "not_found"),
+        (4, "list_facts", "done", None),
+    ]
+    first, _, third, _ = run.repository.steps
+    # The name asked for is kept as text, cut to its bound; the arguments are not.
+    assert (first.asked_tool, first.arguments) == ("delete_case", {})
+    assert (third.asked_tool, third.arguments) == ("drop_table" + "x" * 54, {})
+    assert "SECRET" not in str(run.repository.steps)
+    # The model is still told that there is no such tool.
     messages = run.model.bodies()[-1]["messages"]
     refusal = next(message for message in messages if message["role"] == "tool")
     assert "not found" in refusal["content"]
+    # Such a call counts against the limit: the second is refused there, the
+    # call after it too, and the model is not asked a third time.
+    assert (stopped.answer, stopped.error) == (None, None)
+    assert stopped.steps() == [
+        (1, None, "refused", "not_found"),
+        (2, None, "refused", "step_limit"),
+        (3, "list_facts", "refused", "step_limit"),
+    ]
+    assert stopped.toolbox.state.step_limit_reached
+    assert stopped.model.calls == 2
 
 
 # --- Logs ------------------------------------------------------------------------------------

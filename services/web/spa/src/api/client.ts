@@ -684,7 +684,10 @@ function isStepOf(runId: string): (value: unknown) => boolean {
     isRecord(value) &&
     value.verdict_run_id === runId &&
     isPageNumber(value.step_no) &&
-    isText(value.tool) &&
+    // One of the agent's tools, or none and the name the model asked for:
+    // a tool that does not exist.
+    (isText(value.tool) ||
+      (value.tool === null && typeof value.asked_tool === "string")) &&
     isRecord(value.arguments) &&
     !Array.isArray(value.arguments) &&
     (value.fact_id === null || isText(value.fact_id)) &&

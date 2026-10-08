@@ -4,7 +4,8 @@
 run and the retriever row are fixed here by the server: the model names none
 of them. Every argument the model gives is checked against the contracts
 before anything is done with it, and `read_rule` takes only a rule the run
-has seen. Every call is one row of the step log, refused ones included.
+has seen. Every call is one row of the step log, refused ones included, and
+a call to a tool that does not exist among them (owner, 2026-10-08).
 Nothing here imports a framework: the adapter that runs the agent hands the
 model's calls to `Toolbox.call`.
 """
@@ -24,6 +25,7 @@ from contracts.errors import DomainError, ErrorCode
 from contracts.models.extraction import Fact
 from contracts.models.retrieval import DEFAULT_TOP_K, MAX_QUERY_CHARS
 from contracts.models.verdict import (
+    MAX_ASKED_TOOL_CHARS,
     AgentStep,
     ReadRuleArguments,
     SearchRulesArguments,
@@ -206,22 +208,16 @@ class Toolbox:
         `ToolFailed` when the service behind the tool gave no answer: the
         step is logged as failed and the run ends. A call cancelled or
         failing half way is logged as failed too.
+
+        A `tool` that is none of the three is a step as well: refused with
+        `not_found`, counted against the limit, logged with the name asked
+        for and without its arguments.
         """
         state = self.state
         try:
             name = ToolName(tool)
         except ValueError:
-            # No fourth tool (security rule 16). It is not a step: the log
-            # holds the calls of the three tools.
-            logger.warning(
-                "unknown tool refused: case_id=%s verdict_run_id=%s",
-                self.case_id,
-                self.verdict_run_id,
-            )
-            return {
-                "refused": ErrorCode.VALIDATION_FAILED.value,
-                "message": UNKNOWN_TOOL_MESSAGE,
-            }
+            return await self._no_such_tool(tool)
         state.steps += 1
         step_no = state.steps
         started = time.monotonic()
@@ -303,6 +299,36 @@ class Toolbox:
             step_no, name, logged, fact_id, rule_ids, outcome, error_code, started
         )
         return answer
+
+    async def _no_such_tool(self, asked: str) -> dict[str, object]:
+        """Refuse a call to a tool that does not exist, and log it as one step.
+
+        No fourth tool (security rule 16). The name is the model's own text
+        (rules 14 and 15): it is kept as data, made storable and cut to its
+        bound. The arguments are of no known shape and may hold anything of
+        the page, so none of them is kept.
+        """
+        state = self.state
+        state.steps += 1
+        started = time.monotonic()
+        at_the_limit = state.steps > self._step_limit
+        if at_the_limit:
+            state.step_limit_reached = True
+        code = ErrorCode.STEP_LIMIT if at_the_limit else ErrorCode.NOT_FOUND
+        await self._log(
+            state.steps,
+            None,
+            {},
+            None,
+            [],
+            StepOutcome.REFUSED,
+            code,
+            started,
+            asked_tool=storable(asked)[:MAX_ASKED_TOOL_CHARS],
+        )
+        if at_the_limit:
+            raise StepLimitReached
+        return {"refused": code.value, "message": UNKNOWN_TOOL_MESSAGE}
 
     async def _log_what_was_stopped(
         self,
@@ -410,13 +436,15 @@ class Toolbox:
     async def _log(
         self,
         step_no: int,
-        tool: ToolName,
+        tool: ToolName | None,
         arguments: dict[str, JsonValue],
         fact_id: str | None,
         rule_ids: list[str],
         outcome: StepOutcome,
         error_code: ErrorCode | None,
         started: float,
+        *,
+        asked_tool: str | None = None,
     ) -> None:
         latency_ms = int((time.monotonic() - started) * 1000)
         await self._ports.repository.append_step(
@@ -425,6 +453,7 @@ class Toolbox:
                 case_id=self.case_id,
                 step_no=step_no,
                 tool=tool,
+                asked_tool=asked_tool,
                 arguments=arguments,
                 fact_id=fact_id,
                 rule_ids=rule_ids,
@@ -435,14 +464,14 @@ class Toolbox:
             )
         )
         # security rule 31: ids, codes, counts and timings; never the query,
-        # a fact or a rule's text.
+        # a fact, a rule's text or the name of a tool the model made up.
         logger.info(
             "agent step: case_id=%s verdict_run_id=%s step_no=%d tool=%s "
             "outcome=%s error_code=%s rules=%d latency_ms=%d",
             self.case_id,
             self.verdict_run_id,
             step_no,
-            tool.value,
+            tool.value if tool is not None else "none",
             outcome.value,
             error_code.value if error_code is not None else None,
             len(rule_ids),

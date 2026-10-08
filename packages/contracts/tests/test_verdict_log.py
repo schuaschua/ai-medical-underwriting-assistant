@@ -63,7 +63,29 @@ def test_story_2_5_a_refused_step_says_so_with_a_code() -> None:
     assert AgentStep.model_validate(
         step(outcome="failed", error_code="upstream_unavailable", rule_ids=[])
     )
+    # Owner, 2026-10-08: a call to a tool that does not exist is a refused
+    # step with no tool; the name asked for is text, kept apart and bounded.
+    no_tool = step(
+        tool=None,
+        asked_tool="delete_case; <b>x</b>",
+        arguments={},
+        outcome="refused",
+        error_code="not_found",
+        rule_ids=[],
+    )
+    unknown = AgentStep.model_validate(no_tool)
+    assert (unknown.tool, unknown.asked_tool) == (None, "delete_case; <b>x</b>")
+    # A step logged before the field existed is read as it was.
+    assert AgentStep.model_validate(step()).asked_tool is None
     for broken in (
+        # The tool is one of the three or null, never the model's own word.
+        step(tool="delete_case"),
+        {**no_tool, "asked_tool": None},
+        {**no_tool, "asked_tool": "x" * 65},
+        step(asked_tool="delete_case"),
+        # Nothing of such a call is kept but the name, and it is never done.
+        {**no_tool, "arguments": {"case_id": "1"}},
+        {**no_tool, "outcome": "done", "error_code": None},
         # A done call has no code; one that was refused or failed has one.
         step(error_code="rule_not_seen"),
         step(outcome="refused", rule_ids=[]),

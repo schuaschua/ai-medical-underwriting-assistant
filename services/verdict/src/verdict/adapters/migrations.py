@@ -89,6 +89,21 @@ def refuse_if_step_log_has_rows() -> None:
         raise RuntimeError(STEP_LOG_HAS_ROWS_MESSAGE)
 
 
+STEP_LOG_HAS_UNKNOWN_TOOL_STEPS_MESSAGE = (
+    "verdict.agent_step holds steps that asked for a tool that does not "
+    "exist: the schema before could not hold them, and this downgrade is refused."
+)
+
+
+def refuse_if_a_step_asked_for_no_tool() -> None:
+    """Stop a downgrade to a step log that cannot hold a step without a tool."""
+    held = op.get_bind().execute(
+        sa.text("SELECT EXISTS (SELECT 1 FROM verdict.agent_step WHERE tool IS NULL)")
+    )
+    if held.scalar_one():
+        raise RuntimeError(STEP_LOG_HAS_UNKNOWN_TOOL_STEPS_MESSAGE)
+
+
 def _quoted(identifier: str) -> str:
     # A GRANT takes no bound parameters. The names are quoted as identifiers
     # by the database dialect, so no value is ever read as SQL (security rule 21).

@@ -220,7 +220,9 @@ def test_story_2_5_readiness_follows_the_schema_revision(
         connection.execute("UPDATE verdict.alembic_version SET version_num = '9999'")
     assert ready(as_the_service) == 502
     with connect(empty_database, autocommit=True) as connection:
-        connection.execute("UPDATE verdict.alembic_version SET version_num = '0001'")
+        connection.execute(
+            "UPDATE verdict.alembic_version SET version_num = %s", (bundled_head(),)
+        )
 
     command.downgrade(config, "base")
     assert ready(as_the_service) == 502
@@ -236,7 +238,7 @@ def a_step(
     verdict_run_id: str,
     case_id: str,
     step_no: int,
-    tool: ToolName = ToolName.LIST_FACTS,
+    tool: ToolName | None = ToolName.LIST_FACTS,
     **changes: Any,
 ) -> AgentStep:
     values: dict[str, Any] = {
@@ -487,6 +489,16 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
         outcome=StepOutcome.REFUSED,
         error_code=ErrorCode.RULE_NOT_SEEN,
     )
+    # Owner, 2026-10-08: the model asked for a tool that does not exist.
+    unknown = a_step(
+        first_run,
+        case_id,
+        4,
+        None,
+        asked_tool="delete_case",
+        outcome=StepOutcome.REFUSED,
+        error_code=ErrorCode.NOT_FOUND,
+    )
     steps = [
         # Logged out of step order within the run, and runs interleaved.
         searched,
@@ -503,6 +515,7 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
             outcome=StepOutcome.FAILED,
             error_code=ErrorCode.UPSTREAM_UNAVAILABLE,
         ),
+        unknown,
     ]
 
     with a_repository(service_settings) as (repository, runner):
@@ -540,12 +553,15 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
         bounded = of_case(limit=3)
 
     # By run: by step number, whatever the order they were logged in.
-    assert [step.step_no for step in of_run] == [1, 2, 3]
+    assert [step.step_no for step in of_run] == [1, 2, 3, 4]
     assert [step.step_no for step in first_two] == [1, 2]
     assert of_no_run == []
     # A step is read back as it was appended, its time in UTC.
     assert of_run[1] == searched
     assert of_run[2] == refused
+    # A call to a tool that does not exist is listed when no tool is named,
+    # with the name asked for, and under none of the three tools.
+    assert of_run[3] == unknown
     assert of_run[1].occurred_at.tzinfo is UTC
     # By case: in the order logged, across the runs, and no other case's.
     assert everything == [
@@ -555,6 +571,7 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
         (first_run, 3),
         (second_run, 2),
         (second_run, 3),
+        (first_run, 4),
     ]
     assert searches == [(first_run, 2), (second_run, 3)]
     # The calls that returned or read the rule.
@@ -566,7 +583,7 @@ def test_story_2_5_steps_are_appended_and_read_by_run_and_by_case_with_the_filte
     # Story 2.8: the rest is read from the last step seen on. By run that is
     # a step number; by case the step's place in the log, and a step the
     # case does not have gives nothing.
-    assert [step.step_no for step in after_two] == [3]
+    assert [step.step_no for step in after_two] == [3, 4]
     assert [step.step_no for step in run_searches] == [2]
     assert after_third == everything[2:]
     assert searches_after_third == [(second_run, 3)]
@@ -661,8 +678,7 @@ def test_story_2_5_a_command_runs_the_agent_and_stores_a_loaded_run_with_reasons
     # The steps list every tool call in order, the refused one included.
     steps = AgentStepList.model_validate(by_run.json()).steps
     assert [
-        (step.step_no, step.tool.value, step.outcome.value, step.rule_ids)
-        for step in steps
+        (step.step_no, step.tool, step.outcome.value, step.rule_ids) for step in steps
     ] == [
         (1, "list_facts", "done", []),
         (2, "search_rules", "done", [DM_50, DM_25]),

@@ -227,11 +227,17 @@ export interface Contracts {
 }
 /**
  * One tool call of the verdict agent, as logged in `verdict.agent_step`.
+ *
+ * A call to a tool the agent does not have is a step too (owner,
+ * 2026-10-08): `tool` is then null, `asked_tool` is the name the model
+ * asked for, and the step is refused. Its arguments are not kept: they
+ * are of no known shape.
  */
 export interface AgentStep {
   arguments: {
     [k: string]: JsonValue;
   };
+  asked_tool?: string | null;
   case_id: string;
   error_code: ErrorCode | null;
   fact_id: string | null;
@@ -240,7 +246,7 @@ export interface AgentStep {
   outcome: StepOutcome;
   rule_ids: string[];
   step_no: number;
-  tool: ToolName;
+  tool: ToolName | null;
   verdict_run_id: string;
 }
 /**
@@ -870,6 +876,8 @@ export interface RuleText {
  * Query of `GET /verdict-runs/{verdict_run_id}/steps`; every field is optional.
  *
  * `tool` and `rule_id` narrow the run's steps as they narrow a case's.
+ * `tool` names one of the three tools: a step that asked for a tool that
+ * does not exist is listed only when no tool is named.
  * `after_step_no` is the cursor: the last step number seen, so that the
  * steps beyond one answer's limit can be read.
  */

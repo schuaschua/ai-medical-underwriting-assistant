@@ -107,6 +107,7 @@ STEP = {
     "case_id": CASE,
     "step_no": 1,
     "tool": "search_rules",
+    "asked_tool": None,
     "arguments": {"query": "HbA1c 8.2%", "fact_id": FACT},
     "fact_id": FACT,
     "rule_ids": ["UW-DM-003", "UW-HTN-120"],

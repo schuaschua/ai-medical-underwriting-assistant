@@ -12,7 +12,11 @@ model's final answer. Everything that matters is held outside it:
   and the retriever row fixed by the server, `read_rule` held to what the run
   has seen, every call logged as a step. A function middleware answers every
   tool call from the toolbox before the framework's own argument check, so a
-  call with arguments that are not valid is a logged, refused step too.
+  call with arguments that are not valid is a logged, refused step too. A
+  call to a tool of another name never reaches that middleware: the
+  framework answers it itself ("not found"). `AskedCalls` reads each answer
+  of the model for such calls and has the toolbox log each as a refused
+  step, in its place among the calls of that answer.
 - The end. The step limit stops the framework's loop; a tool whose service
   gives no answer ends the run as failed.
 
@@ -33,6 +37,9 @@ from typing import Any
 
 from agent_framework import (
     Agent,
+    ChatContext,
+    ChatMiddleware,
+    ChatResponse,
     FunctionInvocationContext,
     FunctionMiddleware,
     FunctionTool,
@@ -172,8 +179,9 @@ RESPONSE_FORMAT: dict[str, object] = {
 }
 
 # How many turns more than the step limit the framework's own loop may
-# take. The step limit is what stops a run; this only bounds a model that
-# keeps asking for tools that do not exist, which are no steps.
+# take. The step limit is what stops a run: every turn that asks for a tool
+# is at least one step, a tool that does not exist included. This only keeps
+# the framework's own bound from ending a run first.
 _TURNS_BEYOND_THE_STEP_LIMIT = 3
 
 
@@ -239,6 +247,9 @@ def _plain(arguments: object) -> Mapping[str, object]:
     return {"arguments": None}
 
 
+_TOOL_NAMES = frozenset(tool.value for tool in ToolName)
+
+
 class ToolGuard(FunctionMiddleware):
     """Answers every tool call of one run from its toolbox, and ends the run when the toolbox says so.
 
@@ -246,18 +257,67 @@ class ToolGuard(FunctionMiddleware):
     hands a call on to the framework's own invocation: the toolbox is the
     one place a tool is run, so every call is validated, counted and logged
     there, and only there.
+
+    The framework hands it only the calls to the three tools. The calls of
+    the model's last answer to a tool that does not exist are noted here
+    (`asked`), and each is logged by the toolbox before the call that came
+    after it, so that step numbers are the order the model asked in.
     """
 
     def __init__(self, toolbox: Toolbox) -> None:
         self._toolbox = toolbox
         # What ended the run in a tool, if anything did.
         self.error: BaseException | None = None
+        # The calls of the model's last answer not yet dealt with, in its
+        # order: the call's id, and the name asked for if no tool has it.
+        self._asked: list[tuple[str | None, str | None]] = []
+
+    def asked(self, response: object) -> None:
+        """Note the tool calls of one answer of the model."""
+        self._asked = [
+            (
+                getattr(content, "call_id", None),
+                None if content.name in _TOOL_NAMES else _text(content.name),
+            )
+            for message in getattr(response, "messages", None) or ()
+            for content in getattr(message, "contents", None) or ()
+            if getattr(content, "type", None) == "function_call"
+            and not getattr(content, "informational_only", False)
+        ]
+
+    async def refuse_unknown_tools(self, before: str | None = None) -> None:
+        """Log the noted calls to a tool that does not exist: those before the call `before`, or all of them.
+
+        The toolbox counts each against the step limit. At the limit it
+        says so in its state and the next call goes on to be refused there
+        too, as the calls of the three tools beyond the limit are.
+        """
+        if before is not None and all(call_id != before for call_id, _ in self._asked):
+            return
+        while self._asked:
+            call_id, unknown = self._asked.pop(0)
+            if before is not None and call_id == before:
+                return
+            if unknown is None:
+                continue
+            try:
+                # Without its arguments: they are of no known shape.
+                await self._toolbox.call(unknown, {})
+            except StepLimitReached:
+                continue
+            except Exception as error:  # noqa: BLE001 - a step that could not be logged ends the run
+                self.error = error
+                raise MiddlewareFailure("step not logged") from None
 
     async def process(
         self,
         context: FunctionInvocationContext,
         call_next: Callable[[], Awaitable[None]],
     ) -> None:
+        call_id = context.metadata.get("call_id")
+        await self.refuse_unknown_tools(
+            before=call_id if isinstance(call_id, str) else None
+        )
         try:
             answer = await self._toolbox.call(
                 context.function.name, _plain(context.arguments)
@@ -272,6 +332,37 @@ class ToolGuard(FunctionMiddleware):
             self.error = error
             raise MiddlewareFailure("tool failed") from None
         context.result = json.dumps(answer)
+
+
+def _text(name: object) -> str:
+    """The name of a tool the model asked for, as text; the toolbox bounds it."""
+    return name if isinstance(name, str) else ""
+
+
+class AskedCalls(ChatMiddleware):
+    """Sees every answer of the model, so that a call to a tool that does not exist is a step.
+
+    Before the model is asked again, the calls of its last answer that the
+    framework answered itself are logged, those after the last call to a
+    real tool among them. If that took the run to its step limit, the model
+    is not asked again: the loop ends without an answer, as it does when a
+    real tool's call meets the limit.
+    """
+
+    def __init__(self, guard: ToolGuard, toolbox: Toolbox) -> None:
+        self._guard = guard
+        self._toolbox = toolbox
+
+    async def process(
+        self, context: ChatContext, call_next: Callable[[], Awaitable[None]]
+    ) -> None:
+        await self._guard.refuse_unknown_tools()
+        if self._toolbox.state.step_limit_reached:
+            # AD-15: the run stops here, without another call of the model.
+            context.result = ChatResponse(messages=[])
+            return
+        await call_next()
+        self._guard.asked(context.result)
 
 
 def _tools(toolbox: Toolbox) -> list[FunctionTool]:
@@ -415,11 +506,14 @@ class FrameworkVerdictAgent:
             # AD-15, security rule 16: these three, and nothing else: no
             # other Foundry tool, no connection, no context provider.
             tools=_tools(toolbox),
-            middleware=[guard],
+            middleware=[guard, AskedCalls(guard, toolbox)],
             default_options={"response_format": RESPONSE_FORMAT},
         )
         try:
             response = await agent.run(TASK)
+            # The loop ended after a batch of calls (the step limit): the
+            # calls to a tool that does not exist among its last are steps too.
+            await guard.refuse_unknown_tools()
         except Exception as error:  # noqa: BLE001 - whatever the framework raised, it is told apart below
             if guard.error is not None:
                 # What the tool raised, as it raised it: the domain knows it.
