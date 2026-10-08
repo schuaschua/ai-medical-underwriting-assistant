@@ -4,7 +4,7 @@ Written by the coding agent on 2026-10-08, at the end of the session that built 
 
 ## Where the build stands
 
-Every story of the four epics is built. Branch `architecture/spine-redaction-diagrams`, nothing pushed (26 commits ahead of the remote branch, this note included). Azure resource group `rg-aiuw-demo-wus3` is empty and stays torn down; nothing in this session touched Azure.
+Every story of the four epics is built. Branch `architecture/spine-redaction-diagrams`, pushed on 2026-10-08 with pull request #1 into `main` open (https://github.com/schuaschua/ai-medical-underwriting-assistant/pull/1); its six CI checks passed on `ec9df73`. Azure resource group `rg-aiuw-demo-wus3` is empty and stays torn down; nothing in this session touched Azure.
 
 | Story | State | Commit |
 | --- | --- | --- |
@@ -97,6 +97,12 @@ The last full run, at `f0f858e`: 515 Python tests (coverage 90.7%), 146 SPA test
 Confirmed by the owner as built: the training pages' redaction route, the `r6` verdict run, the two cautions of story 2.5, a case nobody decides staying open for the demo, pure fusion for a rule id typed as a query, the Compare pair's order, `verdict`'s 25 s wait, the effort measure, and the `evals` line in `CLAUDE.md`. Costs on the scoreboards were worked out from Azure's price list on 2026-10-08 at the owner's request; their assumptions are the owner's to confirm (`deferred-work.md`, last entry).
 
 The owner confirmed on 2026-10-08 that the accepted exception in `security.md` covers the Cohere model, and the calibration floor of 10 pages. Still open with the owner: the 145 items of the review file, for the medical expert or anyone with the sources.
+
+## Where the session of 2026-10-08 stopped
+
+The owner stopped the session after the push and said the Azure session is for the next day. State at the stop: tree clean, branch pushed, pull request #1 open and green, local stack and compose containers stopped, nothing running. The whole stack was run locally once more after the owner's decisions (both bake-offs, the classifier's training, the scoreboard routes with their costs, Compare's runs), with no error in its log.
+
+To carry on: get the owner's go-ahead, then the Azure session as under "Next". The deploy workflow is started by hand and can run from this branch. The pieces written without being tried, likeliest to need a correction from configuration: the Cohere rerank call's address and its deployment (`infra/bootstrap/README.md`, section 2), the agentic retrieval calls of `r6`, and the Document Intelligence classifier's build.
 
 ## Next
 
