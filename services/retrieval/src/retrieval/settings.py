@@ -29,6 +29,11 @@ READY_PATH = "/ready"
 # service: lower-case letters, digits and dashes.
 _SEARCH_OBJECT_NAME = r"^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])$"
 
+# The scope of an Entra token for Azure AI services, the Foundry account among them.
+COGNITIVE_SERVICES_SCOPE = "https://cognitiveservices.azure.com/.default"
+# Where a Foundry account serves Cohere's rerank API, below its endpoint.
+DEFAULT_RERANK_PATH = "/providers/cohere/v2/rerank"
+
 # The hosts a plain-HTTP endpoint may have: a local stand-in only.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -123,13 +128,27 @@ class Settings(BaseSettings):
     # In Azure: sign in to the model deployments with the service identity. There is no key.
     model_entra_auth: bool = False
     # AD-16: the names of the shared chat deployment, which writes each
-    # chunk's context line at ingestion, is the reranker of row `r4` at
-    # search and is what the search service plans row `r6`'s queries with,
-    # and of the one embedding deployment (`text-embedding-3-large`). They
-    # reach code only here. A service without the chat deployment refuses
-    # rows `r4` and `r6` as not available.
+    # chunk's context line at ingestion and is what the search service
+    # plans row `r6`'s queries with, and of the one embedding deployment
+    # (`text-embedding-3-large`). They reach code only here. A service
+    # without the chat deployment refuses row `r6` as not available.
     chat_deployment: str | None = None
     embedding_deployment: str | None = None
+    # AD-11, row `r4`: the name of the reranker deployment on the same
+    # account (Cohere Rerank), reached with the same identity and no key.
+    # A service without it refuses row `r4` as not available; the other
+    # rows answer as before.
+    rerank_deployment: str | None = None
+    # The whole address of the rerank call, a query string included if the
+    # service asks for one (`?api-version=...`). Unset: the model endpoint
+    # with `DEFAULT_RERANK_PATH`. And the scope of the Entra token that
+    # call is signed in with. Both are settings because the address and the
+    # sign-in of Cohere's route were written from documentation and are
+    # proven in Azure only: a correction is then no change of code.
+    rerank_url: str | None = None
+    rerank_token_scope: Annotated[
+        str, StringConstraints(pattern=r"^https://[^\s/]+/\S*$")
+    ] = COGNITIVE_SERVICES_SCOPE
     # How long one call to a model may take.
     model_timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
     # AD-16: a call answered 429 or 5xx is sent again this often, then the
@@ -187,16 +206,15 @@ class Settings(BaseSettings):
     search_embedding_max_retries: Annotated[int, Field(ge=0, le=10)] = 1
     search_deadline_seconds: Annotated[float, Field(gt=0)] = 8.0
     # AD-11, row `r4`: how many of the best fused candidates the reranker
-    # is given (never fewer than a search's `top_k`), how long its one chat
-    # call may take, the most tokens of its answer (an entry per candidate,
-    # and room for a model that reasons first), and the deadline over a
-    # whole search with that row, in place of the one above: a chat call
-    # does not fit 8 s. Every caller of a search waits longer than this
-    # (VERDICT_UPSTREAM_TIMEOUT_SECONDS, WEB_SERVICE_TIMEOUT_SECONDS, the
-    # bake-off runner's EVALS_REQUEST_TIMEOUT_SECONDS).
+    # is given (never fewer than a search's `top_k`), how long its one
+    # call may take, and the deadline over a whole search with that row,
+    # in place of the one above: the row does all that row `r3` does and
+    # then waits for the reranker. Every caller of a search waits longer
+    # than this (VERDICT_UPSTREAM_TIMEOUT_SECONDS,
+    # WEB_SERVICE_TIMEOUT_SECONDS, the bake-off runner's
+    # EVALS_REQUEST_TIMEOUT_SECONDS).
     search_rerank_depth: Annotated[int, Field(ge=1, le=200)] = 20
     search_rerank_timeout_seconds: Annotated[float, Field(gt=0)] = 15.0
-    search_rerank_max_completion_tokens: Annotated[int, Field(ge=16)] = 4000
     search_rerank_deadline_seconds: Annotated[float, Field(gt=0)] = 20.0
 
     # AD-11, row `r5`: the Azure AI Search service, whose index the job loads
@@ -288,6 +306,8 @@ class Settings(BaseSettings):
         "embedding_deployment",
         "layout_endpoint",
         "model_endpoint",
+        "rerank_deployment",
+        "rerank_url",
         "search_agentic_chat_model_name",
         "search_agentic_embedding_model_name",
         "search_service_endpoint",
@@ -301,10 +321,11 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("chat_deployment", "embedding_deployment")
+    @field_validator("chat_deployment", "embedding_deployment", "rerank_deployment")
     @classmethod
     def _deployment_is_a_name(cls, value: str | None) -> str | None:
-        # The names are stored with every chunk and compared on the next run.
+        # The names are stored with every chunk and compared on the next
+        # run, or sent to the account as they are.
         if value is not None and value != value.strip():
             raise ValueError("a deployment name must not be padded")
         return value
@@ -334,6 +355,21 @@ class Settings(BaseSettings):
             _reached_safely("MODEL", self.model_endpoint, self.model_entra_auth)
         if self.layout_endpoint is not None:
             _reached_safely("LAYOUT", self.layout_endpoint, self.layout_entra_auth)
+        if self.rerank_url is not None:
+            # Signed in to as the models are: the same rule, for a whole
+            # address, which may have a path and a query.
+            address = urlsplit(self.rerank_url)
+            local = address.scheme == "http" and address.hostname in _LOOPBACK_HOSTS
+            azure = address.scheme == "https" and bool(address.hostname)
+            if address.fragment or not (
+                (local and not self.model_entra_auth)
+                or (azure and self.model_entra_auth)
+            ):
+                raise ValueError(
+                    "RETRIEVAL_RERANK_URL must be an https:// address, with "
+                    "RETRIEVAL_MODEL_ENTRA_AUTH=true, or the local stand-in's on "
+                    "loopback over plain HTTP, without it; and without a fragment"
+                )
         if self.search_service_endpoint is not None:
             # The stand-in for the search service is on loopback and takes
             # no token: it can never be the endpoint in Azure.

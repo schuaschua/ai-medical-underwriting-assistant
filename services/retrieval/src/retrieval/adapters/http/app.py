@@ -21,6 +21,8 @@ from retrieval.adapters.model import (
     ModelGateway,
     build_model_client,
     model_token_for,
+    rerank_token_for,
+    rerank_url,
 )
 from retrieval.adapters.search_index import (
     SearchIndex,
@@ -56,8 +58,9 @@ def build_query_gateway(
 
     Tests pass a transport that stands in for the deployments. A query's
     call has the search's own short budget, not the ingestion job's. Given
-    a chat deployment, the same gateway is row `r4`'s reranker, under the
-    same cap on concurrent calls, with a timeout of its own for that call.
+    a reranker deployment, the same gateway is row `r4`'s reranker, under
+    the same cap on concurrent calls, with a timeout of its own for that
+    call. It is given no chat deployment: a search writes no context line.
     """
     if settings.model_endpoint is None or settings.embedding_deployment is None:
         return None
@@ -75,10 +78,11 @@ def build_query_gateway(
         # AD-16: the one embedding deployment, the same the chunks were
         # embedded with at ingestion.
         embedding_deployment=settings.embedding_deployment,
-        # AD-11, row `r4`: the shared chat deployment, when one is named.
-        chat_deployment=settings.chat_deployment,
+        # AD-11, row `r4`: the reranker deployment, when one is named.
+        rerank_deployment=settings.rerank_deployment,
+        rerank_url=rerank_url(settings),
+        rerank_token=rerank_token_for(settings),
         rerank_timeout_seconds=settings.search_rerank_timeout_seconds,
-        rerank_max_completion_tokens=settings.search_rerank_max_completion_tokens,
         max_retries=settings.search_embedding_max_retries,
         retry_seconds=min(settings.model_retry_seconds, longest_wait),
         max_retry_seconds=longest_wait,
@@ -200,9 +204,9 @@ def create_app(
             )
         model: QueryEmbedder = gateway if gateway is not None else NoEmbeddingModel()
         # AD-11, row `r4`: the gateway is the reranker where it was given
-        # the chat deployment.
+        # the reranker deployment.
         reranker: Reranker | None = (
-            gateway if settings.chat_deployment is not None else None
+            gateway if settings.rerank_deployment is not None else None
         )
         missing = [
             name
@@ -213,12 +217,12 @@ def create_app(
             )
             if value is None
         ]
-        if settings.chat_deployment is None:
-            missing.append("RETRIEVAL_CHAT_DEPLOYMENT")
+        if settings.rerank_deployment is None:
+            missing.append("RETRIEVAL_RERANK_DEPLOYMENT")
         if reranker is None:
             # Said once, here: row `r4` is then refused as not available.
-            # With the chat deployment alone missing the other rows answer
-            # as before; a chat deployment without the rest is no reranker.
+            # With the reranker deployment alone missing the other rows
+            # answer as before; one without the rest is no reranker.
             logger.info("row r4 is off: not configured: missing=%s", ",".join(missing))
         if gateway is None:
             # Said once, here: every search is then refused, at warning.

@@ -36,7 +36,6 @@ from retrieval.adapters.layout import (
     build_layout_http,
 )
 from retrieval.adapters.model import (
-    COGNITIVE_SERVICES_SCOPE,
     NO_KEY,
     ModelGateway,
     build_model_client,
@@ -54,7 +53,7 @@ from retrieval.domain.ports import (
     LayoutFailed,
     ModelUnavailable,
 )
-from retrieval.settings import Settings
+from retrieval.settings import COGNITIVE_SERVICES_SCOPE, Settings
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SERVICE_DIR.parents[1]

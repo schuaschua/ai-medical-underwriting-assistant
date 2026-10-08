@@ -121,11 +121,12 @@ RUNNABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
         RetrieverConfig.R6,
     }
 )
-# The rows `retrieval` answers only where it was given the chat deployment:
-# its reranker (`r4`), and what the knowledge base plans with (`r6`).
+# The rows `retrieval` answers only where it was given the reranker
+# deployment (`r4`), and only where it was given the chat deployment, which
+# the knowledge base plans with (`r6`).
 RERANKER_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset({RetrieverConfig.R4})
-CHAT_DEPLOYMENT_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = (
-    RERANKER_RETRIEVER_CONFIGS | {RetrieverConfig.R6}
+CHAT_DEPLOYMENT_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
+    {RetrieverConfig.R6}
 )
 # The rows `retrieval` answers only where it was given a search service.
 SEARCH_SERVICE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
@@ -139,12 +140,13 @@ SERVICE_PLANNED_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = frozenset(
 )
 # The rows a verdict may be commanded with unless the settings say otherwise
 # (VERDICT_AVAILABLE_RETRIEVER_CONFIGS): the ones that need no search
-# service and no chat deployment at `retrieval`. `workflow` and `retrieval` name the same rows,
+# service, no reranker deployment and no chat deployment at `retrieval`. `workflow` and `retrieval` name the same rows,
 # each in its own settings, and a test outside `services/` holds the three
 # lists equal.
 DEFAULT_AVAILABLE_RETRIEVER_CONFIGS: frozenset[RetrieverConfig] = (
     RUNNABLE_RETRIEVER_CONFIGS
     - SEARCH_SERVICE_RETRIEVER_CONFIGS
+    - RERANKER_RETRIEVER_CONFIGS
     - CHAT_DEPLOYMENT_RETRIEVER_CONFIGS
 )
 

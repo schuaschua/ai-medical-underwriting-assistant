@@ -8,10 +8,11 @@ knows the rows.
 A row on Azure AI Search (`r5`) is built and still not available everywhere:
 it needs a search service, and a service that was told of none refuses it
 the same way, while the pgvector rows answer as before. So is the row with
-a reranker (`r4`): its reranker is the chat deployment, and a service that
-was told of none refuses the row. The agentic row (`r6`) asks a knowledge
-base on the search service, which plans its queries with the chat
-deployment: it needs both the search service and that deployment.
+a reranker (`r4`): its reranker is a deployment of its own (Cohere Rerank),
+and a service that was told of none refuses the row. The agentic row (`r6`)
+asks a knowledge base on the search service, which plans its queries with
+the chat deployment: it needs both the search service and that deployment,
+and no reranker.
 """
 
 from collections.abc import Mapping
@@ -56,7 +57,7 @@ class RetrieverRow:
 
     @property
     def needs_reranker(self) -> bool:
-        """Whether the row's order is a reranker's: it then needs the chat deployment."""
+        """Whether the row's order is a reranker's: it then needs the reranker deployment."""
         return self.method is SearchMethod.HYBRID_RERANKED
 
     @property
@@ -94,12 +95,12 @@ def available_rows(
 ) -> frozenset[RetrieverConfig]:
     """The rows a service answers: the built ones, less those that need what it was not given.
 
-    That is a search service (`r5`, `r6`), a reranker (`r4`) and a
-    knowledge base (`r6`), which a service has only where it was given the
-    search service and the chat deployment. `workflow` and `verdict` each
-    name the rows a case may run with, as a setting; a test outside
-    `services/` holds the three lists equal, with and without the search
-    service and the chat deployment.
+    That is a search service (`r5`, `r6`), a reranker (`r4`), which a
+    service has only where it was given the reranker deployment, and a
+    knowledge base (`r6`), which it has only where it was given the search
+    service and the chat deployment. `workflow` and `verdict` each name
+    the rows a case may run with, as a setting; a test outside `services/`
+    holds the three lists equal, with and without each of the three.
     """
     return frozenset(
         row.config
@@ -140,7 +141,7 @@ def row_to_search(
 
     That is a row that is not built, a row on Azure AI Search when the
     service has no search endpoint (`search_service` false), the row with
-    a reranker when it has no chat deployment (`reranker` false), and the
+    a reranker when it has no reranker deployment (`reranker` false), and the
     agentic row when it has no knowledge base to ask (`knowledge_base`
     false).
     """

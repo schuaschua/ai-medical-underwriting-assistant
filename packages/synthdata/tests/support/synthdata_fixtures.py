@@ -54,6 +54,7 @@ from synthdata.foundry_standin import DEFAULT_PORT as MODEL_PORT
 from synthdata.foundry_standin import (
     LOCAL_DEPLOYMENT,
     LOCAL_EMBEDDING_DEPLOYMENT,
+    LOCAL_RERANK_DEPLOYMENT,
     FoundryStandIn,
 )
 from synthdata.language_standin import DEFAULT_PORT, EMULATOR, LanguageStandIn
@@ -321,6 +322,7 @@ def retrieval_settings(
         model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
         chat_deployment=LOCAL_DEPLOYMENT,
         embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+        rerank_deployment=LOCAL_RERANK_DEPLOYMENT,
         # A throttled call is sent again at once, and a running analysis
         # looked at again at once.
         model_retry_seconds=0.01,
@@ -461,6 +463,7 @@ def verdict_manual(
         model_endpoint=f"http://127.0.0.1:{MODEL_PORT}",
         chat_deployment=LOCAL_DEPLOYMENT,
         embedding_deployment=LOCAL_EMBEDDING_DEPLOYMENT,
+        rerank_deployment=LOCAL_RERANK_DEPLOYMENT,
         model_retry_seconds=0.01,
     )
     command.upgrade(retrieval_alembic_config(settings), "head")

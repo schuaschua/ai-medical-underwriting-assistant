@@ -50,12 +50,12 @@ rows:
   r4:
     store: pgvector
     chunk_set: smart
-    method: "Hybrid, then an LLM reranker on the chat deployment"
+    method: "Hybrid, then Cohere Rerank v4.0 fast on Foundry"
     cost: null
     effort:
       amount: "3"
       unit: stories built
-      source: "epics.md: stories 2.2 (ingestion), 2.3 (hybrid search) and 3.7 (LLM reranker)"
+      source: "epics.md: stories 2.2 (ingestion), 2.3 (hybrid search) and 3.7 (Cohere Rerank on Foundry)"
   r5:
     store: Azure AI Search
     chunk_set: smart

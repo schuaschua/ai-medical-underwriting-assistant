@@ -299,6 +299,27 @@ variable "search_deadline_seconds" {
   }
 }
 
+variable "rerank_url" {
+  description = "Row r4 (spine AD-11): the whole address of the rerank call, which retrieval makes with the reranker deployment as the model; it may be on another host than the Foundry account's endpoint and may carry a query string (?api-version=...). Null: Cohere's route on the Foundry account's endpoint, /providers/cohere/v2/rerank."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.rerank_url == null || can(regex("^https://[^/?#\\s]+(/[^#\\s]*)?$", var.rerank_url))
+    error_message = "rerank_url must be an https:// address without a fragment, or null."
+  }
+}
+
+variable "rerank_token_scope" {
+  description = "Row r4: the scope of the Entra token retrieval signs the rerank call in with."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[^/\\s]+/\\S*$", var.rerank_token_scope))
+    error_message = "rerank_token_scope must be a token scope: an https:// resource address and what is asked of it, as in https://cognitiveservices.azure.com/.default."
+  }
+}
+
 variable "search_rerank_depth" {
   description = "Row r4 (spine AD-11): how many of the best fused candidates the reranker is given with the query. A search that asks for more items than this has that many reranked."
   type        = number
@@ -310,7 +331,7 @@ variable "search_rerank_depth" {
 }
 
 variable "search_rerank_timeout_seconds" {
-  description = "Row r4: how long the reranker's one chat call may take, in seconds. Not longer than search_rerank_deadline_seconds."
+  description = "Row r4: how long the one call to the reranker may take, in seconds. Not longer than search_rerank_deadline_seconds."
   type        = number
 
   validation {
@@ -319,18 +340,8 @@ variable "search_rerank_timeout_seconds" {
   }
 }
 
-variable "search_rerank_max_completion_tokens" {
-  description = "Row r4: the most tokens the reranker's answer may take: an entry per candidate, and room for a model that reasons before it answers. An answer cut off at this limit is no answer, and the search is model_unavailable."
-  type        = number
-
-  validation {
-    condition     = var.search_rerank_max_completion_tokens == floor(var.search_rerank_max_completion_tokens) && var.search_rerank_max_completion_tokens >= 16
-    error_message = "search_rerank_max_completion_tokens must be a whole number of at least 16."
-  }
-}
-
 variable "search_rerank_deadline_seconds" {
-  description = "Row r4: the deadline over one whole search with that row, the reranker's chat call included, in seconds, in place of search_deadline_seconds. When it passes the search is answered model_unavailable. Keep it under the callers' timeouts for a search: verdict's 25 s (VERDICT_UPSTREAM_TIMEOUT_SECONDS), web's 30 s and the bake-off runner's 30 s."
+  description = "Row r4: the deadline over one whole search with that row, the reranker's call included, in seconds, in place of search_deadline_seconds. When it passes the search is answered model_unavailable. Keep it under the callers' timeouts for a search: verdict's 25 s (VERDICT_UPSTREAM_TIMEOUT_SECONDS), web's 30 s and the bake-off runner's 30 s."
   type        = number
 
   validation {
@@ -450,7 +461,7 @@ variable "gate_threshold" {
 }
 
 variable "available_retriever_configs" {
-  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r4 belongs here because retrieval is given the chat deployment, its reranker, row r5 because it is given the search service's endpoint, and row r6 because it is given both."
+  description = "The retrieval ladder rows a case may run with (spine AD-11): the rows this build's retrieval and verdict services can answer. Passed to workflow and to verdict, which refuse a start or a verdict run that names another row. Row r4 belongs here because retrieval is given the reranker deployment, row r5 because it is given the search service's endpoint, and row r6 because it is given that endpoint and the chat deployment."
   type        = list(string)
 
   validation {

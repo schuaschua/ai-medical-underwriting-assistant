@@ -6,13 +6,14 @@ gateways call. On `POST /openai/v1/chat/completions` it answers, in the shape
 of a chat completion, what the request's structured output asks for: for
 `classification` a page type and a one-line reason, read from the page text
 in the request; for `retrieval`'s ingestion job the context line of one rule
-of the manual, built from the section and part the request names, and for
-a search with row `r4` the relevance of each candidate to the query; for
+of the manual, built from the section and part the request names; for
 `extraction` the facts of one page, each a statement and a quote, read from
 the page text in the request; for `verdict`'s agent the next turn of its
 conversation, a tool call or the final proposal, worked out from the messages
 in the request (`verdict_standin.py`). On `POST /openai/v1/embeddings` it
-answers with one vector per text.
+answers with one vector per text. On `POST /providers/cohere/v2/rerank`, the
+reranker of a search with row `r4`, it answers with a relevance score for
+each document of the request, in the shape of Cohere's rerank API.
 
 A dev tool only. It is part of `synthdata`, which no service depends on, so it
 is in no service image; and the services refuse a plain-HTTP model endpoint
@@ -20,8 +21,8 @@ that is not on loopback, so it cannot stand in for the models in Azure.
 
 It is not a model. It tells the page types apart by the headings the
 generator prints on the synthetic pages; it does not look at the picture.
-Its context line repeats the headings it was given. Its relevance of a
-candidate is the share of the query's words the candidate holds. Its facts are the labelled
+Its context line repeats the headings it was given. Its relevance score of a
+document is the share of the query's words the document holds. Its facts are the labelled
 values and the table rows the generator prints on the medical pages: it knows
 those labels and nothing of medicine. Its vectors count words:
 each word of a text adds to one of the vector's dimensions, picked by a hash
@@ -47,7 +48,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from contracts.enums import PageType
 from contracts.text import has_mask_token, normalise
@@ -60,14 +61,18 @@ DEFAULT_PORT = 5101
 # the one field of its answer.
 CONTEXT_SCHEMA_NAME = "chunk_context"
 CONTEXT_FIELD = "context_line"
-# The name of the structured output a search with row `r4` asks for (story
-# 3.7), the fields of the message it sends and those of the answer.
-RERANK_SCHEMA_NAME = "rerank_relevance"
+# Where the reranker of row `r4` is called (story 3.7): Cohere's rerank API
+# as a Foundry account serves it. The fields of the request, and those of
+# the answer: one result per document, by its place in the request.
+RERANK_PATH = "/providers/cohere/v2/rerank"
 RERANK_QUERY_FIELD = "query"
-RERANK_CANDIDATES_FIELD = "candidates"
-RERANK_RANKING_FIELD = "ranking"
-RERANK_CHUNK_ID_FIELD = "chunk_id"
-RERANK_RELEVANCE_FIELD = "relevance"
+RERANK_DOCUMENTS_FIELD = "documents"
+RERANK_RESULTS_FIELD = "results"
+RERANK_INDEX_FIELD = "index"
+RERANK_SCORE_FIELD = "relevance_score"
+# A local name for the reranker deployment; the real one is a setting of the
+# `app` stack.
+LOCAL_RERANK_DEPLOYMENT = "local-stand-in-rerank"
 # The size of a vector of `text-embedding-3-large`.
 EMBEDDING_DIMENSIONS = 3072
 # A local name for the embedding deployment; the real one is a setting of the
@@ -212,7 +217,7 @@ class Mode(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     INVALID_ANSWER = "invalid_answer"
     # The reranker of row `r4` (story 3.7): its answer leaves the last
-    # candidate out, or comes only after `rerank_delay_seconds`. Every other
+    # document out, or comes only after `rerank_delay_seconds`. Every other
     # request is answered as in `ok`.
     RERANK_INCOMPLETE = "rerank_incomplete"
     RERANK_SLOW = "rerank_slow"
@@ -298,38 +303,30 @@ def context_line_for(rule_place: str) -> str:
     return f"{line}, of the underwriting manual: one rule of that section."
 
 
-def rerank_request_of(body: dict[str, Any]) -> dict[str, Any] | None:
-    """The query and the candidates of a rerank request (story 3.7): its user message, read as JSON.
+def rerank_request_of(body: dict[str, Any]) -> tuple[str, list[str]] | None:
+    """The query and the documents of a rerank request (story 3.7).
 
-    None when the request does not ask for the reranker's structured output
-    with one user message that is the object `retrieval` sends.
+    None when the request is not what `retrieval` sends: a deployment as
+    the model, a query and at least one document, each a text.
     """
-    try:
-        schema = body["response_format"]["json_schema"]
-        if schema["name"] != RERANK_SCHEMA_NAME:
-            return None
-        (user,) = (message for message in body["messages"] if message["role"] == "user")
-        asked = json.loads(user["content"])
-        query = asked[RERANK_QUERY_FIELD]
-        candidates = asked[RERANK_CANDIDATES_FIELD]
-    except (KeyError, TypeError, ValueError):
+    model = body.get("model")
+    query = body.get(RERANK_QUERY_FIELD)
+    documents = body.get(RERANK_DOCUMENTS_FIELD)
+    if not isinstance(model, str) or not model or not isinstance(query, str):
         return None
-    if not isinstance(query, str) or not isinstance(candidates, list):
-        return None
-    if not all(
-        isinstance(candidate, dict)
-        and isinstance(candidate.get(RERANK_CHUNK_ID_FIELD), str)
-        and isinstance(candidate.get("text"), str)
-        for candidate in candidates
+    if (
+        not isinstance(documents, list)
+        or not documents
+        or not all(isinstance(document, str) for document in documents)
     ):
         return None
-    return {RERANK_QUERY_FIELD: query, RERANK_CANDIDATES_FIELD: candidates}
+    return query, documents
 
 
 def relevance_of(query: str, text: str) -> float:
-    """The relevance the stand-in gives a candidate: the share of the query's words its text holds.
+    """The relevance score the stand-in gives a document: the share of the query's words its text holds.
 
-    From 0 to 1. It knows nothing of meaning: a candidate that repeats the
+    From 0 to 1. It knows nothing of meaning: a document that repeats the
     query's words is relevant to it, whatever it says.
     """
     asked = set(_WORD.findall(query.lower()))
@@ -516,9 +513,10 @@ class FoundryStandIn:
         # test or a local run fails at once instead of waiting.
         self.retry_after_seconds = retry_after_seconds
         # What it was asked, for tests: every chat request body, in order,
-        # and every embedding request body.
+        # every embedding request body and every rerank request body.
         self.requests: list[dict[str, Any]] = []
         self.embedding_requests: list[dict[str, Any]] = []
+        self.rerank_requests: list[dict[str, Any]] = []
         # The size of the vectors it answers with; a test makes it wrong.
         self.embedding_dimensions = EMBEDDING_DIMENSIONS
         # How long a rerank request waits in the `rerank_slow` mode: longer
@@ -552,29 +550,41 @@ class FoundryStandIn:
             return "This rule is about a medical impairment, I think."
         return json.dumps({CONTEXT_FIELD: context_line_for(rule_place)})
 
-    def rerank_answer(self, asked: dict[str, Any]) -> str:
-        """The content of the completion for one rerank request (story 3.7)."""
+    def rerank(self, body: dict[str, Any]) -> Response:
+        """Answer one rerank request (story 3.7): a score for every document, best first."""
+        with self._lock:
+            self.rerank_requests.append(body)
+        if self.mode is Mode.THROTTLED:
+            return self._throttled()
+        asked = rerank_request_of(body)
+        if asked is None:
+            return _error(400, "invalid_request", "Not a rerank request.")
         if self.mode is Mode.INVALID:
-            # What a model does when it ignores the format it was given.
-            return "The first candidate looks the most relevant to me."
+            # Prose where the answer's object should be, as on the chat route.
+            return PlainTextResponse("The first document looks the most relevant.")
         if self.mode is Mode.RERANK_SLOW:
             time.sleep(self.rerank_delay_seconds)
-        query = asked[RERANK_QUERY_FIELD]
-        ranking = [
-            {
-                RERANK_CHUNK_ID_FIELD: candidate[RERANK_CHUNK_ID_FIELD],
-                RERANK_RELEVANCE_FIELD: relevance_of(query, candidate["text"]),
-            }
-            for candidate in asked[RERANK_CANDIDATES_FIELD]
+        query, documents = asked
+        results = [
+            {RERANK_INDEX_FIELD: index, RERANK_SCORE_FIELD: relevance_of(query, text)}
+            for index, text in enumerate(documents)
         ]
         if self.mode is Mode.RERANK_INCOMPLETE:
-            ranking = ranking[:-1]
-        return json.dumps({RERANK_RANKING_FIELD: ranking})
+            results = results[:-1]
+        # As the service orders them: by score, and not by place.
+        results.sort(key=lambda result: -result[RERANK_SCORE_FIELD])
+        return JSONResponse(
+            {
+                "id": uuid.uuid4().hex,
+                RERANK_RESULTS_FIELD: results,
+                "meta": {"billed_units": {"search_units": 1}},
+            }
+        )
 
     @property
     def rerank_calls(self) -> int:
         """How many rerank requests it has had, answered or not."""
-        return sum(rerank_request_of(body) is not None for body in self.requests)
+        return len(self.rerank_requests)
 
     def extraction_answer(self, page_text: str) -> str:
         """The content of the completion for one page's facts (story 2.4)."""
@@ -668,15 +678,6 @@ class FoundryStandIn:
             if not isinstance(model, str) or not model:
                 return _error(400, "invalid_request", "A chat request names its model.")
             return self.verdict_turn(body, model)
-        to_rerank = rerank_request_of(body)
-        if to_rerank is not None and isinstance(model, str) and model:
-            content = self.rerank_answer(to_rerank)
-            return _completion(
-                model,
-                {"role": "assistant", "content": content},
-                prompt_tokens=_words(body.get("messages")),
-                completion_tokens=_words(content),
-            )
         rule_place = rule_place_of(body)
         to_extract = page_to_extract_of(body) if rule_place is None else None
         text = page_text_of(body) if rule_place is None and to_extract is None else None
@@ -688,8 +689,8 @@ class FoundryStandIn:
             return _error(
                 400,
                 "invalid_request",
-                "Not a page classification, a context line, a rerank, an "
-                "extraction or a verdict request.",
+                "Not a page classification, a context line, an extraction or a "
+                "verdict request.",
             )
         if to_extract is not None:
             content = self.extraction_answer(to_extract)
@@ -702,7 +703,7 @@ class FoundryStandIn:
         return _completion(model, {"role": "assistant", "content": content})
 
     def app(self) -> FastAPI:
-        """The HTTP app: the two routes the gateways call."""
+        """The HTTP app: the three routes the gateways call."""
         app = FastAPI(
             title="foundry-stand-in", docs_url=None, redoc_url=None, openapi_url=None
         )
@@ -714,6 +715,10 @@ class FoundryStandIn:
         @app.post(EMBEDDINGS_PATH)
         def embed(body: dict[str, Any]) -> Response:
             return self.embed(body)
+
+        @app.post(RERANK_PATH)
+        def rerank(body: dict[str, Any]) -> Response:
+            return self.rerank(body)
 
         return app
 

@@ -1,10 +1,10 @@
 """The model gateway: the one module that calls the Foundry deployments (spine AD-16).
 
 Three calls: the shared chat deployment writes one chunk's context line at
-ingestion and, for a search with row `r4`, says how relevant each fused
-candidate is to the query; and the one embedding deployment turns texts
-into vectors: a chunk's at ingestion and a query's at search, the same
-way. The gateway does not
+ingestion; the reranker deployment (Cohere Rerank), for a search with row
+`r4`, scores each fused candidate against the query; and the one embedding
+deployment turns texts into vectors: a chunk's at ingestion and a query's
+at search, the same way. The gateway does not
 judge what comes back; the domain does. A call answered 429 or 5xx (or 408
 or 409), or not answered at all, is sent again up to three times, waiting as
 long as `Retry-After` asks or else longer each time, and then the model is
@@ -17,6 +17,7 @@ counts and timings.
 
 import asyncio
 import contextlib
+import json
 import logging
 import math
 import random
@@ -25,6 +26,7 @@ from typing import Any
 
 import httpx2
 import openai
+from openai import RequestOptions
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONSchema
 from opentelemetry import trace
@@ -38,15 +40,17 @@ from retrieval.domain.ports import (
     ModelCallFailed,
     ModelUnavailable,
 )
-from retrieval.domain.rerank import CHUNK_ID_FIELD, RANKING_FIELD, RELEVANCE_FIELD
-from retrieval.prompts import CHUNK_CONTEXT, RERANK, load_prompt
-from retrieval.settings import APP_ID, Settings
+from retrieval.prompts import CHUNK_CONTEXT, load_prompt
+from retrieval.settings import (
+    APP_ID,
+    COGNITIVE_SERVICES_SCOPE,
+    DEFAULT_RERANK_PATH,
+    Settings,
+)
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(APP_ID)
 
-# The scope of an Entra token for Azure AI services, the Foundry account among them.
-COGNITIVE_SERVICES_SCOPE = "https://cognitiveservices.azure.com/.default"
 # Where the Foundry account serves the OpenAI API, below its endpoint.
 OPENAI_API_PATH = "/openai/v1/"
 # What the client is given in place of a key for the local stand-in, which
@@ -75,39 +79,6 @@ CONTEXT_FORMAT: ResponseFormatJSONSchema = {
 }
 
 
-# Row `r4`: the reranker's structured output, one entry per candidate. The
-# schema says nothing of the range of a relevance or of which ids may be
-# named: the domain checks both, as it would have to anyway.
-RERANK_SCHEMA_NAME = "rerank_relevance"
-RERANK_SCHEMA: dict[str, object] = {
-    "type": "object",
-    "properties": {
-        RANKING_FIELD: {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    CHUNK_ID_FIELD: {"type": "string"},
-                    RELEVANCE_FIELD: {"type": "number"},
-                },
-                "required": [CHUNK_ID_FIELD, RELEVANCE_FIELD],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": [RANKING_FIELD],
-    "additionalProperties": False,
-}
-RERANK_FORMAT: ResponseFormatJSONSchema = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": RERANK_SCHEMA_NAME,
-        "strict": True,
-        "schema": RERANK_SCHEMA,
-    },
-}
-
-
 def model_base_url(settings: Settings) -> str:
     """The address of the OpenAI API on the configured endpoint."""
     if settings.model_endpoint is None:
@@ -124,6 +95,27 @@ def chat_deployment(settings: Settings) -> str:
             "Set RETRIEVAL_CHAT_DEPLOYMENT: the name of the chat deployment."
         )
     return settings.chat_deployment
+
+
+def rerank_url(settings: Settings) -> str | None:
+    """The address of the rerank call; None when the service has neither it nor a model endpoint.
+
+    The whole address where the settings give one. Otherwise the Foundry
+    account's own route for Cohere Rerank, which is not below the OpenAI
+    API's path.
+    """
+    if settings.rerank_url is not None:
+        return settings.rerank_url
+    if settings.model_endpoint is None:
+        return None
+    return settings.model_endpoint.rstrip("/") + DEFAULT_RERANK_PATH
+
+
+def rerank_token_for(settings: Settings) -> EntraToken | None:
+    """The token source for the rerank call in Azure, for the scope the settings name; None for the local stand-in."""
+    if not settings.model_entra_auth:
+        return None
+    return EntraToken(azure_credential(settings), scope=settings.rerank_token_scope)
 
 
 def embedding_deployment(settings: Settings) -> str:
@@ -205,30 +197,39 @@ def _retry_after_seconds(headers: Any) -> float | None:
 
 
 class ModelGateway:
-    """Writes context lines and rates candidates on the chat deployment, and vectors on the embedding deployment."""
+    """Writes context lines on the chat deployment, scores candidates on the reranker deployment, and vectors on the embedding deployment."""
 
     def __init__(
         self,
         client: openai.AsyncOpenAI,
         *,
         embedding_deployment: str,
-        # None where the service was told of no chat deployment: it then
-        # embeds queries and rates no candidates (row `r4` is off).
+        # None for the service's searches, which write no context line.
         chat_deployment: str | None = None,
+        # AD-11, row `r4`: the reranker deployment and the address it is
+        # called at. None where the service was told of no such
+        # deployment: it then scores no candidates (the row is off).
+        rerank_deployment: str | None = None,
+        rerank_url: str | None = None,
+        # The token the rerank call is signed in with, which has a scope
+        # of its own in the settings; None for the local stand-in.
+        rerank_token: EntraToken | None = None,
         max_retries: int = 3,
         retry_seconds: float = 1.0,
         max_retry_seconds: float = 30.0,
         max_completion_tokens: int = 2000,
         max_concurrent_calls: int = 5,
-        # Row `r4`: how long the one chat call of a search may take, whatever
-        # the client's own timeout is, and the most tokens of its answer.
+        # Row `r4`: how long the one rerank call of a search may take,
+        # whatever the client's own timeout is.
         rerank_timeout_seconds: float = 15.0,
-        rerank_max_completion_tokens: int = 4000,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[], float] = random.random,
     ) -> None:
         self._client = client
         self._chat_deployment = chat_deployment
+        self._rerank_deployment = rerank_deployment
+        self._rerank_url = rerank_url
+        self._rerank_token = rerank_token
         self._embedding_deployment = embedding_deployment
         self._max_retries = max_retries
         self._retry_seconds = retry_seconds
@@ -237,8 +238,8 @@ class ModelGateway:
         # One for the whole process: however many chunks are written at
         # once, no more calls than this are with the deployments at a time.
         self._calls = asyncio.Semaphore(max_concurrent_calls)
-        # Row `r4`: a rerank call is slow, and takes its place under the
-        # same cap. Rerank calls together may hold all of it but one slot,
+        # Row `r4`: a rerank call may be slow, and takes its place under
+        # the same cap. Rerank calls together may hold all of it but one slot,
         # so that a query's embedding, which has a few seconds, never
         # waits behind a full house of them. (With a cap of one there is
         # no slot to leave.)
@@ -247,8 +248,6 @@ class ModelGateway:
         self._jitter = jitter
         self._prompt = load_prompt(CHUNK_CONTEXT)
         self._rerank_timeout_seconds = rerank_timeout_seconds
-        self._rerank_max_completion_tokens = rerank_max_completion_tokens
-        self._rerank_prompt = load_prompt(RERANK)
 
     async def aclose(self) -> None:
         await self._client.close()
@@ -276,43 +275,53 @@ class ModelGateway:
         completion = await self._call("context_line", deployment, send)
         return _answer_of(completion)
 
-    async def relevance(self, query_and_candidates: str) -> str:
-        """Row `r4`: one chat completion that rates the candidates; the answer as the model gave it.
+    async def relevance(self, query: str, documents: Sequence[str]) -> str:
+        """Row `r4`: one rerank call that scores every document; the answer's body as the service gave it.
+
+        The call is Cohere's rerank API as the Foundry account serves it:
+        the deployment as the model, the query and the documents as texts.
+        No `top_n` is sent, so every document is scored. The query and the
+        documents are data in a request that has no instructions.
 
         It shares the cap on concurrent calls with every other call of this
         gateway, of which rerank calls leave one slot free, and has a
-        timeout of its own: a chat call does not fit the few seconds a
-        query's embedding gets. A call that timed out is not sent again:
-        the search's deadline would pass before a second one is answered,
-        and its prompt would be paid for and thrown away.
+        timeout of its own, not the few seconds a query's embedding gets.
+        A call that timed out is not sent again: the search's deadline
+        would pass before a second one is answered.
         """
-        deployment = self._chat_deployment
-        if deployment is None:
-            raise ModelCallFailed("chat_deployment_not_set")
-        messages: list[ChatCompletionMessageParam] = [
-            {"role": "system", "content": self._rerank_prompt},
-            # The query and the chunks are data: they go in the user turn,
-            # never in the instructions (security rule 14).
-            {"role": "user", "content": query_and_candidates},
-        ]
+        deployment, url = self._rerank_deployment, self._rerank_url
+        if deployment is None or url is None:
+            raise ModelCallFailed("rerank_deployment_not_set")
+        body = {"model": deployment, "query": query, "documents": list(documents)}
 
         async def send() -> Any:
-            return await self._client.chat.completions.create(
-                model=deployment,
-                messages=messages,
-                response_format=RERANK_FORMAT,
-                max_completion_tokens=self._rerank_max_completion_tokens,
-                timeout=self._rerank_timeout_seconds,
-            )
+            options: RequestOptions = {"timeout": self._rerank_timeout_seconds}
+            token = self._rerank_token
+            if token is not None:
+                try:
+                    await token.refresh()
+                    # In place of the client's own token: this call's scope.
+                    options["headers"] = {"Authorization": f"Bearer {token.value()}"}
+                except Exception as error:  # noqa: BLE001 - whatever kept the token away, the call was not made
+                    # security rule 31: the type only.
+                    raise TokenUnavailable(type(error).__qualname__) from None
+            # The client's own post: the same errors and no redirect, at
+            # an address outside the OpenAI API's path.
+            return await self._client.post(url, cast_to=str, body=body, options=options)
 
-        completion = await self._call(
+        answer = await self._call(
             "rerank",
             deployment,
             send,
             part=self._rerank_calls,
             again_after_timeout=False,
+            billed_in_search_units=True,
         )
-        return _answer_of(completion)
+        if not isinstance(answer, str):
+            # Not a body at all: nothing the domain could read as an answer.
+            logger.error("rerank answer is no text: type=%s", type(answer).__qualname__)
+            raise ModelCallFailed("rerank_answer_not_text")
+        return answer
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """One embedding call: a vector per text, in the order of the texts."""
@@ -362,12 +371,15 @@ class ModelGateway:
         *,
         part: asyncio.Semaphore | None = None,
         again_after_timeout: bool = True,
+        billed_in_search_units: bool = False,
     ) -> Any:
         """Send one call until it is answered, at most `max_retries` more times.
 
         `part` limits how many such calls are under way at once, inside
         the cap. Without `again_after_timeout` a call that got no answer
-        in its time is not sent again.
+        in its time is not sent again. A call `billed_in_search_units`
+        (the reranker's) has no token counts: what is logged of its cost is
+        the search units its answer states, or `-` when it states none.
         """
         with adapter_span(tracer, f"retrieval.model.{operation}") as span:
             span.set_attribute("gen_ai.request.model", deployment)
@@ -390,6 +402,19 @@ class ModelGateway:
                     if attempt <= self._max_retries:
                         await self._sleep(not_answered.wait_seconds)
                     continue
+                if billed_in_search_units:
+                    units = _search_units_of(answer)
+                    if units is not None:
+                        span.set_attribute("retrieval.model.search_units", units)
+                    logger.info(
+                        "model call: operation=%s deployment=%s attempts=%d "
+                        "search_units=%s",
+                        operation,
+                        deployment,
+                        attempt,
+                        "-" if units is None else units,
+                    )
+                    return answer
                 input_tokens, output_tokens = _usage_of(answer)
                 span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
                 span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
@@ -495,6 +520,18 @@ def _usage_of(answer: Any) -> tuple[int, int]:
     )
     first, second = (count if isinstance(count, int) else 0 for count in counts)
     return first, second
+
+
+def _search_units_of(answer: Any) -> int | None:
+    """The search units a rerank answer says it was billed; None where it states none.
+
+    Read for the log only: whether the answer is one at all is the domain's to judge.
+    """
+    try:
+        units = json.loads(answer)["meta"]["billed_units"]["search_units"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return units if type(units) is int else None
 
 
 def _answer_of(completion: Any) -> str:

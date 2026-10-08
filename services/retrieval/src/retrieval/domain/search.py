@@ -8,9 +8,9 @@ ranked list of candidates (the index port), the two lists are fused
 ranked items (`rank_items`). The baseline rows `r1` and `r2` embed the query
 the same way and answer the vector search's list alone (`vector_search`),
 over the `fixed` and the `smart` chunks. Row `r4` takes the fused list of
-`r3` as it is (`fused_candidates`, which both rows call) and has the chat
-deployment say how relevant its best candidates are to the query
-(`hybrid_reranked_search`): the order is the one thing that differs. Row
+`r3` as it is (`fused_candidates`, which both rows call) and has the
+reranker deployment, Cohere Rerank, score its best candidates against the
+query (`hybrid_reranked_search`): the order is the one thing that differs. Row
 `r5` embeds the query the same way and hands the text and the vector to
 Azure AI Search (`ai_search_hybrid`), whose index holds a copy of the
 `smart` chunks: the store is the one thing that differs. Row `r6` hands the
@@ -20,8 +20,8 @@ of its own with its own model, and the references it returns are the items.
 On the other rows no model rewrites the query. Nothing is stored and
 nothing is cached. Every read of a search is from one unchanging view of
 the index, and one deadline covers the whole search; rows `r4` and `r6`
-each have a longer one of their own, since a model's call does not fit the
-others'.
+each have a longer one of their own, since a reranker's or a planning
+model's call does not fit the others'.
 """
 
 import asyncio
@@ -64,8 +64,8 @@ from retrieval.domain.ports import (
 )
 from retrieval.domain.rerank import (
     RerankAnswerInvalid,
-    relevance_by_chunk,
-    rerank_request,
+    rerank_document,
+    scores_in_order,
 )
 from retrieval.domain.rows import (
     CHUNK_SET_NOT_INGESTED_MESSAGE,
@@ -135,9 +135,8 @@ class SearchPorts:
     # AD-11, row `r5`: Azure AI Search. None when the service was told of
     # no search endpoint: the row is then refused as not available.
     search_service: RuleSearchService | None = None
-    # AD-11, row `r4`: the chat deployment as a reranker. None when the
-    # service was told of no chat deployment: the row is then refused as
-    # not available.
+    # AD-11, row `r4`: the reranker deployment. None when the service was
+    # told of none: the row is then refused as not available.
     reranker: Reranker | None = None
     # AD-11, row `r6`: the search service's knowledge base. None when the
     # service was told of no search endpoint or of no chat deployment,
@@ -170,7 +169,7 @@ class SearchOptions:
     embedding_deployment: str | None = None
     # Row `r4`: how many of the best fused candidates the reranker is
     # given, and never fewer than `top_k`; and the deadline of that row's
-    # whole search, the chat call included, in place of `deadline_seconds`.
+    # whole search, the rerank call included, in place of `deadline_seconds`.
     rerank_depth: int = 20
     rerank_deadline_seconds: float | None = 20.0
     # Row `r6`: the deadline of that row's whole search, the service's own
@@ -364,10 +363,10 @@ async def hybrid_reranked_search(
 ) -> list[SearchItem]:
     """Row `r4`: the fused candidates of `r3`, in the order a reranker gives them.
 
-    The best of the fused list are shown to the chat deployment with the
-    query, in one call. The items are the candidates by the relevance it
-    gave them, largest first, and candidates it rated alike in the fused
-    order; `score` is that relevance. An answer that does not rate exactly
+    The best of the fused list are sent to the reranker deployment with
+    the query, in one call. The items are the candidates by the score it
+    gave them, largest first, and candidates of equal score in the fused
+    order; `score` is that score. An answer that does not score exactly
     the candidates it was given fails the search: the fused order is never
     answered in its place.
     """
@@ -391,7 +390,9 @@ async def hybrid_reranked_search(
     started = time.perf_counter()
     try:
         try:
-            answer = await reranker.relevance(rerank_request(query, candidates))
+            answer = await reranker.relevance(
+                query, [rerank_document(chunk) for chunk in candidates]
+            )
         finally:
             # Whatever the outcome, the deadline's cancellation included:
             # the time matters most when the reranker failed or was slow.
@@ -407,7 +408,7 @@ async def hybrid_reranked_search(
             ErrorCode.UPSTREAM_UNAVAILABLE, MODEL_REFUSED_MESSAGE
         ) from None
     try:
-        relevance = relevance_by_chunk(answer, [chunk.chunk_id for chunk in candidates])
+        scores = scores_in_order(answer, len(candidates))
     except RerankAnswerInvalid as error:
         logger.error(
             "rerank answer invalid: reason=%s candidates=%d",
@@ -417,19 +418,21 @@ async def hybrid_reranked_search(
         raise DomainError(
             ErrorCode.MODEL_UNAVAILABLE, RERANKER_NO_ANSWER_MESSAGE
         ) from None
-    # A stable sort: candidates of the same relevance stay in the fused order.
-    ordered = sorted(candidates, key=lambda chunk: -relevance[chunk.chunk_id])
+    # A stable sort: candidates of the same score stay in the fused order.
+    ordered = sorted(
+        zip(scores, candidates, strict=True), key=lambda scored: -scored[0]
+    )
     return [
         SearchItem(
             chunk_id=chunk.chunk_id,
             rule_ids=list(chunk.rule_ids),
             rank=rank,
-            score=relevance[chunk.chunk_id],
+            score=score,
             text=chunk.text,
             manual_page=chunk.manual_page,
             impairment=chunk.impairment,
         )
-        for rank, chunk in enumerate(ordered[:top_k], start=1)
+        for rank, (score, chunk) in enumerate(ordered[:top_k], start=1)
     ]
 
 

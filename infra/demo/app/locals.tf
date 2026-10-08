@@ -162,12 +162,20 @@ locals {
     { name = "RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS", value = tostring(var.search_embedding_timeout_seconds) },
     { name = "RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES", value = tostring(var.search_embedding_max_retries) },
     { name = "RETRIEVAL_SEARCH_DEADLINE_SECONDS", value = tostring(var.search_deadline_seconds) },
-    # Spine AD-11, row r4: the reranker is the chat deployment named above
-    # (RETRIEVAL_CHAT_DEPLOYMENT). With it set, r4 belongs in
-    # var.available_retriever_configs. The row has a deadline of its own.
+    # Spine AD-11, row r4: the reranker is a deployment of its own on the
+    # same Foundry account, Cohere Rerank, named by the foundation stack
+    # and reached with the service identity (there is no key). With it
+    # set, r4 belongs in var.available_retriever_configs. The row has a
+    # deadline of its own. Where the foundation stack has no rerank
+    # deployment the name is empty, which retrieval reads as none: r4 is
+    # then off and must be taken out of var.available_retriever_configs.
+    { name = "RETRIEVAL_RERANK_DEPLOYMENT", value = try(local.foundation.model_deployment_names["rerank"], "") },
+    # The whole address of the rerank call and the scope of its token:
+    # both written from documentation, so both variables.
+    { name = "RETRIEVAL_RERANK_URL", value = coalesce(var.rerank_url, "${trimsuffix(local.foundation.foundry_endpoint, "/")}/providers/cohere/v2/rerank") },
+    { name = "RETRIEVAL_RERANK_TOKEN_SCOPE", value = var.rerank_token_scope },
     { name = "RETRIEVAL_SEARCH_RERANK_DEPTH", value = tostring(var.search_rerank_depth) },
     { name = "RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS", value = tostring(var.search_rerank_timeout_seconds) },
-    { name = "RETRIEVAL_SEARCH_RERANK_MAX_COMPLETION_TOKENS", value = tostring(var.search_rerank_max_completion_tokens) },
     { name = "RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS", value = tostring(var.search_rerank_deadline_seconds) },
     # Spine AD-11, row r5: the Azure AI Search service of the foundation
     # stack, reached with the service identity (there is no key). The job

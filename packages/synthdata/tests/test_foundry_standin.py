@@ -73,37 +73,43 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
     ]
     # Stories 3.2, 3.3, 3.7 and 3.8: no service imports another, so each
     # names the ladder rows a case may run with by itself: `retrieval` by
-    # its row table and whether it was given a search service and a chat
-    # deployment (its reranker, and what the knowledge base of `r6` plans
-    # with), `verdict` and `workflow` by a setting. Held equal here,
-    # without the two, with each and with both.
+    # its row table and whether it was given a search service, a reranker
+    # deployment (Cohere Rerank, for `r4`) and a chat deployment (what the
+    # knowledge base of `r6` plans with), `verdict` and `workflow` by a
+    # setting. Held equal here, without the three, with each and with all.
     plain = frozenset({RetrieverConfig.R1, RetrieverConfig.R2, RetrieverConfig.R3})
     with_search = plain | {RetrieverConfig.R5}
-    with_chat = plain | {RetrieverConfig.R4}
+    with_reranker = plain | {RetrieverConfig.R4}
     everywhere = frozenset(RetrieverConfig)
 
-    def answered(search_service: bool, chat: bool) -> frozenset[RetrieverConfig]:
-        """The rows `retrieval` answers, as its app builds its ports from the two."""
+    def answered(
+        search_service: bool = False, chat: bool = False, reranker: bool = False
+    ) -> frozenset[RetrieverConfig]:
+        """The rows `retrieval` answers, as its app builds its ports from the three."""
         return available_rows(
-            search_service, reranker=chat, knowledge_base=search_service and chat
+            search_service, reranker=reranker, knowledge_base=search_service and chat
         )
 
-    assert answered(search_service=False, chat=False) == plain
+    assert answered() == plain
     assert DEFAULT_AVAILABLE_RETRIEVER_CONFIGS == plain
     assert VERDICT_DEFAULT_RETRIEVER_CONFIGS == plain
     assert frozenset(WorkflowSettings().available_retriever_configs) == plain
     assert frozenset(VerdictSettings().available_retriever_configs) == plain
     assert RetrievalSettings().search_service_endpoint is None
     assert RetrievalSettings().chat_deployment is None
-    assert answered(search_service=True, chat=False) == with_search
-    assert answered(search_service=False, chat=True) == with_chat
-    assert answered(search_service=True, chat=True) == everywhere
+    assert RetrievalSettings().rerank_deployment is None
+    assert answered(search_service=True) == with_search
+    # The chat deployment alone opens no row, and `r4` no longer needs it.
+    assert answered(chat=True) == plain
+    assert answered(reranker=True) == with_reranker
+    assert answered(search_service=True, chat=True) == everywhere - {RetrieverConfig.R4}
+    assert answered(search_service=True, chat=True, reranker=True) == everywhere
     assert RUNNABLE_RETRIEVER_CONFIGS == everywhere == BUILT_ROWS
-    assert RUNNABLE_RETRIEVER_CONFIGS - SEARCH_SERVICE_RETRIEVER_CONFIGS == with_chat
-    assert RUNNABLE_RETRIEVER_CONFIGS - CHAT_DEPLOYMENT_RETRIEVER_CONFIGS == (
-        with_search
+    assert RUNNABLE_RETRIEVER_CONFIGS - SEARCH_SERVICE_RETRIEVER_CONFIGS == (
+        with_reranker
     )
     assert RERANKER_RETRIEVER_CONFIGS == {RetrieverConfig.R4}
+    assert CHAT_DEPLOYMENT_RETRIEVER_CONFIGS == {RetrieverConfig.R6}
     # On the row whose retrieval plans its own queries the agent's loop is off.
     assert SERVICE_PLANNED_RETRIEVER_CONFIGS == {RetrieverConfig.R6}
     # Every caller of a search waits longer than a search with `r4` or
@@ -119,9 +125,10 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
     def rows_in(text: str) -> set[str]:
         return set(re.findall(r"r[1-6]", text))
 
-    # The deploy gives `retrieval` the search service's endpoint and the
-    # chat deployment, and both `workflow` and `verdict` the one list, with
-    # `r4`, `r5` and `r6` in it.
+    # The deploy gives `retrieval` the search service's endpoint, the chat
+    # deployment and the reranker deployment, whose name comes from the
+    # foundation stack, and both `workflow` and `verdict` the one list,
+    # with `r4`, `r5` and `r6` in it.
     app_stack = REPOSITORY_ROOT / "infra/demo/app"
     (deployed,) = re.findall(
         r"^available_retriever_configs\s*=\s*(\[[^\]]*\])",
@@ -132,6 +139,14 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
     given = (app_stack / "locals.tf").read_text() + (app_stack / "main.tf").read_text()
     assert '"RETRIEVAL_SEARCH_SERVICE_ENDPOINT"' in given
     assert '"RETRIEVAL_CHAT_DEPLOYMENT"' in given
+    assert (
+        '"RETRIEVAL_RERANK_DEPLOYMENT", '
+        'value = try(local.foundation.model_deployment_names["rerank"], "")'
+    ) in given
+    foundation = (
+        REPOSITORY_ROOT / "infra/demo/foundation/terraform.tfvars"
+    ).read_text()
+    assert re.search(r"^  rerank = \{$", foundation, re.MULTILINE)
     for variable in (
         "WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS",
         "VERDICT_AVAILABLE_RETRIEVER_CONFIGS",
@@ -141,10 +156,11 @@ def test_story_1_8_the_stand_in_is_in_no_service_image_and_no_service_imports_it
             in given
         )
     # The local start: the same, with the stand-ins as the search service
-    # and as the chat deployment. `retrieval` is the one app given either.
+    # and as the two deployments. `retrieval` is the one app given any.
     local = (REPOSITORY_ROOT / "dapr.yaml").read_text()
     assert "RETRIEVAL_SEARCH_SERVICE_ENDPOINT:" in local
     assert "RETRIEVAL_CHAT_DEPLOYMENT:" in local
+    assert "RETRIEVAL_RERANK_DEPLOYMENT:" in local
     for variable in (
         "WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS",
         "VERDICT_AVAILABLE_RETRIEVER_CONFIGS",

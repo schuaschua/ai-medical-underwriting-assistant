@@ -34,8 +34,20 @@ foundry_sku               = "S0"
 durable_task_sku          = "Consumption"
 
 # Model deployments: Global Standard, exact version, no auto-upgrade, default
-# content filter. Capacity is in thousands of tokens per minute.
+# content filter. Capacity is in thousands of tokens per minute for the two
+# OpenAI models; the unit of the Cohere model's is not verified.
 # Retirement dates on 2026-10-06: gpt-5.4 2027-09-02, text-embedding-3-large 2028-02-09.
+# The reranker of retrieval row r4 (spine AD-11) is Cohere Rerank, the fast
+# model (owner, 2026-10-08): the catalogue listed it for West US 3 on that
+# day with format Cohere, version 1 and Global Standard. Its capacity is a
+# guess at the lowest there is; the unit, its retirement date and whether
+# the deployment needs marketplace terms accepted first are checks of the
+# Azure session (deferred-work.md). Whether a Cohere deployment takes the
+# content filter name, the upgrade option and the deployment type of the
+# OpenAI ones is not verified either: it may name its own (content_filter,
+# version_upgrade_option, sku; see variables.tf). If it cannot be deployed
+# at all, leave the rerank entry out: infra/bootstrap/README.md has the
+# steps.
 model_deployments = {
   chat = {
     name          = "gpt-5.4"
@@ -48,5 +60,12 @@ model_deployments = {
     model_name    = "text-embedding-3-large"
     model_version = "1"
     capacity      = 50
+  }
+  rerank = {
+    name          = "Cohere-rerank-v4.0-fast"
+    model_name    = "Cohere-rerank-v4.0-fast"
+    model_version = "1"
+    capacity      = 1
+    model_format  = "Cohere"
   }
 }

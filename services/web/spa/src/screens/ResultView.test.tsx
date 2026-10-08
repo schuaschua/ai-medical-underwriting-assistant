@@ -196,8 +196,8 @@ function resultServer(changes: Partial<Held> = {}) {
         default_pair: { first: "r4", second: "r5" },
         fallback_pair: { first: "r3", second: "r5" },
       }),
-    // A stack where `r4` is not available (`retrieval` has no chat
-    // deployment for its reranker): every other row can be run. Where `r4`
+    // A stack where `r4` is not available (`retrieval` has no reranker
+    // deployment): every other row can be run. Where `r4`
     // is listed, as locally and in the app stack, the default pair is shown.
     requestRun: (row) =>
       row === "r4"

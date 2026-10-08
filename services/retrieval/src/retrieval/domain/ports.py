@@ -157,10 +157,10 @@ class QueryEmbedder(Protocol):
 
 
 class Reranker(Protocol):
-    """AD-11, row `r4`: the chat deployment, asked how relevant each candidate is to a query."""
+    """AD-11, row `r4`: the reranker deployment (Cohere Rerank), asked to score documents against a query."""
 
-    async def relevance(self, query_and_candidates: str) -> str:
-        """Ask the chat model for the relevance of each candidate; its answer as it gave it.
+    async def relevance(self, query: str, documents: Sequence[str]) -> str:
+        """Ask the reranker to score every document against the query, in one call; its answer as it gave it.
 
         The answer is not looked at here: the caller parses it. Raises
         `ModelUnavailable` or `ModelCallFailed`.

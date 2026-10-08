@@ -75,10 +75,10 @@ apps:
       # confirmed it: a change applies to cases started after it.
       WORKFLOW_GATE_THRESHOLD: "0.90"
       # AD-11: the ladder rows a case may run with here: all six. Row r4 is
-      # among them because retrieval below is given the chat deployment,
-      # its reranker, row r5 because it is given a search service, and row
-      # r6 because it is given both (local stand-ins); verdict names the
-      # same rows.
+      # among them because retrieval below is given the reranker
+      # deployment, row r5 because it is given a search service, and row
+      # r6 because it is given that service and the chat deployment (local
+      # stand-ins); verdict names the same rows.
       WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5", "r6"]'
   - appID: classification
     appDirPath: ./services/classification
@@ -171,17 +171,24 @@ apps:
       RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS: "3"
       RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES: "1"
       RETRIEVAL_SEARCH_DEADLINE_SECONDS: "8"
-      # Row r4: the reranker is the chat deployment, locally the stand-in
-      # that tools/dev.sh starts, under the name the ingestion wrote the
-      # context lines with. The 20 best fused candidates are rated in one
-      # chat call of up to 15 s whose answer may take 4,000 tokens, and a
-      # search with r4 has 20 s in all.
-      # Without the deployment r4 and r6 are refused as not available; then
-      # take both out of the two lists of rows in this file as well.
+      # The chat deployment, under the name the ingestion wrote the
+      # context lines with: the knowledge base of row r6 plans with it.
+      # Without it r6 is refused as not available; then take it out of the
+      # two lists of rows in this file as well.
       RETRIEVAL_CHAT_DEPLOYMENT: "local-stand-in"
+      # Row r4: the reranker is a deployment of its own, in Azure Cohere
+      # Rerank on the Foundry account and locally the stand-in that
+      # tools/dev.sh starts, which answers Cohere's rerank route. The 20
+      # best fused candidates are scored in one call of up to 15 s, and a
+      # search with r4 has 20 s in all. The call goes to Cohere's route on
+      # the model endpoint above (/providers/cohere/v2/rerank) unless
+      # RETRIEVAL_RERANK_URL names a whole address; in Azure its token has
+      # the scope RETRIEVAL_RERANK_TOKEN_SCOPE, and here there is none.
+      # Without the deployment r4 is refused as not available; then take
+      # it out of the two lists of rows in this file as well.
+      RETRIEVAL_RERANK_DEPLOYMENT: "local-stand-in-rerank"
       RETRIEVAL_SEARCH_RERANK_DEPTH: "20"
       RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS: "15"
-      RETRIEVAL_SEARCH_RERANK_MAX_COMPLETION_TOKENS: "4000"
       RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS: "20"
       # Row r5: Azure AI Search is the local stand-in that tools/dev.sh
       # starts (packages/synthdata) and tools/ingest-local.sh loads from
@@ -231,9 +238,10 @@ apps:
       VERDICT_MODEL_ENDPOINT: "http://127.0.0.1:5101"
       VERDICT_CHAT_DEPLOYMENT: "local-stand-in"
       # AD-11: the ladder rows a verdict may be commanded with here: the
-      # rows retrieval answers, r4 among them because it is given the chat
-      # deployment above, r5 because it is given a search service and r6
-      # because it is given both. workflow names the same rows. On r6 the
+      # rows retrieval answers, r4 among them because it is given the
+      # reranker deployment above, r5 because it is given a search service
+      # and r6 because it is given that service and the chat deployment.
+      # workflow names the same rows. On r6 the
       # agent's own search loop is off: one search per fact, then one call
       # of the model to compose the proposal (AD-15).
       VERDICT_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5", "r6"]'

@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     ] = 3500
     # How long one call of a tool to `extraction` or `retrieval` may take.
     # A search has its own deadline at `retrieval`: 8 s, 20 s with row
-    # `r4`, whose reranker is a chat call
+    # `r4`, which waits for a reranker
     # (RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS), and 20 s with row `r6`,
     # whose search service makes model calls of its own
     # (RETRIEVAL_SEARCH_AGENTIC_DEADLINE_SECONDS). This stays above all of
@@ -140,8 +140,9 @@ class Settings(BaseSettings):
     # `retrieval` answers in this environment. `r5` is named only where
     # `retrieval` was given a search service
     # (RETRIEVAL_SEARCH_SERVICE_ENDPOINT), `r4` only where it was given
-    # the chat deployment, its reranker (RETRIEVAL_CHAT_DEPLOYMENT), and
-    # `r6` only where it was given both;
+    # the reranker deployment (RETRIEVAL_RERANK_DEPLOYMENT), and `r6` only
+    # where it was given the search service and the chat deployment
+    # (RETRIEVAL_CHAT_DEPLOYMENT);
     # `workflow` names the same rows
     # (WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS). A command with another row is
     # refused with `retriever_not_available` before anything is done.

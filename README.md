@@ -508,10 +508,11 @@ meet, and answers with one reason per rule. Five modes show what `verdict`'s own
 `--mode unseen_rule` (also cites a rule and a fact the run never saw: not stored), `--mode
 wrong_effect` (debits the rules do not say: not stored, and the case is referred), `--mode
 low_confidence` (confidence 0.6: referred) and `--mode invalid_answer` (a final answer that is not
-the JSON asked for: the run and the case fail). For the reranker of retrieval row `r4` it rates each
-candidate by the share of the query's words it holds; `--mode rerank_incomplete` (one candidate
-left out) and `--mode rerank_slow` (an answer after 30 seconds) show a search with `r4` failing, as
-`--mode invalid` does. With `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
+the JSON asked for: the run and the case fail). For the reranker of retrieval row `r4` it answers
+Cohere's rerank route (`POST /providers/cohere/v2/rerank`) and scores each document by the share of
+the query's words it holds; `--mode rerank_incomplete` (one document left out) and `--mode
+rerank_slow` (an answer after 30 seconds) show a search with `r4` failing, as `--mode invalid`
+does. With `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
 (`FOUNDRY_STANDIN_MODE=mixed ./tools/dev.sh`). It is part of the same dev-only package, and
 `classification`, `extraction` and `verdict` refuse a plain-HTTP model endpoint that is not on this machine.
 Locally the audit trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT`,
@@ -728,10 +729,10 @@ the same extracted facts and completes when each has its `verdict.suggested` eve
 may run with are named in three places, which a test outside `services/` holds equal without any
 container (`packages/synthdata/tests/test_foundry_standin.py`): `retrieval`'s row table
 (`domain/rows.py`, `available_rows`: the built rows, less `r5` and `r6` when the service has no search
-endpoint and less `r4` and `r6` when it has no chat deployment), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
+endpoint, less `r4` when it has no reranker deployment and less `r6` when it has no chat deployment), `verdict`'s setting `VERDICT_AVAILABLE_RETRIEVER_CONFIGS` and `workflow`'s setting
 `WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS`. Both settings default to `r1`, `r2` and `r3`; `dapr.yaml`
 and the deploy (the one list of `infra/demo/app/terraform.tfvars`) add `r4`, `r5` and `r6`, because there
-`retrieval` is given the chat deployment and a search service. A verdict run on `r1` reads its rules from the `fixed`
+`retrieval` is given the reranker deployment, the chat deployment and a search service. A verdict run on `r1` reads its rules from the `fixed`
 set. A reason's effect is then read from that rule's own definition inside the chunk, from its
 marker to the end of its paragraph; a definition the chunk cuts off before its rating bears out no
 debit and no decline, so that reason is dropped and the run refers. That is the baseline's honest
@@ -794,37 +795,52 @@ what reranking alone is worth on pgvector. The order is the one thing that diffe
 - *The candidates* are `r3`'s, found by the same function (`domain/search.py`, `fused_candidates`):
   the same embedding call, the same two searches to the same depth, the same fusion. `r3` itself
   answers as before.
-- *The reranker* is an LLM reranker: one call to the shared chat deployment
-  (`RETRIEVAL_CHAT_DEPLOYMENT`), through the same model gateway and under its cap on concurrent
-  calls. It is shown the query and the 20 best fused candidates (`RETRIEVAL_SEARCH_RERANK_DEPTH`;
-  a search that asks for more items has that many rated), each with its `chunk_id`, impairment and
-  text, as one JSON object in the user turn: data, never instructions. The prompt is
-  `prompts/rerank.md`. The answer is structured (`rerank_relevance`): a relevance from 0 to 1 for
-  every candidate, by `chunk_id`. The items are the candidates by that relevance, largest first,
-  and candidates rated alike in the fused order; `score` is the relevance, comparable within the
-  row only. Cohere Rerank on Foundry, which the epic prefers if it can be deployed in West US 3,
-  could not be checked with Azure down: that check, and the owner's choice after it, are in
-  `deferred-work.md`. There is one reranker and no switch between two.
-- *No answer is no answer* (`domain/rerank.py`). An answer that is not the object asked for, leaves a
-  candidate out, names one it was not given or twice, or holds a relevance that is no number from 0
-  to 1, fails the search with `model_unavailable` (503), with the reason in the log
-  (`rerank answer invalid: reason=...`). The fused order is never answered in its place: that would
-  be `r3`'s answer under `r4`'s name.
-- *Its own budget.* A chat call does not fit the other rows' 8 seconds: the call has 15 seconds
-  (`RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS`) and a search with `r4` 20 in all
-  (`RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS`). Past that the search is `model_unavailable` and its
-  log line says `waited_for=reranker` and how long (`rerank_ms=`). A rerank call that timed out is
-  not sent again: a second one could not be answered inside the deadline. Its answer may take
-  4,000 tokens (`RETRIEVAL_SEARCH_RERANK_MAX_COMPLETION_TOKENS`); an empty answer, which is what a
-  refusal or a cut at that limit gives, is `reason=rerank_empty`. All four settings are set in
-  `dapr.yaml` and are variables of `infra/demo/app`. Rerank calls leave one slot of the gateway's
-  cap on concurrent calls free (`RETRIEVAL_MODEL_MAX_CONCURRENT_CALLS`), so the other rows' query
-  embeddings do not wait behind them. Every caller of a search waits longer: `verdict` 25 seconds
-  for one tool call (`VERDICT_UPSTREAM_TIMEOUT_SECONDS`, raised from 12), `web` 30 and the bake-off
-  runner 30; a test holds that. The search's log line and span carry the number of candidates rated
-  and the reranker's time (`reranked=`, `rerank_ms=`), never the query or a chunk's text.
-- *Availability.* A service that is told of no chat deployment refuses `r4` with
-  `retriever_not_available` (409), and the other rows work as before.
+- *The reranker* is Cohere Rerank on Foundry: the model `Cohere-rerank-v4.0-fast` (the owner's choice
+  of 2026-10-08, when Azure's catalogue listed it for West US 3), a deployment of its own on the one
+  Foundry account (`infra/demo/foundation`: exact version, no auto-upgrade, Global Standard, the
+  default content filter). Its name reaches `retrieval` as `RETRIEVAL_RERANK_DEPLOYMENT`, and it is
+  reached with the service identity, without a key. A search makes one call to it, through the same
+  model gateway and under its cap on concurrent calls: Cohere's rerank API at
+  `/providers/cohere/v2/rerank` below the account's endpoint, or at the whole address
+  `RETRIEVAL_RERANK_URL` names (a query string included), signed in with a token of the scope
+  `RETRIEVAL_RERANK_TOKEN_SCOPE`; both are settings, and variables of `infra/demo/app`, because
+  neither is proven in Azure yet. The request holds the deployment as the model, the query, and the 20 best fused candidates as documents
+  (`RETRIEVAL_SEARCH_RERANK_DEPTH`; a search that asks for more items has that many scored), each
+  the candidate's impairment and its text. Nothing else is sent, so every document is scored. The
+  answer holds a relevance score from 0 to 1 for each document, by its place in the request. The
+  items are the candidates by that score, largest first, and candidates of equal score in the fused
+  order; `score` is the reranker's score, comparable within the row only. There is one reranker and
+  no switch between two: the LLM reranker the row was first built with is gone (its prompt, its
+  chat call and its settings), and `r4` no longer needs the chat deployment.
+- *No answer is no answer* (`domain/rerank.py`). An answer that is not the object expected, leaves a
+  candidate out, names a place it was not given or one twice, or holds a score that is no number
+  from 0 to 1, fails the search with `model_unavailable` (503), with the reason in the log
+  (`rerank answer invalid: reason=...`). A call the service refuses (a 4xx) is
+  `upstream_unavailable` (502). The fused order is never answered in its place: that would be
+  `r3`'s answer under `r4`'s name.
+- *Its own budget.* The call has 15 seconds (`RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS`) and a search
+  with `r4` 20 in all (`RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS`), not the other rows' 8. Past that
+  the search is `model_unavailable` and its log line says `waited_for=reranker` and how long
+  (`rerank_ms=`). A rerank call that timed out is not sent again: a second one could not be answered
+  inside the deadline. The settings are set in `dapr.yaml` and are variables of `infra/demo/app`.
+  Rerank calls leave one slot of the gateway's cap on concurrent calls free
+  (`RETRIEVAL_MODEL_MAX_CONCURRENT_CALLS`), so the other rows' query embeddings do not wait behind
+  them. Every caller of a search waits longer: `verdict` 25 seconds for one tool call
+  (`VERDICT_UPSTREAM_TIMEOUT_SECONDS`), `web` 30 and the bake-off runner 30; a test holds that. The
+  search's log line and span carry the number of candidates scored and the reranker's time
+  (`reranked=`, `rerank_ms=`), never the query or a chunk's text. Cohere bills by search unit, not
+  by token: the gateway's line for the call says `search_units=`, as the answer states them.
+- *Availability.* A service that is told of no reranker deployment refuses `r4` with
+  `retriever_not_available` (409), and the other rows work as before, `r6` included.
+- *If Cohere Rerank cannot be deployed* in the Azure session, the environment runs without `r4`:
+  the `rerank` entry is left out of the foundation stack's `model_deployments` and `r4` out of
+  `available_retriever_configs` of the `app` stack (the steps are in `infra/bootstrap/README.md`,
+  section 2; locally the same is `RETRIEVAL_RERANK_DEPLOYMENT` and the two lists of rows in
+  `dapr.yaml`). `retrieval` then refuses the row, Compare shows its fallback pair, `r3` and `r5`,
+  and the scoreboard shows `r4` as "not measured". There is no other reranker to fall back to.
+- *Not proven in Azure.* The address and the shapes of the call are written from documentation and
+  proven against the local stand-in only; the checks for the Azure session are in
+  `_bmad-output/implementation-artifacts/deferred-work.md`.
 
 ```sh
 curl -s -X POST http://localhost:8004/searches -H 'content-type: application/json' \

@@ -12,6 +12,7 @@ from psycopg import sql
 from retrieval_fakes import (
     CHAT,
     EMBEDDING,
+    RERANK,
     FakeLayout,
     FakeManual,
     MemoryIndex,
@@ -78,6 +79,7 @@ def settings() -> Settings:
         layout_endpoint=LAYOUT_ENDPOINT,
         chat_deployment=CHAT,
         embedding_deployment=EMBEDDING,
+        rerank_deployment=RERANK,
         # A throttled call is sent again at once.
         model_retry_seconds=0.01,
         layout_poll_seconds=0.01,

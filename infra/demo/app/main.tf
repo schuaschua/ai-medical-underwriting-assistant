@@ -318,8 +318,11 @@ resource "azurerm_role_assignment" "retrieval_metrics_publisher" {
 }
 
 # Scoped to the Foundry project, not to the account (azure.md rule 9): the
-# chat deployment writes each chunk's context line and the embedding
-# deployment its vector (spine AD-12, AD-16). There is no key.
+# chat deployment writes each chunk's context line, the embedding
+# deployment its vector (spine AD-12, AD-16) and the reranker deployment,
+# Cohere Rerank, scores the candidates of row r4 (AD-11). There is no key.
+# Not verified: the reranker's route is below the account, not the
+# project, and this scope may not cover it (deferred-work.md).
 resource "azurerm_role_assignment" "retrieval_foundry_user" {
   scope                = local.foundation.foundry_project_id
   role_definition_name = "Foundry User"

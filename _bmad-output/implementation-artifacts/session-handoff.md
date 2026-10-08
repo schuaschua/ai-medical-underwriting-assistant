@@ -13,7 +13,7 @@ Every story of the four epics is built. Branch `architecture/spine-redaction-dia
 | 3.4 bake-off runner | done | `672d314` |
 | 3.5 retrieval scoreboard | done | `4991d65` |
 | 3.6 Compare two rows on one case | done | `d28b713` |
-| 3.7 row `r4` with an LLM reranker | done | `a61ea1c` |
+| 3.7 row `r4` with a reranker (first an LLM reranker, `a61ea1c`; changed to Cohere Rerank on Foundry, not committed yet) | done | `a61ea1c` |
 | 3.8 row `r6` with agentic retrieval | done | `a4de0a7` |
 | 4.2 Document Intelligence classifier and its training job | done | `dbce613` |
 | 4.3 runner scores both classifiers | done | `d03bd7a` |
@@ -43,7 +43,7 @@ Each spec of this session says it was not reviewed before implementation. The ch
 - **4.2, how training pages are redacted.** The spine says the training job calls no service and only `intake` may call Azure AI Language, so nothing in it says who redacts the training pages. Built: a dev tool (`python -m bakeoff.training_pages`) uploads each page through `web` as a hidden case, fetches the redacted file, and an operator uploads the folder to `classifier-training`. The job refuses any blob whose content is not the one the prepared list names. The owner was asked on 2026-10-08 and had not answered; the alternatives are a job that calls `intake`, or `classification` calling the Language service itself.
 - **3.8, a verdict run on `r6`.** The service lists the facts, makes one search per fact itself, and asks the model once, with no tools, to compose the proposal. A rule counts as read when a search returned its chunk, so the "rule not read" check cannot fail on that row.
 - **3.8, REST and not the SDK.** `azure-search-documents` 12.1.0b2 installs but sends through its own transport, refuses the plain-HTTP stand-in and brings its own retries, so the knowledge base calls are REST on `2026-08-01-preview`. The package is not a dependency.
-- **3.7, the reranker.** An LLM reranker on the chat deployment. Whether Cohere Rerank can be deployed in West US 3 could not be checked.
+- **3.7, the reranker.** Cohere Rerank on Foundry (`Cohere-rerank-v4.0-fast`, the owner's choice of 2026-10-08, after the catalogue listed it for West US 3), in place of the LLM reranker the row was first built with (`spec-3-7b-row-r4-on-cohere-rerank.md`). Built against the local stand-in; the deployment and the call are unproven in Azure.
 - **3.7, `verdict`'s wait for one upstream call** went from 12 s to 25 s so that it stays above `r4`'s and `r6`'s 20 s deadline. It is one setting and applies to every row and to `extraction` calls.
 - **3.6, the Compare pair** is a setting of `web` (`r4`, `r5`; fallback `r3`, `r5`); the SPA finds out which rows can run by asking.
 - **4.2, the role on the training container.** `classification` holds write access as `azure.md` lists, though the job only reads.

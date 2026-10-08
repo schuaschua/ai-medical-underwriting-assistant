@@ -239,16 +239,18 @@ module "foundry_account" {
 
   cognitive_deployments = {
     for key, deployment in var.model_deployments : key => {
-      name                   = deployment.name
-      rai_policy_name        = var.model_content_filter
-      version_upgrade_option = "NoAutoUpgrade"
+      name = deployment.name
+      # The stack's content filter unless the deployment names its own; an
+      # empty text sends no name, and the service applies its default.
+      rai_policy_name        = deployment.content_filter == null ? var.model_content_filter : (deployment.content_filter == "" ? null : deployment.content_filter)
+      version_upgrade_option = deployment.version_upgrade_option
       model = {
-        format  = "OpenAI"
+        format  = deployment.model_format
         name    = deployment.model_name
         version = deployment.model_version
       }
       scale = {
-        type     = var.model_deployment_sku
+        type     = coalesce(deployment.sku, var.model_deployment_sku)
         capacity = deployment.capacity
       }
     }

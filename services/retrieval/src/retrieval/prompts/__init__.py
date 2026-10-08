@@ -6,12 +6,6 @@ where a rule sits in the manual. The line is stored with the chunk and is
 embedded in front of the chunk's text (AD-12), so that a rule's vector also
 carries its place: the impairment and the part of the section.
 
-`rerank.md` is the system message of the one call a search with row `r4`
-makes to the same chat deployment: it asks how relevant each of the fused
-candidates is to the query, as a number from 0 to 1 (AD-11). Its evaluation
-set is the same scoreboard: row `r4`'s recall and accuracy beside row
-`r3`'s, which the bake-off runner measures on the same cases.
-
 `azure.md` rule 27 asks for a scenario evaluation set beside each prompt, to
 be run before the prompt or the model changes. For this prompt that set is
 the retrieval scoreboard of Epic 3 (story 3.5): recall of the expected rule
@@ -26,7 +20,6 @@ from functools import lru_cache
 from importlib import resources
 
 CHUNK_CONTEXT = "chunk_context.md"
-RERANK = "rerank.md"
 
 
 @lru_cache(maxsize=8)

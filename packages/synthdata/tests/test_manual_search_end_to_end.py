@@ -9,8 +9,8 @@ The stand-in's vectors only say which words two texts share. What the real
 `text-embedding-3-large` vectors do to the same queries is a check of the
 final Azure test session. So is row `r5` on the real Azure AI Search: here
 its index is this package's stand-in, loaded by the job from the same chunks.
-And so is row `r4`'s reranker: here the model stand-in rates a candidate by
-the words it shares with the query.
+And so is row `r4`'s reranker, Cohere Rerank: here the model stand-in scores
+a document by the words it shares with the query.
 
 Run `docker compose up --detach --wait` first.
 """
@@ -371,6 +371,7 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
     places_r4: dict[str, int | None] = {}
     places_r6: dict[str, int | None] = {}
     embedded_before = retrieval.model.embedding_calls
+    chat_calls = retrieval.model.calls
     with retrieval.service() as client:
         for rule_id in asked:
             query = named_query(rules[rule_id])
@@ -444,11 +445,15 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
     # One embedding call per search of the four rows that embed their query
     # here (`r6` embeds nothing: the search service does), one hybrid query
     # with the semantic ranker and exact vector search per `r5` search, and
-    # one chat call with 20 candidates per `r4` search.
+    # one rerank call with 20 documents per `r4` search, to the reranker
+    # deployment and not the chat deployment.
     assert embedded - embedded_before == 4 * len(asked)
     assert retrieval.model.rerank_calls == len(asked)
-    shown = json.loads(retrieval.model.requests[-1]["messages"][1]["content"])
-    assert len(shown["candidates"]) == 20
+    sent_to_rerank = retrieval.model.rerank_requests[-1]
+    assert sent_to_rerank["model"] == retrieval.settings.rerank_deployment
+    assert sent_to_rerank["query"] == named_query(rules[asked[-1]])
+    assert len(sent_to_rerank["documents"]) == 20
+    assert retrieval.model.calls == chat_calls
     assert len(stand_in.queries) == len(asked)
     for sent in stand_in.queries:
         assert sent["queryType"] == "semantic" and sent["top"] == 5
@@ -488,7 +493,7 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
             ErrorCode.UPSTREAM_UNAVAILABLE
         )
 
-    # Row `r4`'s reranker leaves a candidate out, answers prose, or answers
+    # Row `r4`'s reranker leaves a document out, answers prose, or answers
     # later than a search with the row may take: no answer, and never the
     # fused order in its place.
     stand_in.mode = SearchMode.OK
@@ -525,17 +530,25 @@ def test_story_3_3_the_search_index_holds_what_pgvector_holds_and_r5_answers_the
             ErrorCode.MODEL_UNAVAILABLE
         )
 
-    # A service that is told of no search service and of no chat deployment:
-    # `r5`, `r4` and `r6` are refused as not available and the other rows
-    # answer.
+    # A service that is told of no reranker deployment: `r4` is refused as
+    # not available, and the other rows answer, `r6` included, which needs
+    # the chat deployment and not the reranker.
+    with retrieval.service(rerank_deployment=None) as client:
+        no_reranker = client.post(
+            "/searches", json={"query": "q", "retriever_config": "r4"}
+        )
+        for row in ("r3", "r5", "r6"):
+            assert len(search(client, "q", retriever_config=row).items) == 5
+    # One that is told of no search service either, and of no chat
+    # deployment: `r5`, `r4` and `r6` are refused and the other rows answer.
     retrieval.search = None
-    with retrieval.service(chat_deployment=None) as client:
+    with retrieval.service(chat_deployment=None, rerank_deployment=None) as client:
         refused = [
             client.post("/searches", json={"query": "q", "retriever_config": row})
             for row in ("r4", "r5", "r6")
         ]
         assert len(search(client, "q").items) == 5
-    for response in refused:
+    for response in (no_reranker, *refused):
         assert response.status_code == 409
         assert ErrorBody.model_validate(response.json()).error.code is (
             ErrorCode.RETRIEVER_NOT_AVAILABLE

@@ -51,8 +51,9 @@ pytestmark = pytest.mark.integration
 UNDERWRITER = {"X-Demo-Role": "underwriter"}
 # A case of medical pages only, and one with a blank page.
 CASES = ["case-001", "case-003"]
-# Story 3.7: `retrieval` is given the chat deployment here (the stand-in),
-# so it answers row `r4`, and `workflow` and `verdict` are told of the row.
+# Story 3.7: `retrieval` is given the reranker deployment here (the
+# stand-in), so it answers row `r4`, and `workflow` and `verdict` are told
+# of the row.
 # Story 3.8: it is given a search service as well (the stand-in, loaded by
 # the job's last steps), so it answers `r5` and `r6`: all six rows.
 ROWS = ["r1", "r2", "r3", "r4", "r5", "r6"]
@@ -145,7 +146,7 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
     )
     assert (rows["r6"].store, rows["r6"].failed_runs) == ("Azure AI Search", 0)
     # The scoreboard names the reranker used.
-    assert rows["r4"].method == "Hybrid, then an LLM reranker on the chat deployment"
+    assert rows["r4"].method == "Hybrid, then Cohere Rerank v4.0 fast on Foundry"
     assert (rows["r4"].store, rows["r4"].chunk_set.value) == ("pgvector", "smart")
     # Its verdict runs, one per case, were made and none of them failed.
     assert (rows["r4"].cases, rows["r4"].failed_runs) == (2, 0)

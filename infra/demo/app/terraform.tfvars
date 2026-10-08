@@ -55,9 +55,10 @@ redaction_categories = [
 gate_threshold = 0.90
 # The retrieval ladder (spine AD-11), all six rows: the two baselines, the
 # hybrid row, r4 with a reranker, which retrieval answers because it is
-# given the chat deployment, r5 on Azure AI Search, which it answers because
-# it is given the search service's endpoint, and r6, agentic retrieval on
-# that service, which it answers because it is given both.
+# given the reranker deployment, r5 on Azure AI Search, which it answers
+# because it is given the search service's endpoint, and r6, agentic
+# retrieval on that service, which it answers because it is given that
+# endpoint and the chat deployment.
 available_retriever_configs = ["r1", "r2", "r3", "r4", "r5", "r6"]
 
 # Classification (spine AD-13): the LLM classifier's confidence is the share
@@ -149,15 +150,19 @@ search_candidate_depth = 50
 search_embedding_timeout_seconds = 3
 search_embedding_max_retries     = 1
 search_deadline_seconds          = 8
-# Row r4 (spine AD-11): an LLM reranker on the chat deployment. The 20 best
-# fused candidates are rated in one chat call of up to 15 s, and a search
-# with r4 has 20 s in all, which every caller of a search outlasts
-# (verdict 25 s, web 30 s, the bake-off runner 30 s). Its answer may take
-# 4,000 tokens: an entry per candidate, and room for a model that reasons.
-search_rerank_depth                 = 20
-search_rerank_timeout_seconds       = 15
-search_rerank_deadline_seconds      = 20
-search_rerank_max_completion_tokens = 4000
+# Row r4 (spine AD-11): Cohere Rerank on the Foundry account, the
+# deployment the foundation stack names "rerank". The 20 best fused
+# candidates are scored in one call of up to 15 s, and a search with r4 has
+# 20 s in all, which every caller of a search outlasts (verdict 25 s, web
+# 30 s, the bake-off runner 30 s). The address of the call and the scope of
+# its token are written from documentation and checked in the Azure
+# session: no address here is Cohere's route on the Foundry account's
+# endpoint (/providers/cohere/v2/rerank); set rerank_url to the whole
+# address, query string included, if the service wants another.
+rerank_token_scope             = "https://cognitiveservices.azure.com/.default"
+search_rerank_depth            = 20
+search_rerank_timeout_seconds  = 15
+search_rerank_deadline_seconds = 20
 # The job's own deadline, and the platform's limit on one run of it, which
 # must be the longer by eight minutes or more: five for the search index
 # load that follows (its own deadline), one for the knowledge base of row

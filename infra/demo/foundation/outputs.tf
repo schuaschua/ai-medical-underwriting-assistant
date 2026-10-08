@@ -134,7 +134,7 @@ output "foundry_project_endpoints" {
 }
 
 output "model_deployment_names" {
-  description = "Model deployment names by purpose (chat, embedding)."
+  description = "Model deployment names by purpose (chat, embedding, rerank)."
   value       = { for key, deployment in var.model_deployments : key => deployment.name }
 }
 

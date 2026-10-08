@@ -48,6 +48,7 @@ from retrieval.domain.ports import (
 
 CHAT = "chat-test"
 EMBEDDING = "embedding-test"
+RERANK = "rerank-test"
 PDF = b"%PDF-1.7 a made-up manual"
 HEADER = "Made-Up Manual For Tests"
 FOOTER = "TEST DOCUMENT. Nothing on this page is real."
@@ -232,23 +233,21 @@ class StubModel:
     vectors_per_call: int | None = None
     shown: list[str] = field(default_factory=list)
     embedded: list[list[str]] = field(default_factory=list)
-    # Row `r4` (story 3.7): what a rerank call is answered with, one answer
-    # for all or a function of the message it was sent; an error raised in
-    # its place; and the messages it was sent.
-    rerank_answer: Any = ""
+    # Row `r4` (story 3.7): what a rerank call is answered with; an error
+    # raised in its place; and the documents each call was sent.
+    rerank_answer: str = ""
     rerank_error: Exception | None = None
-    reranked: list[str] = field(default_factory=list)
+    reranked: list[list[str]] = field(default_factory=list)
 
     @property
     def calls(self) -> int:
         return len(self.shown) + len(self.embedded) + len(self.reranked)
 
-    async def relevance(self, query_and_candidates: str) -> str:
-        self.reranked.append(query_and_candidates)
+    async def relevance(self, query: str, documents: Sequence[str]) -> str:
+        self.reranked.append(list(documents))
         if self.rerank_error is not None:
             raise self.rerank_error
-        answer = self.rerank_answer
-        return str(answer(query_and_candidates) if callable(answer) else answer)
+        return self.rerank_answer
 
     async def context_line(self, rule_in_its_place: str) -> str:
         self.shown.append(rule_in_its_place)
@@ -572,17 +571,19 @@ def completion(content: Any = None) -> dict[str, Any]:
     }
 
 
-def rerank_answer(relevance: Mapping[str, Any]) -> str:
-    """The reranker's answer, as the prompt asks for it: one entry per candidate.
+def rerank_answer(scores: Mapping[int, Any]) -> str:
+    """The body of a rerank answer, as Cohere's API gives it: one result per document, by its place.
 
-    A test may give a relevance that is no number, as a model might.
+    A test may give a score that is no number, or a place no document had.
     """
     return json.dumps(
         {
-            "ranking": [
-                {"chunk_id": chunk_id, "relevance": value}
-                for chunk_id, value in relevance.items()
-            ]
+            "id": "rerank-test",
+            "results": [
+                {"index": index, "relevance_score": value}
+                for index, value in scores.items()
+            ],
+            "meta": {"billed_units": {"search_units": 1}},
         }
     )
 

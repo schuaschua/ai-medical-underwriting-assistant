@@ -67,6 +67,18 @@ Expected, not yet observed: the first plan, and the first plan after a teardown,
 
 The budget starts on the first day of the month in which it is created; nothing needs editing when the stack is re-created in a later month.
 
+Since 2026-10-08 the stack creates a third model deployment on the Foundry account, beside the chat and the embedding one: `Cohere-rerank-v4.0-fast` (format `Cohere`, version `1`, Global Standard), the reranker of retrieval row `r4`. It has never been applied. A read-only catalogue query on that day (`az cognitiveservices model list --location westus3`) listed the model; whether the deployment is created from Terraform as written shows at the first apply. If the apply fails on that deployment alone, note the error in the log below and try, in this order:
+
+1. **Marketplace terms.** If the error asks for them, accept the Cohere model's terms in the subscription (an out-of-band step for the log), then plan and apply again.
+2. **Its own values.** If the error is about the content filter, the upgrade option, the deployment type or the capacity, give the `rerank` entry of `infra/demo/foundation/terraform.tfvars` its own (`content_filter`, where an empty text sends none; `version_upgrade_option`; `sku`; `capacity`), then plan and apply again.
+3. **Without the reranker.** If the model cannot be deployed in this session, the environment still comes up without row `r4`:
+   - take the whole `rerank` entry out of `model_deployments` in `infra/demo/foundation/terraform.tfvars` (the stack asks for the chat and the embedding deployment only) and apply the stack;
+   - take `"r4"` out of `available_retriever_configs` in `infra/demo/app/terraform.tfvars` and apply that stack. It gives `retrieval` an empty `RETRIEVAL_RERANK_DEPLOYMENT`, which the service reads as none: it logs `row r4 is off` at its start and refuses the row with 409 `retriever_not_available`, and `workflow` and `verdict` no longer list it. The other five rows are unaffected;
+   - what then shows: Compare falls back to its second pair, `r3` and `r5` (`WEB_COMPARE_FALLBACK_PAIR`), without any change to `web`; the bake-off runner scores the five rows that are listed, and the retrieval scoreboard shows `r4` as "not measured", with its method still named;
+   - record in `_bmad-output/implementation-artifacts/deferred-work.md` that `r4` was not measured and why. Putting both entries back and applying both stacks brings the row back.
+
+The checks of the call itself are in `deferred-work.md` (story 3.7, changed). If only its address or its sign-in is wrong (every `r4` search answers 502 and `retrieval` logs `rerank refused: reason=model_status_404`, `_401` or `_403`), set `rerank_url` (the whole address, a query string included) or `rerank_token_scope` in `infra/demo/app/terraform.tfvars` and apply the `app` stack: no code changes.
+
 Check the result:
 
 ```bash

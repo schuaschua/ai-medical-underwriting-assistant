@@ -224,25 +224,44 @@ variable "durable_task_sku" {
 }
 
 variable "model_deployment_sku" {
-  description = "Deployment type of every model deployment."
+  description = "Deployment type of every model deployment that names none of its own."
   type        = string
   default     = "GlobalStandard"
 }
 
 variable "model_content_filter" {
-  description = "Content filter (RAI policy) on every model deployment. Keep the Microsoft default."
+  description = "Content filter (RAI policy) on every model deployment that names none of its own. Keep the Microsoft default."
   type        = string
   default     = "Microsoft.DefaultV2"
 }
 
 variable "model_deployments" {
-  description = "Model deployments on the Foundry account: deployment name, model, exact version, and capacity in thousands of tokens per minute."
+  description = "Model deployments on the Foundry account, by purpose (chat, embedding, and rerank where the reranker of row r4 can be deployed): deployment name, model, exact version, capacity in the unit of the model's deployment type (thousands of tokens per minute for the OpenAI models), and the model's format in the catalogue, OpenAI unless said otherwise. A deployment may name its own content filter (an empty text: none is sent, and the service applies its default; never one weaker than the default), version upgrade option and deployment type where the stack's do not fit its model; unset, it gets model_content_filter, NoAutoUpgrade and model_deployment_sku."
   type = map(object({
-    name          = string
-    model_name    = string
-    model_version = string
-    capacity      = number
+    name                   = string
+    model_name             = string
+    model_version          = string
+    capacity               = number
+    model_format           = optional(string, "OpenAI")
+    content_filter         = optional(string)
+    version_upgrade_option = optional(string, "NoAutoUpgrade")
+    sku                    = optional(string)
   }))
+
+  validation {
+    condition     = alltrue([for key in ["chat", "embedding"] : contains(keys(var.model_deployments), key)])
+    error_message = "model_deployments must hold the chat and embedding deployments: the app stack reads each by that key. The rerank deployment may be left out; row r4 is then off."
+  }
+
+  validation {
+    condition     = alltrue([for deployment in values(var.model_deployments) : contains(["OpenAI", "Cohere"], deployment.model_format)])
+    error_message = "model_format must be OpenAI or Cohere, as the model catalogue writes them."
+  }
+
+  validation {
+    condition     = alltrue([for deployment in values(var.model_deployments) : contains(["NoAutoUpgrade", "OnceNewDefaultVersionAvailable", "OnceCurrentVersionExpired"], deployment.version_upgrade_option)])
+    error_message = "version_upgrade_option must be NoAutoUpgrade, OnceNewDefaultVersionAvailable or OnceCurrentVersionExpired."
+  }
 }
 
 variable "originals_retention_days" {
