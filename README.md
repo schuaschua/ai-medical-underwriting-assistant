@@ -41,7 +41,8 @@ holds the ruff, mypy and pytest settings for every member.
   manual; its prompt is in `services/retrieval/src/retrieval/prompts/`. It searches those chunks
   (`POST /searches`) and reads a rule by its id (`GET /rules/<rule_id>`), and calls no other service. `services/verdict/` suggests a verdict for a case,
   with cited reasons: its agent reads the case's facts from `extraction` and searches and reads the
-  manual's rules at `retrieval`, both through its Dapr sidecar, and every tool call it makes is kept
+  manual's rules at `retrieval`, both through its Dapr sidecar, and every tool call it makes, a
+  call to a tool that does not exist included, is kept
   in an append-only step log (database schema `verdict`); its prompt is in
   `services/verdict/src/verdict/prompts/`. No service imports another service's code.
 - `evals/` is the bake-off runner, a dev tool that is in no image: one command that drives the running
@@ -412,7 +413,12 @@ made with and has the button "Show the agent's steps"; on the result view the ru
 run in order, with its step number, tool, arguments, the fact it was about, the rules returned or
 read, its outcome, how long it took and when. A call that was refused or failed is listed like any
 other, with the reason in plain words ("Refused. A rule was asked for that had not been found
-first."). Arguments, queries and rule ids come from a model and are rendered as text, never as
+first."). The agent has three tools and no fourth: when its model asks for a tool that does not
+exist, that attempt is a step of the log too (decided by the owner on 2026-10-08). It is refused,
+it counts against the run's step limit, and the row reads "Asked for a tool that does not exist:"
+followed by the name the model asked for (at most 64 characters, stored apart from the tool and
+shown as text); the arguments of such a call are not kept. Narrowing by tool lists the calls of
+that tool only, so such a step is listed when no tool is chosen. Arguments, queries and rule ids come from a model and are rendered as text, never as
 HTML; a value of more than 80 characters is cut and opens whole. The steps can be narrowed by tool
 and by rule id ("Show matching steps"); the narrowing is done by `verdict`, not in the browser, and
 a rule id of another form is refused before any call. When a run has more steps than one answer
@@ -518,6 +524,24 @@ does. With `./tools/dev.sh` the mode is the variable `FOUNDRY_STANDIN_MODE`
 Locally the audit trail names the model as `local-stand-in` (`CLASSIFICATION_CHAT_DEPLOYMENT`,
 `EXTRACTION_CHAT_DEPLOYMENT` and `VERDICT_CHAT_DEPLOYMENT` in `dapr.yaml`); in Azure those settings
 are the name of the real deployment.
+
+**The synthetic manual and its review file.** The underwriting manual
+(`data/manual/underwriting-manual.pdf`, 212 pages) and its rule table are written by the generator in
+`packages/synthdata` (`uv run python -m synthdata`; see `data/README.md`). Its ratings, the debits
+and the declines, are invented. Its clinical thresholds follow public guidelines, which it cites,
+and both were written without the sources at hand. So everything in it that should be checked
+against a source is listed in `packages/synthdata/src/synthdata/manual-review.yaml`: 38 citations,
+80 band edges said to follow a guideline, 18 unit conversions and 9 reading rules, each with a
+review record (`unreviewed`, `verified` or `corrected`, the source it was checked against, by whom
+and when). All 145 are `unreviewed` today; `uv run python -m synthdata review` prints what is left,
+and `data/README.md` says how to record a check. The generator reads the file. A corrected citation
+or conversion sentence is applied to the manual and the rule table. A corrected band edge or reading
+rule would change the answer key, so the generator refuses it, naming the rules and the cases, until
+the manual's definition and the cases are changed. A test fails when the file and the manual list
+different items; an unreviewed item fails nothing. The footer of every page says that the document
+is synthetic, that its ratings are invented, that its thresholds follow public guidelines, and how
+many of the items have been checked ("0 of 145 items checked against their sources"), so the
+manual's file changes with every recorded check and is then ingested again.
 
 **The manual's rules as chunks (story 2.2).** `retrieval` holds the underwriting manual
 (`data/manual/underwriting-manual.pdf`) as one `smart` chunk per rule, in table `retrieval.chunk`. A

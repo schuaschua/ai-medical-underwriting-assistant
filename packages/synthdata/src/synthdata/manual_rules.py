@@ -1,12 +1,14 @@
 """The rule table as data: the one definition the manual PDF and the rule table file come from.
 
-To add or change a rule, edit the impairment modules, rerun `uv run python -m synthdata`
-and commit the code with the regenerated files (see `data/README.md`).
+To add or change a rule, edit the impairment modules, run
+`uv run python -m synthdata review --sync` and `uv run python -m synthdata`, and commit
+the code with the review file and the regenerated files (see `data/README.md`).
 """
 
 from synthdata.manual_impairments_1 import IMPAIRMENTS_1
 from synthdata.manual_impairments_2 import IMPAIRMENTS_2
 from synthdata.manual_model import GlossaryTerm, ManualSpec
+from synthdata.manual_review import load_review, with_corrections
 
 _INTRODUCTION: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -171,9 +173,15 @@ def _glossary() -> tuple[GlossaryTerm, ...]:
     )
 
 
-MANUAL = ManualSpec(
+# The manual as this code writes it: what the review file lists, item by item.
+WRITTEN = ManualSpec(
     title="Synthetic Underwriting Manual",
     introduction=_INTRODUCTION,
     impairments=(*IMPAIRMENTS_1, *IMPAIRMENTS_2),
     glossary=_glossary(),
 )
+# What reviewers recorded against the sources (`manual-review.yaml`).
+REVIEW = load_review()
+# The manual that is printed: with every recorded correction that changes text only.
+# A correction of a band or of a reading rule stops the generator (`generate.build_manual`).
+MANUAL = with_corrections(WRITTEN, REVIEW)

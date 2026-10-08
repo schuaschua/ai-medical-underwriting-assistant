@@ -4,7 +4,10 @@ Everything in this folder is invented. No person, address, telephone number, ema
 identity number, policy number, organisation or medical reading here is real, and none of the text
 was copied from a real record, form or insurer's document. Real personal or health data must never
 be added. The one thing taken from the real world is in the underwriting manual: its clinical
-thresholds follow public guidelines, and the public bodies that issued them are named.
+thresholds follow public guidelines, and the public bodies that issued them are named. Those
+thresholds and citations were written without the sources at hand; what has been checked against
+them since, and what has not, is recorded in the manual's review file (see "Checking the manual
+against its sources").
 
 | Folder | Holds |
 |---|---|
@@ -247,7 +250,122 @@ first page and beside every rating table.
   cross-reference such as `see rule UW-HT-002`, which does not match the definition pattern.
 - A cross-reference states the circumstance in the terms of the rule it points to (that rule's
   impairment and band), so following one always lands on a rule that applies.
-- Every page has a text layer, a page number and the same synthetic-document footer as the cases.
+- Every page has a text layer, a page number and a footer of two lines, which is not the cases'
+  footer: `SYNTHETIC TEST DOCUMENT. Its ratings (debits and declines) are invented.` and
+  `Its clinical thresholds follow public guidelines: 0 of 145 items checked against their sources.`
+  The two numbers are counted from the review file each time the manual is generated (an item is
+  checked when it is `verified` or `corrected`), so the footer stays true as the review goes on.
+
+### Checking the manual against its sources
+
+`packages/synthdata/src/synthdata/manual-review.yaml` lists everything in the manual that claims
+to follow the real world, or that an expert was asked to judge: 145 items, all `unreviewed`
+today. It stands beside the manual's definition and not in this folder, because it is something
+the generator reads and a person edits by hand, while everything under `data/` is written by the
+generator and never edited.
+
+| Kind | Items | What one is |
+|---|---|---|
+| `citation` | 38 | A guideline of a public body as the manual cites it: body, abbreviation, guideline, year and what it is cited for. |
+| `threshold` | 80 | An edge of a band that the manual says the cited guideline draws. An edge two bands share is one item. Edges the manual drew itself are not listed. |
+| `conversion` | 18 | A sentence that converts a figure from another unit, one per measure. |
+| `reading_rule` | 9 | Which reading counts when a file holds several of one measure. Invented with the manual; a medical expert is to confirm them. |
+
+Each item has an `id` that never changes, `what` it is in one line, `where` the manual prints it
+(sections, impairments, rule ids), its `value` as the manual's definition states it, for a
+threshold the guideline `cited` for it, and a review record. The list is worked out from the same
+definition the manual is printed from (`review_items` in `manual_review.py`): a test and the
+generator both fail when the manual holds an item the file does not list, when the file lists
+one the manual no longer has, or when the file states one differently. An unreviewed item fails
+nothing; it is counted.
+
+Not listed, because the manual states them only in running text: numbers in a section's prose
+(how old a reading may be, how a figure such as pack-years is worked out), the range of readings
+a measure can take, and what a status such as "current smoker" means beyond the citation given
+for it. Read the section while checking its items.
+
+To see what is left:
+
+```sh
+uv run python -m synthdata review
+```
+
+It prints the counts by kind and status, every unreviewed item, and any correction the
+generator refuses.
+
+**To record that an item is right.** Find the item by its `id` in `manual-review.yaml` and
+change its last fields; leave `id`, `kind`, `what`, `where`, `value` and `cited` alone:
+
+```yaml
+  status: verified
+  corrected_value: null
+  source: The guideline as published, 2024 edition, table 3 on page 12
+  reviewed_by: Your Name
+  reviewed_on: 2026-10-20
+  note: null
+```
+
+(The examples here show the shape only; none is a real finding.) `source` is what you checked
+it against (the document, its year, the place in it), and it is
+required, with `reviewed_by` and `reviewed_on`, for any status but `unreviewed`.
+
+**To record a correction.** Set `status: corrected` and give `corrected_value` in the same shape
+as `value`, with a number in quotes:
+
+```yaml
+  # a citation: all five parts, the changed ones changed
+  corrected_value:
+    body: The body as it names itself
+    abbreviation: ABC
+    guideline: The guideline's title as published
+    year: 2022
+    locator: the table or recommendation the threshold is found in
+  # a threshold
+  corrected_value: "6.5"
+  # a conversion: the whole sentence
+  corrected_value: "A result in the other unit is multiplied by 1.5 to give the manual's unit."
+  # a reading rule: most_recent, average, highest or lowest, and the months or null
+  corrected_value:
+    choose: most_recent
+    within_months: 6
+```
+
+Then regenerate (`uv run python -m synthdata`, see "Regenerating"), run
+`uv run pytest packages/synthdata`, and commit the review file with whatever the generator
+changed. The footer's count changes with every item checked, so the manual's file changes too
+and has to be ingested again.
+
+**What a correction changes.**
+
+- A `citation` is applied. It changes text only: the citation in part 1 and in each rule's
+  definition of the sections named, the list of public sources, and `source` of those rules in
+  the rule table. Pages may move, and with them the page numbers in the rule table. No band,
+  rating or expected verdict changes.
+- A `conversion` is applied when it changes text only. For HbA1c in mmol/mol and LDL cholesterol
+  in mmol/L the cases' readings are converted with the sentence's numbers (`other_units`); a
+  corrected sentence that no longer holds those numbers is refused, as below.
+- A `threshold` is **not applied**. A corrected edge changes a rule's band, so the rule table,
+  and may change the expected rules and verdict of a case; the section's hand-written wording
+  and the cited guideline's description often state the same number. So the generator stops
+  and writes nothing, and its message names the item, the rules, the section and the cases that
+  state a reading the edge decides on. A developer then changes the band in
+  `manual_impairments_1.py` or `manual_impairments_2.py` with the section's wording and the
+  cases, runs `uv run python -m synthdata review --sync` and regenerates. The sync sees that the
+  manual now states the corrected value and records the item as `verified` at that value,
+  keeping the reviewer's source, name and date.
+- A `reading_rule` is **not applied** either, for the same reason: it decides which reading of a
+  case is rated, and part 3 of the section says it again in its own words. It is refused in the
+  same way; the cases named are those that hold several readings of the measure.
+
+So the manual and the answer key cannot disagree silently: a correction is either carried into
+both, or generation fails until someone has carried it through by hand.
+
+`uv run python -m synthdata review --sync` rewrites the file as the list of what the manual
+holds now: it adds new items as `unreviewed`, removes items the manual lost, and keeps every
+record whose item the manual still states with the same value. A record of an item whose value
+changed in the definition starts again as `unreviewed`, unless the new value is the one its
+correction asked for. Run it after any change to a rule, a source, a conversion or a reading
+rule.
 
 ## The rule table
 
@@ -304,14 +422,17 @@ so a reading meets at most one rule per measure.
    the new band leaves readings uncovered, declare them with `gap(...)`; if an edge is not from the
    cited source, list it in `own_edges`. A new impairment also needs its applicability, overview,
    key questions, evidence notes, pitfalls, what does not change the rating and common
-   combinations, in original wording.
-2. Run the generator. Nothing is written unless everything builds. It fails, naming the rule
-   wherever one is at fault, on a malformed or repeated id, a rule with both or neither of debit
+   combinations, in original wording. A new source is a constant in `manual_sources.py`; the
+   constant's name is the citation's id in the review file.
+2. Run `uv run python -m synthdata review --sync`, so that the review file lists the new or
+   changed items (see "Checking the manual against its sources"). Then run the generator. Nothing is written unless everything builds. It fails, naming the rule
+   wherever one is at fault, on a review file that does not list what the manual holds or holds a
+   correction it does not apply, on a malformed or repeated id, a rule with both or neither of debit
    and decline, overlapping bands, an undeclared gap, a reference to a rule that does not exist or
    listed twice, a manual whose extracted text does not define every rule exactly once with its
    section and references, a page with no text layer, text that does not fit its place, or the
    wrong number of pages.
-3. Commit the code with the regenerated manual and rule table.
+3. Commit the code with the review file, the regenerated manual and the rule table.
 
 ## Regenerating
 
@@ -325,7 +446,9 @@ The generator is the `synthdata` package (`packages/synthdata/`), a dev tool tha
 imports. Case content is data in `cases.py` (the three first cases, whose PDFs never change:
 other tests and the demo path use them) and `cases_more.py`; the training people are in
 `training.py`; the page layouts are in `render.py`. The manual's content is data in
-`manual_rules.py` and the two `manual_impairments` modules; its layout is in `manual.py`.
+`manual_rules.py` and the two `manual_impairments` modules; its layout is in `manual.py`; what
+reviewers recorded against its sources is in `manual-review.yaml`, which the generator reads
+(`manual_review.py`).
 Generation is deterministic and makes no network call: the same code gives text-identical PDFs,
 and byte-identical ones on the same PyMuPDF build, and always byte-identical answer keys. The
 rule table records page numbers, which come from the layout, so it is byte-identical on the same

@@ -73,10 +73,10 @@ Things learned:
 ## Open with the owner (from earlier sessions, still open)
 
 - A rule id typed as a whole search query: keep pure fusion and require the top 3 (recommended, tests assume it), or guarantee first place.
-- The manual's page footer says every number on the page is invented, which is not true of its clinical thresholds.
+- Decided by the owner on 2026-10-08, and built: the manual's page footer no longer says every number is invented. It says the document is synthetic, its ratings are invented, its clinical thresholds follow public guidelines, and how many of the items to check have been checked ("0 of 145 items checked against their sources", counted from the review file).
 - Decided by the owner on 2026-10-08: no Dapr access policy is added for the demo, so any service in the environment may call `workflow`'s decision operation.
-- Whether an attempt by the model to call a tool that does not exist should be logged as a step.
-- The manual's citations and conversion factors were written without network access and need a check against their sources.
+- Decided by the owner on 2026-10-08, and built: an attempt by the model to call a tool that does not exist is logged as a refused step (`AgentStep.tool` null, `AgentStep.asked_tool` the name asked for; migration `0002` of `verdict`).
+- Decided by the owner on 2026-10-08, and built: the manual is generated from a review file, `packages/synthdata/src/synthdata/manual-review.yaml`, which lists its 38 citations, 80 band edges said to follow a guideline, 18 unit conversions and 9 reading rules. All 145 are still `unreviewed`: the medical expert or anyone with the sources works through it (`uv run python -m synthdata review`; how to record a check is in `data/README.md`). A corrected citation or conversion is applied on generation; a corrected band edge or reading rule is refused until a developer carries it into the manual's definition and the cases.
 - Whether the SPA's tests (279) should be cut as the Python suite was.
 
 ## Next

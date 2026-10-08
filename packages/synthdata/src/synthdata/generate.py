@@ -2,7 +2,7 @@
 
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import cache
 from pathlib import Path
 
@@ -11,12 +11,13 @@ import pymupdf
 from contracts.enums import Verdict
 from contracts.rules import RULE_DEFINITION_PATTERN, is_medical, rule_ids_defined_in
 from synthdata.cases import CASES
-from synthdata.expected import expected_for, squash
+from synthdata.expected import applies_to, expected_for, squash
 from synthdata.manual import (
     INVENTED,
     MANUAL_FILE_NAME,
     RenderedManual,
     extracted_pages,
+    footer_lines,
     reference_sentence,
     render_manual,
     section_plan,
@@ -31,7 +32,16 @@ from synthdata.manual_model import (
     RuleTableRule,
     edges_of,
 )
-from synthdata.manual_rules import MANUAL
+from synthdata.manual_review import (
+    REVIEW_FILE,
+    SYNC_COMMAND,
+    Kind,
+    Refusal,
+    Review,
+    check_listed,
+    refusals,
+)
+from synthdata.manual_rules import MANUAL, REVIEW, WRITTEN
 from synthdata.model import (
     LAYOUTS_WITHOUT_TEXT,
     NON_MEDICAL_LAYOUTS,
@@ -49,7 +59,7 @@ from synthdata.model import (
     TrainingPage,
     TrainingSet,
 )
-from synthdata.render import FOOTER, RenderedCase, render_case, render_page
+from synthdata.render import RenderedCase, render_case, render_page
 from synthdata.training import TRAINING_SUBJECTS
 
 CASES_FOLDER = "cases"
@@ -347,12 +357,12 @@ def check_disjoint(
 
 
 def check_text(
-    spec: ManualSpec, rule_pages: Mapping[str, int], pages: Sequence[str]
+    spec: ManualSpec, rule_pages: Mapping[str, int], pages: Sequence[str], footer: str
 ) -> None:
     """Fail unless the manual's text says exactly what the rule table says.
 
     `pages` is the text of each page with white space squashed. Checked: the size, a
-    text layer with the page number and the footer on every page, one definition per
+    text layer with the page number and `footer` on every page, one definition per
     rule (AD-12) on the page recorded for it, and in that definition its section and
     every cross-reference.
     """
@@ -361,7 +371,7 @@ def check_text(
             f"the manual has {len(pages)} pages, outside {MIN_PAGES} to {MAX_PAGES}"
         )
     for number, text in enumerate(pages, start=1):
-        if f"Page {number} " not in text or not text.endswith(FOOTER):
+        if f"Page {number} " not in text or not text.endswith(footer):
             raise ValueError(
                 f"page {number} has no text layer with its page number and the footer"
             )
@@ -400,7 +410,9 @@ def check_text(
 
 def check_manual(spec: ManualSpec, rendered: RenderedManual) -> None:
     """Check the text a reader gets out of the PDF, not the strings the renderer kept."""
-    check_text(spec, rendered.rule_pages, extracted_pages(rendered.pdf))
+    check_text(
+        spec, rendered.rule_pages, extracted_pages(rendered.pdf), rendered.footer
+    )
 
 
 def rule_table_for(spec: ManualSpec, rendered: RenderedManual) -> RuleTable:
@@ -457,10 +469,86 @@ def rule_table_for(spec: ManualSpec, rendered: RenderedManual) -> RuleTable:
     )
 
 
+class CorrectionRefused(ValueError):
+    """The review file holds a correction that the generator does not carry through."""
+
+
+def _rated_by(case: CaseDefinition, manual: ManualSpec, refusal: Refusal) -> bool:
+    """Whether `case` states a reading that the refused correction would decide on.
+
+    For a band edge: a reading of the measure, in a case the item's impairment
+    applies to. For a reading rule: several such readings, since the rule chooses
+    among them. For a conversion: a reading in the other unit.
+    """
+    readings = [
+        fact
+        for fact in expected_for(case, manual).facts
+        if fact.measure == refusal.measure
+    ]
+    if refusal.units:
+        return any(
+            unit in place.quote
+            for fact in readings
+            for place in fact.places
+            for unit in refusal.units
+        )
+    on_file = {item.impairment for item in case.clinical.diagnoses if item.impairment}
+    needed = 2 if refusal.item.kind is Kind.READING_RULE else 1
+    return len(readings) >= needed and any(
+        impairment.impairment_id in refusal.item.where.impairments
+        and applies_to(impairment, on_file)
+        for impairment in manual.impairments
+    )
+
+
+def check_review(
+    written: ManualSpec,
+    review: Review,
+    manual: ManualSpec = MANUAL,
+    cases: Iterable[CaseDefinition] = CASES,
+) -> None:
+    """Fail unless the review file fits the manual and every correction in it can be applied.
+
+    The file must list exactly the items of `written`. A correction that changes text
+    only is already in `manual`. One that moves a band edge or changes which reading
+    is rated would change the rule table and perhaps a case's expected verdict, and
+    the section's hand-written wording states the same thing; it is refused here,
+    with the rules and the cases named, so that the manual and the answer key never
+    disagree.
+    """
+    check_listed(written, review)
+    refused = refusals(written, review)
+    if not refused:
+        return
+    faults = []
+    for refusal in refused:
+        item = refusal.item
+        named = [case.case_id for case in cases if _rated_by(case, manual, refusal)]
+        faults.append(
+            f"{item.id} is marked corrected and is not applied: {refusal.why}. "
+            f"Rules: {', '.join(item.where.rule_ids) or 'none'} "
+            f"(section {', '.join(item.where.sections)}). Cases to check and "
+            "regenerate, whose expected rules and verdict may change: "
+            f"{', '.join(named) or 'none'}."
+        )
+    raise CorrectionRefused(
+        f"{REVIEW_FILE.name}: {' '.join(faults)} Such a correction changes the rule "
+        "table, and the section's own wording states the same figure, so it is made "
+        "in the manual's definition (`manual_impairments_1.py` or "
+        "`manual_impairments_2.py`) together with that wording and the cases named. "
+        f"Then run `{SYNC_COMMAND}`, which records the item as verified at its new "
+        "value, and generate again."
+    )
+
+
 @cache
 def build_manual() -> tuple[RenderedManual, RuleTable]:
-    """The manual PDF and its rule table, both from the one definition in `manual_rules`."""
-    rendered = render_manual(MANUAL)
+    """The manual PDF and its rule table, both from the one definition in `manual_rules`.
+
+    The page footer says how many items of the review file have been checked.
+    """
+    check_review(WRITTEN, REVIEW)
+    rendered = render_manual(MANUAL, footer_lines(*REVIEW.progress()))
     return rendered, rule_table_for(MANUAL, rendered)
 
 

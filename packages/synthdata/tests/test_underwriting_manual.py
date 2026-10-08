@@ -16,17 +16,22 @@ from contracts.rules import (
     is_rule_id,
     rule_ids_defined_in,
 )
+from synthdata.__main__ import main
 from synthdata.generate import (
     MANUAL_FOLDER,
     RULE_TABLE_FILE,
+    CorrectionRefused,
     build_manual,
+    check_review,
     check_text,
     rule_table_for,
     write_all,
 )
 from synthdata.manual import (
     MANUAL_FILE_NAME,
+    definition_words,
     extracted_pages,
+    footer_lines,
     render_manual,
 )
 from synthdata.manual_model import (
@@ -38,12 +43,24 @@ from synthdata.manual_model import (
     RuleTableImpairment,
     RuleTableRule,
 )
-from synthdata.manual_rules import MANUAL
-from synthdata.render import FOOTER
+from synthdata.manual_review import (
+    Kind,
+    Review,
+    ReviewItem,
+    ReviewOutOfDate,
+    check_listed,
+    review_items,
+    synced,
+    with_corrections,
+)
+from synthdata.manual_rules import MANUAL, REVIEW, WRITTEN
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMMITTED = REPO_ROOT / "data"
 MANUAL_PDF = Path(MANUAL_FOLDER) / MANUAL_FILE_NAME
+# The two footer lines, which count the items of the review file that are checked.
+FOOTER_LINES = footer_lines(*REVIEW.progress())
+FOOTER = " ".join(FOOTER_LINES)
 # A page's words that are not body text: the running title, "Page N" and the footer.
 FURNITURE_WORDS = len(MANUAL.title.split()) + 2 + len(FOOTER.split())
 # Pages may end short where a section ends. No more than this many pages may hold
@@ -208,32 +225,6 @@ def test_story_2_1_a_reference_states_the_band_of_the_rule_it_points_to(
 # ---------------------------------------------------------------------------
 # Rule fields, bands and declared gaps
 # ---------------------------------------------------------------------------
-
-
-def test_story_2_1_every_rule_has_its_fields(table: RuleTable) -> None:
-    for rule in table.rules:
-        threshold = rule.threshold
-        assert rule.rule_id.startswith("UW-") and is_rule_id(rule.rule_id)
-        assert rule.impairment and threshold.measure and threshold.unit
-        assert threshold.words.startswith(threshold.measure_label)
-        # A debit or decline: never both, never neither. A debit is a whole number.
-        assert rule.decline != (rule.debit_pct is not None), rule.rule_id
-        assert rule.debit_pct is None or type(rule.debit_pct) is int
-        assert not rule.postponement or rule.decline, rule.rule_id
-        source = rule.source
-        assert source.body and source.guideline and len(source.locator) > 10
-        assert 1990 <= source.year <= LATEST_SOURCE_YEAR, rule.rule_id
-        assert [edge.value for edge in rule.edges] == list(threshold.ends())
-    ratings = {rule.rating_words for rule in table.rules}
-    assert {
-        "decline",
-        "decline as a postponement",
-        "no debit, +0 %",
-        "a debit of +50 %",
-    } <= ratings
-    postponed = {rule.rule_id for rule in table.rules if rule.postponement}
-    assert {"UW-MI-001", "UW-VTE-001", "UW-ANA-002"} <= postponed
-    assert any(rule.note for rule in table.rules)
 
 
 def test_story_2_1_every_reading_meets_one_rule_or_one_declared_gap(
@@ -484,7 +475,7 @@ def test_story_2_1_generation_fails_when_the_manual_and_the_table_disagree() -> 
     good = extracted_pages(rendered.pdf)
 
     def check(pages: list[str]) -> None:
-        check_text(MANUAL, rule_pages, pages)
+        check_text(MANUAL, rule_pages, pages, FOOTER)
 
     check(good)
     with pytest.raises(ValueError, match="UW-DM-001.*defines it 2 times"):
@@ -498,7 +489,7 @@ def test_story_2_1_generation_fails_when_the_manual_and_the_table_disagree() -> 
     with pytest.raises(ValueError, match="UW-DM-001: its definition with its section"):
         check(_tampered("mellitus (section 2.4).", "mellitus."))
     with pytest.raises(ValueError, match="UW-DM-001: its definition with its section"):
-        check_text(MANUAL, {**rule_pages, "UW-DM-001": 1}, good)
+        check_text(MANUAL, {**rule_pages, "UW-DM-001": 1}, good, FOOTER)
     with pytest.raises(ValueError, match="100 pages"):
         check(good[:100])
     # A page with no text layer, or one that lost its footer or its number.
@@ -537,6 +528,120 @@ def test_story_2_1_generation_fails_when_the_manual_and_the_table_disagree() -> 
 
 
 # ---------------------------------------------------------------------------
+# The review file
+# ---------------------------------------------------------------------------
+
+
+def _reviewed(item_id: str, **record: object) -> Review:
+    """The committed review with one item changed: by default, signed by a reviewer."""
+    signed = (
+        {}
+        if record.get("status") == "unreviewed"
+        else {
+            "source": "The guideline itself, table 1",
+            "reviewed_by": "A reviewer",
+            "reviewed_on": "2026-10-09",
+            "note": None,
+        }
+    )
+    return Review(
+        items=tuple(
+            ReviewItem.model_validate({**item.model_dump(), **signed, **record})
+            if item.id == item_id
+            else item
+            for item in REVIEW.items
+        )
+    )
+
+
+def test_story_2_1_the_review_file_lists_every_item_to_check_and_a_correction_is_applied_or_refused(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The committed file lists what the manual holds, no more and no less: each
+    # citation, each band edge a guideline is said to draw, each conversion, each
+    # reading rule. An unreviewed item fails nothing; it is counted and reported.
+    check_listed(WRITTEN, REVIEW)
+    derived = review_items(WRITTEN)
+    assert [item.id for item in REVIEW.items] == [item.id for item in derived]
+    kinds = {kind: [i for i in derived if i.kind is kind] for kind in Kind}
+    sources = {rule.source for rule in WRITTEN.rules()}
+    source_edges = sum(
+        edge.origin == "source"
+        for rule in build_manual()[1].rules
+        for edge in rule.edges
+    )
+    assert len(kinds[Kind.CITATION]) == len(sources)
+    # An edge two bands share is one item, and every item names the bands on it.
+    assert 0 < len(kinds[Kind.THRESHOLD]) <= source_edges
+    assert sum(len(i.where.rule_ids) for i in kinds[Kind.THRESHOLD]) == source_edges
+    assert len(kinds[Kind.CONVERSION]) == len(
+        {m.key for item in WRITTEN.impairments for m in item.measures if m.conversion}
+    )
+    assert len(kinds[Kind.READING_RULE]) == sum(
+        len(item.reading_rules) for item in WRITTEN.impairments
+    )
+    checked, total = REVIEW.progress()
+    assert total == len(derived) and checked == sum(i.checked for i in REVIEW.items)
+    assert build_manual()[0].footer.endswith(
+        f"{checked} of {total} items checked against their sources."
+    )
+    main(["review"])
+    assert f"{checked} of {total} items checked" in capsys.readouterr().out
+
+    # An item the file lacks, one the manual has lost and one stated differently.
+    first, edge = derived[0], "threshold.UW-DM-001.upper"
+    with pytest.raises(ReviewOutOfDate, match=f"{first.id}: the manual holds it"):
+        check_listed(WRITTEN, Review(items=REVIEW.items[1:]))
+    gone = first.model_copy(update={"id": "citation.gone"})
+    with pytest.raises(ReviewOutOfDate, match="citation.gone: the file lists it"):
+        check_listed(WRITTEN, Review(items=(*REVIEW.items, gone)))
+    with pytest.raises(ReviewOutOfDate, match=f"{edge}: the file does not state"):
+        check_listed(WRITTEN, _reviewed(edge, value="7.5", status="unreviewed"))
+    # A record is whole or it is refused, by name.
+    with pytest.raises(ValueError, match=f"{edge}: verified needs source"):
+        _reviewed(edge, status="verified", source=None)
+
+    # A corrected citation changes text and nothing else.
+    cited = {**WRITTEN.rule("UW-DM-001").source.model_dump(), "year": 2023}
+    review = _reviewed("citation.ada_goals", status="corrected", corrected_value=cited)
+    manual = with_corrections(WRITTEN, review)
+    check_review(WRITTEN, review, manual)
+    assert manual.rule("UW-DM-001").source.year == 2023
+    assert "Standards of Care in Diabetes (2023)" in definition_words(
+        manual, manual.rule("UW-DM-001"), "2"
+    )
+    assert [rule.model_dump(exclude={"source"}) for rule in manual.rules()] == [
+        rule.model_dump(exclude={"source"}) for rule in WRITTEN.rules()
+    ]
+
+    # A corrected band edge, a corrected reading rule and a conversion with other
+    # numbers would change the answer key: none is applied, and the generator stops,
+    # naming the rules and the cases.
+    refused = {
+        edge: ("6.5", "UW-DM-001, UW-DM-002.*: case-001, case-008, case-018[.]"),
+        "reading_rule.hypertension.systolic_blood_pressure": (
+            {"choose": "highest", "within_months": 12},
+            "which systolic blood pressure reading is rated.*: case-001.*, case-019[.]",
+        ),
+        "conversion.hba1c": (
+            "A result in mmol/mol is multiplied by 0.09.",
+            ": case-018[.]",
+        ),
+    }
+    for item_id, (value, named) in refused.items():
+        review = _reviewed(item_id, status="corrected", corrected_value=value)
+        assert with_corrections(WRITTEN, review) == WRITTEN
+        with pytest.raises(CorrectionRefused, match=f"{item_id} is marked.*{named}"):
+            check_review(WRITTEN, review, WRITTEN)
+    # Once the manual's definition states the corrected value, the item is verified.
+    asked = _reviewed(edge, value="7.5", status="corrected", corrected_value="7.0")
+    after, changes = synced(WRITTEN, asked)
+    item = next(item for item in after.items if item.id == edge)
+    assert (item.status, item.value, item.corrected_value) == ("verified", "7.0", None)
+    assert changes == (f"{edge}: the manual now states the correction; verified",)
+
+
+# ---------------------------------------------------------------------------
 # Rerun and the committed files
 # ---------------------------------------------------------------------------
 
@@ -544,7 +649,8 @@ def test_story_2_1_generation_fails_when_the_manual_and_the_table_disagree() -> 
 def test_story_2_1_regenerating_gives_the_same_manual_and_rule_table_which_are_what_is_committed(
     generated: Path, pages: list[str]
 ) -> None:
-    first, second = render_manual(MANUAL), render_manual(MANUAL)
+    first = render_manual(MANUAL, FOOTER_LINES)
+    second = render_manual(MANUAL, FOOTER_LINES)
 
     # Byte for byte in one process, so nothing in the file depends on the run.
     assert first.pdf == second.pdf

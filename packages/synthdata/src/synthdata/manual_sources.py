@@ -352,3 +352,16 @@ AJCC = _source(
     2017,
     "the T categories by tumour thickness",
 )
+
+
+def named_sources() -> dict[str, Source]:
+    """Every guideline above by the name of its constant in lower case.
+
+    That name is the citation's id in the review file (`manual_review`), so it stays
+    as it is when the citation's wording is corrected.
+    """
+    return {
+        name.lower(): value
+        for name, value in globals().items()
+        if isinstance(value, Source)
+    }

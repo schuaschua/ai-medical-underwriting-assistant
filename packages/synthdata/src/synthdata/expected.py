@@ -270,7 +270,8 @@ def _reading(
     return number, _words(measure, number)
 
 
-def _applies(impairment: ImpairmentSpec, on_file: set[str]) -> bool:
+def applies_to(impairment: ImpairmentSpec, on_file: set[str]) -> bool:
+    """Whether an impairment's rules apply to an applicant with `on_file` diagnosed."""
     if on_file & set(impairment.applies.not_with):
         return False
     return impairment.applies.basis == "reading" or impairment.impairment_id in on_file
@@ -458,7 +459,7 @@ def expected_for(case: CaseDefinition, manual: ManualSpec = MANUAL) -> Expected:
                 )
             )
 
-    applicable = [item for item in manual.impairments if _applies(item, on_file)]
+    applicable = [item for item in manual.impairments if applies_to(item, on_file)]
     met: dict[str, RuleSpec] = {}
     conflicting = False
     for impairment in applicable:

@@ -26,7 +26,7 @@ from synthdata.manual_model import (
     Threshold,
     edges_of,
 )
-from synthdata.render import FOOTER, PDF_DATE
+from synthdata.render import PDF_DATE
 
 MANUAL_FILE_NAME = "underwriting-manual.pdf"
 # The headings of an impairment's section; the number is the part's number.
@@ -44,12 +44,30 @@ INVENTED = (
 )
 NO_RULE = "no rule of this section"
 
+
+def footer_lines(checked: int, total: int) -> tuple[str, str]:
+    """The two lines at the foot of every page of the manual.
+
+    Not the cases' footer: a case's figures are all invented, the manual's thresholds
+    are not. `checked` of `total` is the state of the review file, so the footer says
+    how far the thresholds, citations and conversions have been checked.
+    """
+    return (
+        "SYNTHETIC TEST DOCUMENT. Its ratings (debits and declines) are invented.",
+        (
+            "Its clinical thresholds follow public guidelines: "
+            f"{checked} of {total} items checked against their sources."
+        ),
+    )
+
+
 # A5 in points: the format of a desk handbook.
 _WIDTH, _HEIGHT = 420.0, 595.0
 _LEFT, _RIGHT, _TOP = 46.0, 374.0, 64.0
 _HEADER_Y = 34.0
 _FOOTER_Y = _HEIGHT - 30
-# Body text stops this far above the footer line.
+_FOOTER_SIZE = 7.0
+# Body text stops this far above the first footer line.
 _FLOOR = _FOOTER_Y - 20
 _REGULAR, _BOLD = "helv", "hebo"
 _BODY = 10.5
@@ -83,6 +101,8 @@ class RenderedManual:
     pdf: bytes
     # What was written on each page, one string per page.
     page_texts: tuple[str, ...]
+    # What every page's text ends with.
+    footer: str
     # The 1-based page the contents start on.
     contents_page: int
     # Every numbered section in order: its title and the 1-based page it starts on.
@@ -142,6 +162,7 @@ class _Book:
     """The manual being written page by page; it remembers every string it draws."""
 
     title: str
+    footer: tuple[str, ...]
     document: pymupdf.Document = field(
         default_factory=lambda: pymupdf.open()  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
     )
@@ -168,9 +189,10 @@ class _Book:
 
     def _commit(self) -> None:
         if self._shape is not None:
-            # The same footer as every page of the synthetic cases, drawn last so
-            # that it is also last in the page's text.
-            self._draw(_LEFT, _FOOTER_Y, FOOTER, 7, _REGULAR)
+            # Drawn last, so that the footer is also last in the page's text.
+            for index, line in enumerate(self.footer):
+                y = _FOOTER_Y + index * _leading(_FOOTER_SIZE)
+                self._draw(_LEFT, y, line, _FOOTER_SIZE, _REGULAR)
             self._shape.commit()
             self._shape = None
 
@@ -715,7 +737,7 @@ def section_plan(spec: ManualSpec) -> tuple[dict[str, str], dict[str, str]]:
 
 
 def _compose(
-    spec: ManualSpec, pages: Mapping[str, int] | None
+    spec: ManualSpec, pages: Mapping[str, int] | None, footer: tuple[str, ...]
 ) -> tuple[_Book, int, dict[str, int]]:
     titles, sections = section_plan(spec)
     # Where a mention sends the reader: the part that holds the rule's definition.
@@ -724,7 +746,7 @@ def _compose(
         for item in spec.impairments
         for rule in item.rules
     }
-    book = _Book(title=spec.title)
+    book = _Book(title=spec.title, footer=footer)
     rule_pages: dict[str, int] = {}
     _front_matter(book, spec)
     contents_page = _contents(book, titles, pages)
@@ -737,17 +759,17 @@ def _compose(
     return book, contents_page, rule_pages
 
 
-def render_manual(spec: ManualSpec) -> RenderedManual:
-    """Render the manual.
+def render_manual(spec: ManualSpec, footer: tuple[str, ...]) -> RenderedManual:
+    """Render the manual, with `footer` (see `footer_lines`) at the foot of every page.
 
     The same definition always gives the same text, and the same bytes on the same
     PyMuPDF build. It is laid out twice: the contents page needs the page numbers
     that only a first layout can tell.
     """
-    draft, _, _ = _compose(spec, None)
+    draft, _, _ = _compose(spec, None, footer)
     section_pages = dict(draft.section_pages)
     draft.finish()
-    book, contents_page, rule_pages = _compose(spec, section_pages)
+    book, contents_page, rule_pages = _compose(spec, section_pages, footer)
     if book.section_pages != section_pages:
         raise ValueError("the contents page changed the page numbers it lists")
     pdf, page_texts = book.finish()
@@ -755,6 +777,7 @@ def render_manual(spec: ManualSpec) -> RenderedManual:
     return RenderedManual(
         pdf=pdf,
         page_texts=page_texts,
+        footer=" ".join(footer),
         contents_page=contents_page,
         section_titles=titles,
         section_pages=section_pages,

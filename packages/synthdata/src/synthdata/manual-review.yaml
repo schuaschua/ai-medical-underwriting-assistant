@@ -1,0 +1,3330 @@
+# The review record of the synthetic underwriting manual.
+#
+# The manual's ratings (its debits and its declines) are invented and are not listed
+# here. Listed here is everything in the manual that claims to follow the real world,
+# or that an expert was asked to judge:
+#
+#   citation      a guideline of a public body, as the manual cites it: the body, its
+#                 abbreviation, the guideline, its year and what it is cited for
+#   threshold     an edge of a band that the manual says the cited guideline draws
+#   conversion    a sentence that converts a figure from another unit
+#   reading_rule  which reading counts when a file holds several of one measure
+#                 (invented with the manual; a medical expert is to confirm them)
+#
+# Every item was written by a program that could not read the sources. `unreviewed`
+# means exactly that: nobody has checked it.
+#
+# To record a check, change only the last six fields of the item:
+#
+#   status           unreviewed; verified (the source says what `value` says); or
+#                    corrected (the source says something else)
+#   corrected_value  only when corrected: what the manual should say, in the same
+#                    shape as `value`. Write a number in quotes: "6.5"
+#   source           what you checked it against: the document, its year and the
+#                    place in it
+#   reviewed_by      your name
+#   reviewed_on      the date, as YYYY-MM-DD
+#   note             anything else, in your own words
+#
+# Leave id, kind, what, where, value and cited as they are. They say what the manual
+# states, and the build fails when they differ from it.
+#
+# What a correction changes when the manual is generated again
+# (`uv run python -m synthdata`, from the repository root):
+#
+#   citation      Applied. It changes text only: the citation in part 1 and in each
+#                 rule's definition of the sections named, the list of public
+#                 sources, and `source` of those rules in the rule table. Pages may
+#                 move. No band, rating or expected verdict changes.
+#   conversion    Applied when it changes text only. For HbA1c in mmol/mol and LDL
+#                 cholesterol in mmol/L the cases' readings are converted with the
+#                 sentence's numbers; a correction that changes those numbers is
+#                 refused, as below.
+#   threshold     Not applied. A corrected edge changes a rule's band, so the rule
+#                 table, and may change the expected verdict of a case; the section's
+#                 own wording states the number too. The generator refuses to run and
+#                 names the rules and the cases. A developer then changes the
+#                 manual's definition, its wording and the cases, and runs
+#                 `uv run python -m synthdata review --sync`, which records the item
+#                 as verified at its new value.
+#   reading_rule  Not applied, for the same reason: it decides which reading of a case
+#                 is rated. Refused in the same way.
+#
+# `uv run python -m synthdata review` prints what is left to check. The page footer of
+# the manual counts the items that are verified or corrected.
+#
+# Not listed, because the manual states them only in running text: numbers in a
+# section's prose (how old a reading may be, how a figure is worked out) and the
+# range of readings a measure can take. Read the section when you check its items.
+
+items:
+
+- id: citation.ada_goals
+  kind: citation
+  what: 'The manual cites American Diabetes Association (ADA), Standards of Care in Diabetes (2024), for: section 6, Glycemic Goals and Hypoglycemia (A1C goals for adults).'
+  where:
+    sections:
+    - '2.1'
+    - '2.4'
+    - '3.1'
+    - '3.4'
+    - '43'
+    impairments:
+    - type_2_diabetes
+    - type_1_diabetes
+    rule_ids:
+    - UW-DM-001
+    - UW-DM-002
+    - UW-DM-003
+    - UW-DM-004
+    - UW-DM-005
+    - UW-DI-001
+    - UW-DI-002
+    - UW-DI-003
+    - UW-DI-004
+  value:
+    body: American Diabetes Association
+    abbreviation: ADA
+    guideline: Standards of Care in Diabetes
+    year: 2024
+    locator: section 6, Glycemic Goals and Hypoglycemia (A1C goals for adults)
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.ada_diagnosis
+  kind: citation
+  what: 'The manual cites American Diabetes Association (ADA), Standards of Care in Diabetes (2024), for: section 2, Diagnosis and Classification of Diabetes (A1C criteria for prediabetes and diabetes).'
+  where:
+    sections:
+    - '4.1'
+    - '4.4'
+    - '43'
+    impairments:
+    - prediabetes
+    rule_ids:
+    - UW-PD-001
+  value:
+    body: American Diabetes Association
+    abbreviation: ADA
+    guideline: Standards of Care in Diabetes
+    year: 2024
+    locator: section 2, Diagnosis and Classification of Diabetes (A1C criteria for prediabetes and diabetes)
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.who_bmi
+  kind: citation
+  what: 'The manual cites World Health Organization (WHO), Obesity: preventing and managing the global epidemic, WHO Technical Report Series 894 (2000), for: the classification of adults according to body mass index.'
+  where:
+    sections:
+    - '5.1'
+    - '5.4'
+    - '43'
+    impairments:
+    - build
+    rule_ids:
+    - UW-BMI-001
+    - UW-BMI-002
+    - UW-BMI-003
+    - UW-BMI-004
+  value:
+    body: World Health Organization
+    abbreviation: WHO
+    guideline: 'Obesity: preventing and managing the global epidemic, WHO Technical Report Series 894'
+    year: 2000
+    locator: the classification of adults according to body mass index
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.cholesterol
+  kind: citation
+  what: 'The manual cites American Heart Association and American College of Cardiology (AHA/ACC), Guideline on the Management of Blood Cholesterol (2018), for: severe primary hypercholesterolemia, the risk-enhancing factors and severe hypertriglyceridemia.'
+  where:
+    sections:
+    - '6.1'
+    - '6.4'
+    - '7.1'
+    - '7.4'
+    - '43'
+    impairments:
+    - raised_ldl_cholesterol
+    - raised_triglycerides
+    rule_ids:
+    - UW-LDL-001
+    - UW-LDL-002
+    - UW-TG-001
+    - UW-TG-002
+  value:
+    body: American Heart Association and American College of Cardiology
+    abbreviation: AHA/ACC
+    guideline: Guideline on the Management of Blood Cholesterol
+    year: 2018
+    locator: severe primary hypercholesterolemia, the risk-enhancing factors and severe hypertriglyceridemia
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.acr_gout
+  kind: citation
+  what: 'The manual cites American College of Rheumatology (ACR), Guideline for the Management of Gout (2020), for: the serum urate target for urate-lowering therapy.'
+  where:
+    sections:
+    - '8.1'
+    - '8.4'
+    - '43'
+    impairments:
+    - gout
+    rule_ids:
+    - UW-GOUT-001
+    - UW-GOUT-002
+  value:
+    body: American College of Rheumatology
+    abbreviation: ACR
+    guideline: Guideline for the Management of Gout
+    year: 2020
+    locator: the serum urate target for urate-lowering therapy
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.thyroid
+  kind: citation
+  what: 'The manual cites American Association of Clinical Endocrinologists and American Thyroid Association (AACE/ATA), Clinical Practice Guidelines for Hypothyroidism in Adults (2012), for: the recommendation on treating a TSH above 10 mIU/L.'
+  where:
+    sections:
+    - '9.1'
+    - '9.4'
+    - '43'
+    impairments:
+    - hypothyroidism
+    rule_ids:
+    - UW-THY-001
+    - UW-THY-002
+  value:
+    body: American Association of Clinical Endocrinologists and American Thyroid Association
+    abbreviation: AACE/ATA
+    guideline: Clinical Practice Guidelines for Hypothyroidism in Adults
+    year: 2012
+    locator: the recommendation on treating a TSH above 10 mIU/L
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.blood_pressure
+  kind: citation
+  what: 'The manual cites American College of Cardiology and American Heart Association (ACC/AHA), Guideline for the Prevention, Detection, Evaluation, and Management of High Blood Pressure in Adults (2017), for: the table of blood pressure categories and the section on hypertensive crises.'
+  where:
+    sections:
+    - '10.1'
+    - '10.4'
+    - '43'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-001
+    - UW-HT-002
+    - UW-HT-003
+    - UW-HT-004
+    - UW-HT-005
+  value:
+    body: American College of Cardiology and American Heart Association
+    abbreviation: ACC/AHA
+    guideline: Guideline for the Prevention, Detection, Evaluation, and Management of High Blood Pressure in Adults
+    year: 2017
+    locator: the table of blood pressure categories and the section on hypertensive crises
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.dapt
+  kind: citation
+  what: 'The manual cites American College of Cardiology and American Heart Association (ACC/AHA), Guideline Focused Update on Duration of Dual Antiplatelet Therapy in Patients With Coronary Artery Disease (2016), for: the recommendations for at least 12 months of treatment after an acute coronary syndrome.'
+  where:
+    sections:
+    - '11.1'
+    - '11.4'
+    - '43'
+    impairments:
+    - myocardial_infarction
+    rule_ids:
+    - UW-MI-001
+    - UW-MI-002
+    - UW-MI-003
+  value:
+    body: American College of Cardiology and American Heart Association
+    abbreviation: ACC/AHA
+    guideline: Guideline Focused Update on Duration of Dual Antiplatelet Therapy in Patients With Coronary Artery Disease
+    year: 2016
+    locator: the recommendations for at least 12 months of treatment after an acute coronary syndrome
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.heart_failure
+  kind: citation
+  what: 'The manual cites American Heart Association, American College of Cardiology and Heart Failure Society of America (AHA/ACC/HFSA), Guideline for the Management of Heart Failure (2022), for: the classification of heart failure by left ventricular ejection fraction.'
+  where:
+    sections:
+    - '12.1'
+    - '12.4'
+    - '43'
+    impairments:
+    - heart_failure
+    rule_ids:
+    - UW-HF-001
+    - UW-HF-002
+    - UW-HF-003
+  value:
+    body: American Heart Association, American College of Cardiology and Heart Failure Society of America
+    abbreviation: AHA/ACC/HFSA
+    guideline: Guideline for the Management of Heart Failure
+    year: 2022
+    locator: the classification of heart failure by left ventricular ejection fraction
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.atrial_fibrillation
+  kind: citation
+  what: 'The manual cites American College of Cardiology, American Heart Association, American College of Clinical Pharmacy and Heart Rhythm Society (ACC/AHA/ACCP/HRS), Guideline for the Diagnosis and Management of Atrial Fibrillation (2023), for: the recommendations on stroke risk scores and anticoagulation.'
+  where:
+    sections:
+    - '13.1'
+    - '13.4'
+    - '43'
+    impairments:
+    - atrial_fibrillation
+    rule_ids:
+    - UW-AF-001
+    - UW-AF-002
+    - UW-AF-003
+  value:
+    body: American College of Cardiology, American Heart Association, American College of Clinical Pharmacy and Heart Rhythm Society
+    abbreviation: ACC/AHA/ACCP/HRS
+    guideline: Guideline for the Diagnosis and Management of Atrial Fibrillation
+    year: 2023
+    locator: the recommendations on stroke risk scores and anticoagulation
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.valves
+  kind: citation
+  what: 'The manual cites American College of Cardiology and American Heart Association (ACC/AHA), Guideline for the Management of Patients With Valvular Heart Disease (2020), for: the stages of aortic stenosis by peak aortic jet velocity.'
+  where:
+    sections:
+    - '14.1'
+    - '14.4'
+    - '43'
+    impairments:
+    - aortic_stenosis
+    rule_ids:
+    - UW-AS-001
+    - UW-AS-002
+    - UW-AS-003
+  value:
+    body: American College of Cardiology and American Heart Association
+    abbreviation: ACC/AHA
+    guideline: Guideline for the Management of Patients With Valvular Heart Disease
+    year: 2020
+    locator: the stages of aortic stenosis by peak aortic jet velocity
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.hcm_guideline
+  kind: citation
+  what: 'The manual cites American Heart Association and American College of Cardiology (AHA/ACC), Guideline for the Diagnosis and Treatment of Patients With Hypertrophic Cardiomyopathy (2020), for: the diagnostic wall thickness and the risk markers for sudden cardiac death.'
+  where:
+    sections:
+    - '15.1'
+    - '15.4'
+    - '43'
+    impairments:
+    - hypertrophic_cardiomyopathy
+    rule_ids:
+    - UW-HCM-001
+    - UW-HCM-002
+  value:
+    body: American Heart Association and American College of Cardiology
+    abbreviation: AHA/ACC
+    guideline: Guideline for the Diagnosis and Treatment of Patients With Hypertrophic Cardiomyopathy
+    year: 2020
+    locator: the diagnostic wall thickness and the risk markers for sudden cardiac death
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.svs_aaa
+  kind: citation
+  what: 'The manual cites Society for Vascular Surgery (SVS), Practice guidelines on the care of patients with an abdominal aortic aneurysm (2018), for: the surveillance intervals by diameter and the threshold for elective repair.'
+  where:
+    sections:
+    - '16.1'
+    - '16.4'
+    - '43'
+    impairments:
+    - abdominal_aortic_aneurysm
+    rule_ids:
+    - UW-AAA-001
+    - UW-AAA-002
+    - UW-AAA-003
+  value:
+    body: Society for Vascular Surgery
+    abbreviation: SVS
+    guideline: Practice guidelines on the care of patients with an abdominal aortic aneurysm
+    year: 2018
+    locator: the surveillance intervals by diameter and the threshold for elective repair
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.pad_guideline
+  kind: citation
+  what: 'The manual cites American Heart Association and American College of Cardiology (AHA/ACC), Guideline on the Management of Patients With Lower Extremity Peripheral Artery Disease (2016), for: the interpretation of the resting ankle-brachial index.'
+  where:
+    sections:
+    - '17.1'
+    - '17.4'
+    - '43'
+    impairments:
+    - peripheral_artery_disease
+    rule_ids:
+    - UW-PAD-001
+    - UW-PAD-002
+  value:
+    body: American Heart Association and American College of Cardiology
+    abbreviation: AHA/ACC
+    guideline: Guideline on the Management of Patients With Lower Extremity Peripheral Artery Disease
+    year: 2016
+    locator: the interpretation of the resting ankle-brachial index
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.stroke_prevention
+  kind: citation
+  what: 'The manual cites American Heart Association and American Stroke Association (AHA/ASA), Guideline for the Prevention of Stroke in Patients With Stroke and Transient Ischemic Attack (2021), for: the recommendations on extracranial carotid stenosis.'
+  where:
+    sections:
+    - '18.1'
+    - '18.4'
+    - '43'
+    impairments:
+    - carotid_artery_stenosis
+    rule_ids:
+    - UW-CAS-001
+    - UW-CAS-002
+  value:
+    body: American Heart Association and American Stroke Association
+    abbreviation: AHA/ASA
+    guideline: Guideline for the Prevention of Stroke in Patients With Stroke and Transient Ischemic Attack
+    year: 2021
+    locator: the recommendations on extracranial carotid stenosis
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.stroke_early
+  kind: citation
+  what: 'The manual cites American Heart Association and American Stroke Association (AHA/ASA), Guidelines for the Early Management of Patients With Acute Ischemic Stroke, 2019 update (2019), for: the criteria for mechanical thrombectomy, among them an NIHSS score of 6 or more.'
+  where:
+    sections:
+    - '19.1'
+    - '19.4'
+    - '43'
+    impairments:
+    - stroke
+    rule_ids:
+    - UW-CVA-001
+    - UW-CVA-002
+  value:
+    body: American Heart Association and American Stroke Association
+    abbreviation: AHA/ASA
+    guideline: Guidelines for the Early Management of Patients With Acute Ischemic Stroke, 2019 update
+    year: 2019
+    locator: the criteria for mechanical thrombectomy, among them an NIHSS score of 6 or more
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.chest_vte
+  kind: citation
+  what: 'The manual cites American College of Chest Physicians (CHEST), Antithrombotic Therapy for VTE Disease, second update of the CHEST guideline and expert panel report (2021), for: the three-month treatment phase of anticoagulation.'
+  where:
+    sections:
+    - '20.1'
+    - '20.4'
+    - '43'
+    impairments:
+    - venous_thromboembolism
+    rule_ids:
+    - UW-VTE-001
+    - UW-VTE-002
+    - UW-VTE-003
+  value:
+    body: American College of Chest Physicians
+    abbreviation: CHEST
+    guideline: Antithrombotic Therapy for VTE Disease, second update of the CHEST guideline and expert panel report
+    year: 2021
+    locator: the three-month treatment phase of anticoagulation
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.cdc_tobacco
+  kind: citation
+  what: 'The manual cites Centers for Disease Control and Prevention, National Center for Health Statistics (CDC), National Health Interview Survey, adult tobacco use glossary (2017), for: the definitions of current smoker and former smoker.'
+  where:
+    sections:
+    - '21.1'
+    - '21.4'
+    - '43'
+    impairments:
+    - tobacco_use
+    rule_ids:
+    - UW-TOB-001
+    - UW-TOB-003
+  value:
+    body: Centers for Disease Control and Prevention, National Center for Health Statistics
+    abbreviation: CDC
+    guideline: National Health Interview Survey, adult tobacco use glossary
+    year: 2017
+    locator: the definitions of current smoker and former smoker
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.uspstf_lung
+  kind: citation
+  what: 'The manual cites US Preventive Services Task Force (USPSTF), Lung Cancer: Screening, recommendation statement (2021), for: the 20 pack-year smoking history that defines the screened group.'
+  where:
+    sections:
+    - '21.1'
+    - '21.4'
+    - '43'
+    impairments:
+    - tobacco_use
+    rule_ids:
+    - UW-TOB-002
+  value:
+    body: US Preventive Services Task Force
+    abbreviation: USPSTF
+    guideline: 'Lung Cancer: Screening, recommendation statement'
+    year: 2021
+    locator: the 20 pack-year smoking history that defines the screened group
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.who_audit
+  kind: citation
+  what: 'The manual cites World Health Organization (WHO), AUDIT, the Alcohol Use Disorders Identification Test: guidelines for use in primary health care, second edition (2001), for: the risk zones by total AUDIT score.'
+  where:
+    sections:
+    - '22.1'
+    - '22.4'
+    - '43'
+    impairments:
+    - alcohol_use
+    rule_ids:
+    - UW-ALC-001
+    - UW-ALC-002
+    - UW-ALC-003
+  value:
+    body: World Health Organization
+    abbreviation: WHO
+    guideline: 'AUDIT, the Alcohol Use Disorders Identification Test: guidelines for use in primary health care, second edition'
+    year: 2001
+    locator: the risk zones by total AUDIT score
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.cdc_opioids
+  kind: citation
+  what: 'The manual cites Centers for Disease Control and Prevention (CDC), Guideline for Prescribing Opioids for Chronic Pain, United States (2016), for: the recommendation on dosage: reassess at 50, avoid 90 morphine milligram equivalents a day or more.'
+  where:
+    sections:
+    - '23.1'
+    - '23.4'
+    - '43'
+    impairments:
+    - long_term_opioid_therapy
+    rule_ids:
+    - UW-OPI-001
+    - UW-OPI-002
+    - UW-OPI-003
+  value:
+    body: Centers for Disease Control and Prevention
+    abbreviation: CDC
+    guideline: Guideline for Prescribing Opioids for Chronic Pain, United States
+    year: 2016
+    locator: 'the recommendation on dosage: reassess at 50, avoid 90 morphine milligram equivalents a day or more'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.gina
+  kind: citation
+  what: 'The manual cites Global Initiative for Asthma (GINA), Global Strategy for Asthma Management and Prevention (2023), for: the risk factors for exacerbations, among them an FEV1 below 60 % of predicted.'
+  where:
+    sections:
+    - '24.1'
+    - '24.4'
+    - '43'
+    impairments:
+    - asthma
+    rule_ids:
+    - UW-AST-001
+    - UW-AST-002
+  value:
+    body: Global Initiative for Asthma
+    abbreviation: GINA
+    guideline: Global Strategy for Asthma Management and Prevention
+    year: 2023
+    locator: the risk factors for exacerbations, among them an FEV1 below 60 % of predicted
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.gold
+  kind: citation
+  what: 'The manual cites Global Initiative for Chronic Obstructive Lung Disease (GOLD), Global Strategy for Prevention, Diagnosis and Management of COPD (2024), for: the grades of airflow obstruction by FEV1 after a bronchodilator.'
+  where:
+    sections:
+    - '25.1'
+    - '25.4'
+    - '43'
+    impairments:
+    - copd
+    rule_ids:
+    - UW-COPD-001
+    - UW-COPD-002
+    - UW-COPD-003
+    - UW-COPD-004
+  value:
+    body: Global Initiative for Chronic Obstructive Lung Disease
+    abbreviation: GOLD
+    guideline: Global Strategy for Prevention, Diagnosis and Management of COPD
+    year: 2024
+    locator: the grades of airflow obstruction by FEV1 after a bronchodilator
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.aasm
+  kind: citation
+  what: 'The manual cites American Academy of Sleep Medicine (AASM), Clinical Guideline for the Evaluation, Management and Long-term Care of Obstructive Sleep Apnea in Adults (2009), for: the severity grades by apnoea-hypopnoea index.'
+  where:
+    sections:
+    - '26.1'
+    - '26.4'
+    - '43'
+    impairments:
+    - obstructive_sleep_apnoea
+    rule_ids:
+    - UW-OSA-001
+    - UW-OSA-002
+    - UW-OSA-003
+  value:
+    body: American Academy of Sleep Medicine
+    abbreviation: AASM
+    guideline: Clinical Guideline for the Evaluation, Management and Long-term Care of Obstructive Sleep Apnea in Adults
+    year: 2009
+    locator: the severity grades by apnoea-hypopnoea index
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.kdigo
+  kind: citation
+  what: 'The manual cites Kidney Disease: Improving Global Outcomes (KDIGO), Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), for: the GFR categories G1 to G5 and the albuminuria categories A1 to A3.'
+  where:
+    sections:
+    - '27.1'
+    - '27.4'
+    - '28.1'
+    - '28.4'
+    - '43'
+    impairments:
+    - chronic_kidney_disease
+    - albuminuria
+    rule_ids:
+    - UW-CKD-001
+    - UW-CKD-002
+    - UW-CKD-003
+    - UW-CKD-004
+    - UW-ALB-001
+    - UW-ALB-002
+  value:
+    body: 'Kidney Disease: Improving Global Outcomes'
+    abbreviation: KDIGO
+    guideline: Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease
+    year: 2024
+    locator: the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.aasld_hbv
+  kind: citation
+  what: 'The manual cites American Association for the Study of Liver Diseases (AASLD), Update on Prevention, Diagnosis, and Treatment of Chronic Hepatitis B: AASLD 2018 Hepatitis B Guidance (2018), for: the HBV DNA levels used to decide on treatment.'
+  where:
+    sections:
+    - '29.1'
+    - '29.4'
+    - '43'
+    impairments:
+    - chronic_hepatitis_b
+    rule_ids:
+    - UW-HBV-001
+    - UW-HBV-002
+    - UW-HBV-003
+  value:
+    body: American Association for the Study of Liver Diseases
+    abbreviation: AASLD
+    guideline: 'Update on Prevention, Diagnosis, and Treatment of Chronic Hepatitis B: AASLD 2018 Hepatitis B Guidance'
+    year: 2018
+    locator: the HBV DNA levels used to decide on treatment
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.hcv_guidance
+  kind: citation
+  what: 'The manual cites American Association for the Study of Liver Diseases and Infectious Diseases Society of America (AASLD-IDSA), HCV Guidance: Recommendations for Testing, Managing, and Treating Hepatitis C (2023), for: the definition of sustained virologic response 12 weeks after treatment.'
+  where:
+    sections:
+    - '30.1'
+    - '30.4'
+    - '43'
+    impairments:
+    - chronic_hepatitis_c
+    rule_ids:
+    - UW-HCV-001
+    - UW-HCV-002
+  value:
+    body: American Association for the Study of Liver Diseases and Infectious Diseases Society of America
+    abbreviation: AASLD-IDSA
+    guideline: 'HCV Guidance: Recommendations for Testing, Managing, and Treating Hepatitis C'
+    year: 2023
+    locator: the definition of sustained virologic response 12 weeks after treatment
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.aasld_nafld
+  kind: citation
+  what: 'The manual cites American Association for the Study of Liver Diseases (AASLD), Practice Guidance on the clinical assessment and management of nonalcoholic fatty liver disease (2023), for: the FIB-4 cut-offs of 1.3 and 2.67 for the risk of advanced fibrosis.'
+  where:
+    sections:
+    - '31.1'
+    - '31.4'
+    - '43'
+    impairments:
+    - fatty_liver_disease
+    rule_ids:
+    - UW-FLD-001
+    - UW-FLD-002
+    - UW-FLD-003
+  value:
+    body: American Association for the Study of Liver Diseases
+    abbreviation: AASLD
+    guideline: Practice Guidance on the clinical assessment and management of nonalcoholic fatty liver disease
+    year: 2023
+    locator: the FIB-4 cut-offs of 1.3 and 2.67 for the risk of advanced fibrosis
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.aasld_transplant
+  kind: citation
+  what: 'The manual cites American Association for the Study of Liver Diseases and American Society of Transplantation (AASLD/AST), Evaluation for Liver Transplantation in Adults: 2013 Practice Guideline (2013), for: the recommendation to evaluate at a MELD score of 15 or more.'
+  where:
+    sections:
+    - '32.1'
+    - '32.4'
+    - '43'
+    impairments:
+    - cirrhosis
+    rule_ids:
+    - UW-CIR-001
+    - UW-CIR-002
+  value:
+    body: American Association for the Study of Liver Diseases and American Society of Transplantation
+    abbreviation: AASLD/AST
+    guideline: 'Evaluation for Liver Transplantation in Adults: 2013 Practice Guideline'
+    year: 2013
+    locator: the recommendation to evaluate at a MELD score of 15 or more
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.aga_uc
+  kind: citation
+  what: 'The manual cites American Gastroenterological Association (AGA), Clinical Practice Guideline on the Role of Biomarkers for the Management of Ulcerative Colitis (2023), for: the faecal calprotectin cut-off of 150 mcg/g.'
+  where:
+    sections:
+    - '33.1'
+    - '33.4'
+    - '43'
+    impairments:
+    - ulcerative_colitis
+    rule_ids:
+    - UW-UC-001
+    - UW-UC-002
+  value:
+    body: American Gastroenterological Association
+    abbreviation: AGA
+    guideline: Clinical Practice Guideline on the Role of Biomarkers for the Management of Ulcerative Colitis
+    year: 2023
+    locator: the faecal calprotectin cut-off of 150 mcg/g
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.who_anaemia
+  kind: citation
+  what: 'The manual cites World Health Organization (WHO), Haemoglobin concentrations for the diagnosis of anaemia and assessment of severity (2011), for: the table of haemoglobin levels for mild, moderate and severe anaemia.'
+  where:
+    sections:
+    - '34.1'
+    - '34.4'
+    - '43'
+    impairments:
+    - anaemia
+    rule_ids:
+    - UW-ANA-001
+    - UW-ANA-002
+  value:
+    body: World Health Organization
+    abbreviation: WHO
+    guideline: Haemoglobin concentrations for the diagnosis of anaemia and assessment of severity
+    year: 2011
+    locator: the table of haemoglobin levels for mild, moderate and severe anaemia
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.wfh
+  kind: citation
+  what: 'The manual cites World Federation of Hemophilia (WFH), Guidelines for the Management of Hemophilia, third edition (2020), for: the severity classes by clotting factor level.'
+  where:
+    sections:
+    - '35.1'
+    - '35.4'
+    - '43'
+    impairments:
+    - haemophilia
+    rule_ids:
+    - UW-HEM-001
+    - UW-HEM-002
+    - UW-HEM-003
+  value:
+    body: World Federation of Hemophilia
+    abbreviation: WFH
+    guideline: Guidelines for the Management of Hemophilia, third edition
+    year: 2020
+    locator: the severity classes by clotting factor level
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.cdc_hiv
+  kind: citation
+  what: 'The manual cites Centers for Disease Control and Prevention (CDC), Revised Surveillance Case Definition for HIV Infection, United States (2014), for: the stages of infection by CD4 lymphocyte count.'
+  where:
+    sections:
+    - '36.1'
+    - '36.4'
+    - '43'
+    impairments:
+    - hiv_infection
+    rule_ids:
+    - UW-HIV-001
+    - UW-HIV-002
+    - UW-HIV-003
+  value:
+    body: Centers for Disease Control and Prevention
+    abbreviation: CDC
+    guideline: Revised Surveillance Case Definition for HIV Infection, United States
+    year: 2014
+    locator: the stages of infection by CD4 lymphocyte count
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.nice_depression
+  kind: citation
+  what: 'The manual cites National Institute for Health and Care Excellence (NICE), Depression in adults: treatment and management, guideline NG222 (2022), for: the definition of less severe and more severe depression by PHQ-9 score.'
+  where:
+    sections:
+    - '37.1'
+    - '37.4'
+    - '43'
+    impairments:
+    - depression
+    rule_ids:
+    - UW-DEP-001
+    - UW-DEP-002
+  value:
+    body: National Institute for Health and Care Excellence
+    abbreviation: NICE
+    guideline: 'Depression in adults: treatment and management, guideline NG222'
+    year: 2022
+    locator: the definition of less severe and more severe depression by PHQ-9 score
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.ilae
+  kind: citation
+  what: 'The manual cites International League Against Epilepsy (ILAE), A practical clinical definition of epilepsy, official report (2014), for: the definition of resolved epilepsy after ten seizure-free years.'
+  where:
+    sections:
+    - '38.1'
+    - '38.4'
+    - '43'
+    impairments:
+    - epilepsy
+    rule_ids:
+    - UW-EPI-001
+    - UW-EPI-002
+    - UW-EPI-003
+  value:
+    body: International League Against Epilepsy
+    abbreviation: ILAE
+    guideline: A practical clinical definition of epilepsy, official report
+    year: 2014
+    locator: the definition of resolved epilepsy after ten seizure-free years
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.acr_ra
+  kind: citation
+  what: 'The manual cites American College of Rheumatology (ACR), 2019 Update of the Recommended Rheumatoid Arthritis Disease Activity Measures (2019), for: the DAS28 cut-offs for remission, low, moderate and high disease activity.'
+  where:
+    sections:
+    - '39.1'
+    - '39.4'
+    - '43'
+    impairments:
+    - rheumatoid_arthritis
+    rule_ids:
+    - UW-RA-001
+    - UW-RA-002
+    - UW-RA-003
+    - UW-RA-004
+  value:
+    body: American College of Rheumatology
+    abbreviation: ACR
+    guideline: 2019 Update of the Recommended Rheumatoid Arthritis Disease Activity Measures
+    year: 2019
+    locator: the DAS28 cut-offs for remission, low, moderate and high disease activity
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.who_bone
+  kind: citation
+  what: 'The manual cites World Health Organization (WHO), Assessment of fracture risk and its application to screening for postmenopausal osteoporosis, WHO Technical Report Series 843 (1994), for: the definition of osteoporosis as a T-score of -2.5 or lower.'
+  where:
+    sections:
+    - '40.1'
+    - '40.4'
+    - '43'
+    impairments:
+    - osteoporosis
+    rule_ids:
+    - UW-OST-001
+  value:
+    body: World Health Organization
+    abbreviation: WHO
+    guideline: Assessment of fracture risk and its application to screening for postmenopausal osteoporosis, WHO Technical Report Series 843
+    year: 1994
+    locator: the definition of osteoporosis as a T-score of -2.5 or lower
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: citation.ajcc
+  kind: citation
+  what: 'The manual cites American Joint Committee on Cancer (AJCC), Cancer Staging Manual, eighth edition, melanoma of the skin (2017), for: the T categories by tumour thickness.'
+  where:
+    sections:
+    - '41.1'
+    - '41.4'
+    - '43'
+    impairments:
+    - melanoma
+    rule_ids:
+    - UW-MEL-001
+    - UW-MEL-002
+    - UW-MEL-003
+    - UW-MEL-004
+  value:
+    body: American Joint Committee on Cancer
+    abbreviation: AJCC
+    guideline: Cancer Staging Manual, eighth edition, melanoma of the skin
+    year: 2017
+    locator: the T categories by tumour thickness
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-DM-001.upper
+  kind: threshold
+  what: 'Type 2 diabetes mellitus: a band edge at HbA1c 7.0 %. UW-DM-001: HbA1c below 7.0 %. UW-DM-002: HbA1c from 7.0 to below 8.0 %.'
+  where:
+    sections:
+    - '2.4'
+    impairments:
+    - type_2_diabetes
+    rule_ids:
+    - UW-DM-001
+    - UW-DM-002
+  value: '7.0'
+  cited:
+  - ADA, Standards of Care in Diabetes (2024), section 6, Glycemic Goals and Hypoglycemia (A1C goals for adults)
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-DM-002.upper
+  kind: threshold
+  what: 'Type 2 diabetes mellitus: a band edge at HbA1c 8.0 %. UW-DM-002: HbA1c from 7.0 to below 8.0 %. UW-DM-003: HbA1c from 8.0 to below 9.0 %.'
+  where:
+    sections:
+    - '2.4'
+    impairments:
+    - type_2_diabetes
+    rule_ids:
+    - UW-DM-002
+    - UW-DM-003
+  value: '8.0'
+  cited:
+  - ADA, Standards of Care in Diabetes (2024), section 6, Glycemic Goals and Hypoglycemia (A1C goals for adults)
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-DI-001.upper
+  kind: threshold
+  what: 'Type 1 diabetes mellitus: a band edge at HbA1c 7.0 %. UW-DI-001: HbA1c below 7.0 %. UW-DI-002: HbA1c from 7.0 to below 8.0 %.'
+  where:
+    sections:
+    - '3.4'
+    impairments:
+    - type_1_diabetes
+    rule_ids:
+    - UW-DI-001
+    - UW-DI-002
+  value: '7.0'
+  cited:
+  - ADA, Standards of Care in Diabetes (2024), section 6, Glycemic Goals and Hypoglycemia (A1C goals for adults)
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-DI-002.upper
+  kind: threshold
+  what: 'Type 1 diabetes mellitus: a band edge at HbA1c 8.0 %. UW-DI-002: HbA1c from 7.0 to below 8.0 %. UW-DI-003: HbA1c from 8.0 to below 9.0 %.'
+  where:
+    sections:
+    - '3.4'
+    impairments:
+    - type_1_diabetes
+    rule_ids:
+    - UW-DI-002
+    - UW-DI-003
+  value: '8.0'
+  cited:
+  - ADA, Standards of Care in Diabetes (2024), section 6, Glycemic Goals and Hypoglycemia (A1C goals for adults)
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-PD-001.lower
+  kind: threshold
+  what: 'Prediabetes: a band edge at HbA1c 5.7 %. UW-PD-001: HbA1c from 5.7 to below 6.5 %.'
+  where:
+    sections:
+    - '4.4'
+    impairments:
+    - prediabetes
+    rule_ids:
+    - UW-PD-001
+  value: '5.7'
+  cited:
+  - ADA, Standards of Care in Diabetes (2024), section 2, Diagnosis and Classification of Diabetes (A1C criteria for prediabetes and diabetes)
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-PD-001.upper
+  kind: threshold
+  what: 'Prediabetes: a band edge at HbA1c 6.5 %. UW-PD-001: HbA1c from 5.7 to below 6.5 %.'
+  where:
+    sections:
+    - '4.4'
+    impairments:
+    - prediabetes
+    rule_ids:
+    - UW-PD-001
+  value: '6.5'
+  cited:
+  - ADA, Standards of Care in Diabetes (2024), section 2, Diagnosis and Classification of Diabetes (A1C criteria for prediabetes and diabetes)
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-BMI-001.upper
+  kind: threshold
+  what: 'Build: underweight and obesity: a band edge at body mass index 16.0 kg/m2. UW-BMI-001: body mass index below 16.0 kg/m2. UW-BMI-002: body mass index from 16.0 to below 18.5 kg/m2.'
+  where:
+    sections:
+    - '5.4'
+    impairments:
+    - build
+    rule_ids:
+    - UW-BMI-001
+    - UW-BMI-002
+  value: '16.0'
+  cited:
+  - 'WHO, Obesity: preventing and managing the global epidemic, WHO Technical Report Series 894 (2000), the classification of adults according to body mass index'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-BMI-002.upper
+  kind: threshold
+  what: 'Build: underweight and obesity: a band edge at body mass index 18.5 kg/m2. UW-BMI-002: body mass index from 16.0 to below 18.5 kg/m2.'
+  where:
+    sections:
+    - '5.4'
+    impairments:
+    - build
+    rule_ids:
+    - UW-BMI-002
+  value: '18.5'
+  cited:
+  - 'WHO, Obesity: preventing and managing the global epidemic, WHO Technical Report Series 894 (2000), the classification of adults according to body mass index'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-BMI-003.lower
+  kind: threshold
+  what: 'Build: underweight and obesity: a band edge at body mass index 35.0 kg/m2. UW-BMI-003: body mass index from 35.0 to below 40.0 kg/m2.'
+  where:
+    sections:
+    - '5.4'
+    impairments:
+    - build
+    rule_ids:
+    - UW-BMI-003
+  value: '35.0'
+  cited:
+  - 'WHO, Obesity: preventing and managing the global epidemic, WHO Technical Report Series 894 (2000), the classification of adults according to body mass index'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-BMI-003.upper
+  kind: threshold
+  what: 'Build: underweight and obesity: a band edge at body mass index 40.0 kg/m2. UW-BMI-003: body mass index from 35.0 to below 40.0 kg/m2. UW-BMI-004: body mass index of 40.0 kg/m2 or more.'
+  where:
+    sections:
+    - '5.4'
+    impairments:
+    - build
+    rule_ids:
+    - UW-BMI-003
+    - UW-BMI-004
+  value: '40.0'
+  cited:
+  - 'WHO, Obesity: preventing and managing the global epidemic, WHO Technical Report Series 894 (2000), the classification of adults according to body mass index'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-LDL-001.lower
+  kind: threshold
+  what: 'Raised LDL cholesterol: a band edge at LDL cholesterol 160 mg/dL. UW-LDL-001: LDL cholesterol from 160 to below 190 mg/dL.'
+  where:
+    sections:
+    - '6.4'
+    impairments:
+    - raised_ldl_cholesterol
+    rule_ids:
+    - UW-LDL-001
+  value: '160'
+  cited:
+  - AHA/ACC, Guideline on the Management of Blood Cholesterol (2018), severe primary hypercholesterolemia, the risk-enhancing factors and severe hypertriglyceridemia
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-LDL-001.upper
+  kind: threshold
+  what: 'Raised LDL cholesterol: a band edge at LDL cholesterol 190 mg/dL. UW-LDL-001: LDL cholesterol from 160 to below 190 mg/dL. UW-LDL-002: LDL cholesterol of 190 mg/dL or more.'
+  where:
+    sections:
+    - '6.4'
+    impairments:
+    - raised_ldl_cholesterol
+    rule_ids:
+    - UW-LDL-001
+    - UW-LDL-002
+  value: '190'
+  cited:
+  - AHA/ACC, Guideline on the Management of Blood Cholesterol (2018), severe primary hypercholesterolemia, the risk-enhancing factors and severe hypertriglyceridemia
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-TG-001.lower
+  kind: threshold
+  what: 'Raised triglycerides: a band edge at fasting triglycerides 175 mg/dL. UW-TG-001: fasting triglycerides from 175 to below 500 mg/dL.'
+  where:
+    sections:
+    - '7.4'
+    impairments:
+    - raised_triglycerides
+    rule_ids:
+    - UW-TG-001
+  value: '175'
+  cited:
+  - AHA/ACC, Guideline on the Management of Blood Cholesterol (2018), severe primary hypercholesterolemia, the risk-enhancing factors and severe hypertriglyceridemia
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-TG-001.upper
+  kind: threshold
+  what: 'Raised triglycerides: a band edge at fasting triglycerides 500 mg/dL. UW-TG-001: fasting triglycerides from 175 to below 500 mg/dL. UW-TG-002: fasting triglycerides of 500 mg/dL or more.'
+  where:
+    sections:
+    - '7.4'
+    impairments:
+    - raised_triglycerides
+    rule_ids:
+    - UW-TG-001
+    - UW-TG-002
+  value: '500'
+  cited:
+  - AHA/ACC, Guideline on the Management of Blood Cholesterol (2018), severe primary hypercholesterolemia, the risk-enhancing factors and severe hypertriglyceridemia
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-GOUT-001.upper
+  kind: threshold
+  what: 'Gout: a band edge at serum urate 6.0 mg/dL. UW-GOUT-001: serum urate below 6.0 mg/dL. UW-GOUT-002: serum urate of 6.0 mg/dL or more.'
+  where:
+    sections:
+    - '8.4'
+    impairments:
+    - gout
+    rule_ids:
+    - UW-GOUT-001
+    - UW-GOUT-002
+  value: '6.0'
+  cited:
+  - ACR, Guideline for the Management of Gout (2020), the serum urate target for urate-lowering therapy
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-THY-001.upper
+  kind: threshold
+  what: 'Hypothyroidism: a band edge at TSH 10.0 mIU/L. UW-THY-001: TSH below 10.0 mIU/L. UW-THY-002: TSH of 10.0 mIU/L or more.'
+  where:
+    sections:
+    - '9.4'
+    impairments:
+    - hypothyroidism
+    rule_ids:
+    - UW-THY-001
+    - UW-THY-002
+  value: '10.0'
+  cited:
+  - AACE/ATA, Clinical Practice Guidelines for Hypothyroidism in Adults (2012), the recommendation on treating a TSH above 10 mIU/L
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HT-001.lower
+  kind: threshold
+  what: 'Hypertension: a band edge at systolic blood pressure 130 mmHg. UW-HT-001: systolic blood pressure from 130 to below 140 mmHg.'
+  where:
+    sections:
+    - '10.4'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-001
+  value: '130'
+  cited:
+  - ACC/AHA, Guideline for the Prevention, Detection, Evaluation, and Management of High Blood Pressure in Adults (2017), the table of blood pressure categories and the section on hypertensive crises
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HT-001.upper
+  kind: threshold
+  what: 'Hypertension: a band edge at systolic blood pressure 140 mmHg. UW-HT-001: systolic blood pressure from 130 to below 140 mmHg. UW-HT-002: systolic blood pressure from 140 to below 160 mmHg.'
+  where:
+    sections:
+    - '10.4'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-001
+    - UW-HT-002
+  value: '140'
+  cited:
+  - ACC/AHA, Guideline for the Prevention, Detection, Evaluation, and Management of High Blood Pressure in Adults (2017), the table of blood pressure categories and the section on hypertensive crises
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HT-003.upper
+  kind: threshold
+  what: 'Hypertension: a band edge at systolic blood pressure 180 mmHg. UW-HT-003: systolic blood pressure from 160 to below 180 mmHg. UW-HT-004: systolic blood pressure of 180 mmHg or more.'
+  where:
+    sections:
+    - '10.4'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-003
+    - UW-HT-004
+  value: '180'
+  cited:
+  - ACC/AHA, Guideline for the Prevention, Detection, Evaluation, and Management of High Blood Pressure in Adults (2017), the table of blood pressure categories and the section on hypertensive crises
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HT-005.lower
+  kind: threshold
+  what: 'Hypertension: a band edge at diastolic blood pressure 120 mmHg. UW-HT-005: diastolic blood pressure of 120 mmHg or more.'
+  where:
+    sections:
+    - '10.4'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-005
+  value: '120'
+  cited:
+  - ACC/AHA, Guideline for the Prevention, Detection, Evaluation, and Management of High Blood Pressure in Adults (2017), the table of blood pressure categories and the section on hypertensive crises
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-MI-001.upper
+  kind: threshold
+  what: 'Myocardial infarction: a band edge at time since the heart attack 12 months. UW-MI-001: time since the heart attack below 12 months. UW-MI-002: time since the heart attack from 12 to below 60 months.'
+  where:
+    sections:
+    - '11.4'
+    impairments:
+    - myocardial_infarction
+    rule_ids:
+    - UW-MI-001
+    - UW-MI-002
+  value: '12'
+  cited:
+  - ACC/AHA, Guideline Focused Update on Duration of Dual Antiplatelet Therapy in Patients With Coronary Artery Disease (2016), the recommendations for at least 12 months of treatment after an acute coronary syndrome
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HF-001.upper
+  kind: threshold
+  what: 'Heart failure: a band edge at left ventricular ejection fraction 40 %. UW-HF-001: left ventricular ejection fraction of 40 % or less. UW-HF-002: left ventricular ejection fraction above 40 and below 50 %.'
+  where:
+    sections:
+    - '12.4'
+    impairments:
+    - heart_failure
+    rule_ids:
+    - UW-HF-001
+    - UW-HF-002
+  value: '40'
+  cited:
+  - AHA/ACC/HFSA, Guideline for the Management of Heart Failure (2022), the classification of heart failure by left ventricular ejection fraction
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HF-002.upper
+  kind: threshold
+  what: 'Heart failure: a band edge at left ventricular ejection fraction 50 %. UW-HF-002: left ventricular ejection fraction above 40 and below 50 %. UW-HF-003: left ventricular ejection fraction of 50 % or more.'
+  where:
+    sections:
+    - '12.4'
+    impairments:
+    - heart_failure
+    rule_ids:
+    - UW-HF-002
+    - UW-HF-003
+  value: '50'
+  cited:
+  - AHA/ACC/HFSA, Guideline for the Management of Heart Failure (2022), the classification of heart failure by left ventricular ejection fraction
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AF-001.upper
+  kind: threshold
+  what: 'Atrial fibrillation: a band edge at CHA2DS2-VASc score 2 points. UW-AF-001: CHA2DS2-VASc score below 2 points. UW-AF-002: CHA2DS2-VASc score from 2 to below 4 points.'
+  where:
+    sections:
+    - '13.4'
+    impairments:
+    - atrial_fibrillation
+    rule_ids:
+    - UW-AF-001
+    - UW-AF-002
+  value: '2'
+  cited:
+  - ACC/AHA/ACCP/HRS, Guideline for the Diagnosis and Management of Atrial Fibrillation (2023), the recommendations on stroke risk scores and anticoagulation
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AS-001.lower
+  kind: threshold
+  what: 'Aortic stenosis: a band edge at peak aortic jet velocity 2.0 m/s. UW-AS-001: peak aortic jet velocity from 2.0 to below 3.0 m/s.'
+  where:
+    sections:
+    - '14.4'
+    impairments:
+    - aortic_stenosis
+    rule_ids:
+    - UW-AS-001
+  value: '2.0'
+  cited:
+  - ACC/AHA, Guideline for the Management of Patients With Valvular Heart Disease (2020), the stages of aortic stenosis by peak aortic jet velocity
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AS-001.upper
+  kind: threshold
+  what: 'Aortic stenosis: a band edge at peak aortic jet velocity 3.0 m/s. UW-AS-001: peak aortic jet velocity from 2.0 to below 3.0 m/s. UW-AS-002: peak aortic jet velocity from 3.0 to below 4.0 m/s.'
+  where:
+    sections:
+    - '14.4'
+    impairments:
+    - aortic_stenosis
+    rule_ids:
+    - UW-AS-001
+    - UW-AS-002
+  value: '3.0'
+  cited:
+  - ACC/AHA, Guideline for the Management of Patients With Valvular Heart Disease (2020), the stages of aortic stenosis by peak aortic jet velocity
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AS-002.upper
+  kind: threshold
+  what: 'Aortic stenosis: a band edge at peak aortic jet velocity 4.0 m/s. UW-AS-002: peak aortic jet velocity from 3.0 to below 4.0 m/s. UW-AS-003: peak aortic jet velocity of 4.0 m/s or more.'
+  where:
+    sections:
+    - '14.4'
+    impairments:
+    - aortic_stenosis
+    rule_ids:
+    - UW-AS-002
+    - UW-AS-003
+  value: '4.0'
+  cited:
+  - ACC/AHA, Guideline for the Management of Patients With Valvular Heart Disease (2020), the stages of aortic stenosis by peak aortic jet velocity
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HCM-001.lower
+  kind: threshold
+  what: 'Hypertrophic cardiomyopathy: a band edge at maximum left ventricular wall thickness 15 mm. UW-HCM-001: maximum left ventricular wall thickness from 15 to below 30 mm.'
+  where:
+    sections:
+    - '15.4'
+    impairments:
+    - hypertrophic_cardiomyopathy
+    rule_ids:
+    - UW-HCM-001
+  value: '15'
+  cited:
+  - AHA/ACC, Guideline for the Diagnosis and Treatment of Patients With Hypertrophic Cardiomyopathy (2020), the diagnostic wall thickness and the risk markers for sudden cardiac death
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HCM-001.upper
+  kind: threshold
+  what: 'Hypertrophic cardiomyopathy: a band edge at maximum left ventricular wall thickness 30 mm. UW-HCM-001: maximum left ventricular wall thickness from 15 to below 30 mm. UW-HCM-002: maximum left ventricular wall thickness of 30 mm or more.'
+  where:
+    sections:
+    - '15.4'
+    impairments:
+    - hypertrophic_cardiomyopathy
+    rule_ids:
+    - UW-HCM-001
+    - UW-HCM-002
+  value: '30'
+  cited:
+  - AHA/ACC, Guideline for the Diagnosis and Treatment of Patients With Hypertrophic Cardiomyopathy (2020), the diagnostic wall thickness and the risk markers for sudden cardiac death
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AAA-001.lower
+  kind: threshold
+  what: 'Abdominal aortic aneurysm: a band edge at abdominal aortic diameter 3.0 cm. UW-AAA-001: abdominal aortic diameter from 3.0 to below 4.0 cm.'
+  where:
+    sections:
+    - '16.4'
+    impairments:
+    - abdominal_aortic_aneurysm
+    rule_ids:
+    - UW-AAA-001
+  value: '3.0'
+  cited:
+  - SVS, Practice guidelines on the care of patients with an abdominal aortic aneurysm (2018), the surveillance intervals by diameter and the threshold for elective repair
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AAA-001.upper
+  kind: threshold
+  what: 'Abdominal aortic aneurysm: a band edge at abdominal aortic diameter 4.0 cm. UW-AAA-001: abdominal aortic diameter from 3.0 to below 4.0 cm. UW-AAA-002: abdominal aortic diameter from 4.0 to below 5.5 cm.'
+  where:
+    sections:
+    - '16.4'
+    impairments:
+    - abdominal_aortic_aneurysm
+    rule_ids:
+    - UW-AAA-001
+    - UW-AAA-002
+  value: '4.0'
+  cited:
+  - SVS, Practice guidelines on the care of patients with an abdominal aortic aneurysm (2018), the surveillance intervals by diameter and the threshold for elective repair
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AAA-002.upper
+  kind: threshold
+  what: 'Abdominal aortic aneurysm: a band edge at abdominal aortic diameter 5.5 cm. UW-AAA-002: abdominal aortic diameter from 4.0 to below 5.5 cm. UW-AAA-003: abdominal aortic diameter of 5.5 cm or more.'
+  where:
+    sections:
+    - '16.4'
+    impairments:
+    - abdominal_aortic_aneurysm
+    rule_ids:
+    - UW-AAA-002
+    - UW-AAA-003
+  value: '5.5'
+  cited:
+  - SVS, Practice guidelines on the care of patients with an abdominal aortic aneurysm (2018), the surveillance intervals by diameter and the threshold for elective repair
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-PAD-001.upper
+  kind: threshold
+  what: 'Peripheral artery disease: a band edge at resting ankle-brachial index 0.90. UW-PAD-001: resting ankle-brachial index of 0.90 or less.'
+  where:
+    sections:
+    - '17.4'
+    impairments:
+    - peripheral_artery_disease
+    rule_ids:
+    - UW-PAD-001
+  value: '0.90'
+  cited:
+  - AHA/ACC, Guideline on the Management of Patients With Lower Extremity Peripheral Artery Disease (2016), the interpretation of the resting ankle-brachial index
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-PAD-002.lower
+  kind: threshold
+  what: 'Peripheral artery disease: a band edge at resting ankle-brachial index 1.40. UW-PAD-002: resting ankle-brachial index above 1.40.'
+  where:
+    sections:
+    - '17.4'
+    impairments:
+    - peripheral_artery_disease
+    rule_ids:
+    - UW-PAD-002
+  value: '1.40'
+  cited:
+  - AHA/ACC, Guideline on the Management of Patients With Lower Extremity Peripheral Artery Disease (2016), the interpretation of the resting ankle-brachial index
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CAS-001.lower
+  kind: threshold
+  what: 'Carotid artery stenosis: a band edge at carotid artery stenosis 50 %. UW-CAS-001: carotid artery stenosis from 50 to below 70 %.'
+  where:
+    sections:
+    - '18.4'
+    impairments:
+    - carotid_artery_stenosis
+    rule_ids:
+    - UW-CAS-001
+  value: '50'
+  cited:
+  - AHA/ASA, Guideline for the Prevention of Stroke in Patients With Stroke and Transient Ischemic Attack (2021), the recommendations on extracranial carotid stenosis
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CAS-001.upper
+  kind: threshold
+  what: 'Carotid artery stenosis: a band edge at carotid artery stenosis 70 %. UW-CAS-001: carotid artery stenosis from 50 to below 70 %. UW-CAS-002: carotid artery stenosis of 70 % or more.'
+  where:
+    sections:
+    - '18.4'
+    impairments:
+    - carotid_artery_stenosis
+    rule_ids:
+    - UW-CAS-001
+    - UW-CAS-002
+  value: '70'
+  cited:
+  - AHA/ASA, Guideline for the Prevention of Stroke in Patients With Stroke and Transient Ischemic Attack (2021), the recommendations on extracranial carotid stenosis
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CVA-001.upper
+  kind: threshold
+  what: 'Stroke: a band edge at NIHSS score at admission 6 points. UW-CVA-001: NIHSS score at admission below 6 points. UW-CVA-002: NIHSS score at admission of 6 points or more.'
+  where:
+    sections:
+    - '19.4'
+    impairments:
+    - stroke
+    rule_ids:
+    - UW-CVA-001
+    - UW-CVA-002
+  value: '6'
+  cited:
+  - AHA/ASA, Guidelines for the Early Management of Patients With Acute Ischemic Stroke, 2019 update (2019), the criteria for mechanical thrombectomy, among them an NIHSS score of 6 or more
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-VTE-001.upper
+  kind: threshold
+  what: 'Venous thromboembolism: a band edge at time since the clot 3 months. UW-VTE-001: time since the clot below 3 months. UW-VTE-002: time since the clot from 3 to below 12 months.'
+  where:
+    sections:
+    - '20.4'
+    impairments:
+    - venous_thromboembolism
+    rule_ids:
+    - UW-VTE-001
+    - UW-VTE-002
+  value: '3'
+  cited:
+  - CHEST, Antithrombotic Therapy for VTE Disease, second update of the CHEST guideline and expert panel report (2021), the three-month treatment phase of anticoagulation
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-TOB-002.lower
+  kind: threshold
+  what: 'Tobacco use: a band edge at lifetime smoking 20 pack-years. UW-TOB-002: lifetime smoking of 20 pack-years or more.'
+  where:
+    sections:
+    - '21.4'
+    impairments:
+    - tobacco_use
+    rule_ids:
+    - UW-TOB-002
+  value: '20'
+  cited:
+  - 'USPSTF, Lung Cancer: Screening, recommendation statement (2021), the 20 pack-year smoking history that defines the screened group'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ALC-001.lower
+  kind: threshold
+  what: 'Alcohol use: a band edge at AUDIT score 8 points. UW-ALC-001: AUDIT score from 8 to below 16 points.'
+  where:
+    sections:
+    - '22.4'
+    impairments:
+    - alcohol_use
+    rule_ids:
+    - UW-ALC-001
+  value: '8'
+  cited:
+  - 'WHO, AUDIT, the Alcohol Use Disorders Identification Test: guidelines for use in primary health care, second edition (2001), the risk zones by total AUDIT score'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ALC-001.upper
+  kind: threshold
+  what: 'Alcohol use: a band edge at AUDIT score 16 points. UW-ALC-001: AUDIT score from 8 to below 16 points. UW-ALC-002: AUDIT score from 16 to below 20 points.'
+  where:
+    sections:
+    - '22.4'
+    impairments:
+    - alcohol_use
+    rule_ids:
+    - UW-ALC-001
+    - UW-ALC-002
+  value: '16'
+  cited:
+  - 'WHO, AUDIT, the Alcohol Use Disorders Identification Test: guidelines for use in primary health care, second edition (2001), the risk zones by total AUDIT score'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ALC-002.upper
+  kind: threshold
+  what: 'Alcohol use: a band edge at AUDIT score 20 points. UW-ALC-002: AUDIT score from 16 to below 20 points. UW-ALC-003: AUDIT score of 20 points or more.'
+  where:
+    sections:
+    - '22.4'
+    impairments:
+    - alcohol_use
+    rule_ids:
+    - UW-ALC-002
+    - UW-ALC-003
+  value: '20'
+  cited:
+  - 'WHO, AUDIT, the Alcohol Use Disorders Identification Test: guidelines for use in primary health care, second edition (2001), the risk zones by total AUDIT score'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-OPI-001.upper
+  kind: threshold
+  what: 'Long-term opioid therapy: a band edge at daily opioid dose 50 MME a day. UW-OPI-001: daily opioid dose below 50 MME a day. UW-OPI-002: daily opioid dose from 50 to below 90 MME a day.'
+  where:
+    sections:
+    - '23.4'
+    impairments:
+    - long_term_opioid_therapy
+    rule_ids:
+    - UW-OPI-001
+    - UW-OPI-002
+  value: '50'
+  cited:
+  - 'CDC, Guideline for Prescribing Opioids for Chronic Pain, United States (2016), the recommendation on dosage: reassess at 50, avoid 90 morphine milligram equivalents a day or more'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-OPI-002.upper
+  kind: threshold
+  what: 'Long-term opioid therapy: a band edge at daily opioid dose 90 MME a day. UW-OPI-002: daily opioid dose from 50 to below 90 MME a day. UW-OPI-003: daily opioid dose of 90 MME a day or more.'
+  where:
+    sections:
+    - '23.4'
+    impairments:
+    - long_term_opioid_therapy
+    rule_ids:
+    - UW-OPI-002
+    - UW-OPI-003
+  value: '90'
+  cited:
+  - 'CDC, Guideline for Prescribing Opioids for Chronic Pain, United States (2016), the recommendation on dosage: reassess at 50, avoid 90 morphine milligram equivalents a day or more'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-AST-002.upper
+  kind: threshold
+  what: 'Asthma: a band edge at FEV1 60 % of predicted. UW-AST-002: FEV1 below 60 % of predicted. UW-AST-001: FEV1 of 60 % of predicted or more.'
+  where:
+    sections:
+    - '24.4'
+    impairments:
+    - asthma
+    rule_ids:
+    - UW-AST-002
+    - UW-AST-001
+  value: '60'
+  cited:
+  - GINA, Global Strategy for Asthma Management and Prevention (2023), the risk factors for exacerbations, among them an FEV1 below 60 % of predicted
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-COPD-004.upper
+  kind: threshold
+  what: 'Chronic obstructive pulmonary disease: a band edge at FEV1 after a bronchodilator 30 % of predicted. UW-COPD-004: FEV1 after a bronchodilator below 30 % of predicted. UW-COPD-003: FEV1 after a bronchodilator from 30 to below 50 % of predicted.'
+  where:
+    sections:
+    - '25.4'
+    impairments:
+    - copd
+    rule_ids:
+    - UW-COPD-004
+    - UW-COPD-003
+  value: '30'
+  cited:
+  - GOLD, Global Strategy for Prevention, Diagnosis and Management of COPD (2024), the grades of airflow obstruction by FEV1 after a bronchodilator
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-COPD-003.upper
+  kind: threshold
+  what: 'Chronic obstructive pulmonary disease: a band edge at FEV1 after a bronchodilator 50 % of predicted. UW-COPD-003: FEV1 after a bronchodilator from 30 to below 50 % of predicted. UW-COPD-002: FEV1 after a bronchodilator from 50 to below 80 % of predicted.'
+  where:
+    sections:
+    - '25.4'
+    impairments:
+    - copd
+    rule_ids:
+    - UW-COPD-003
+    - UW-COPD-002
+  value: '50'
+  cited:
+  - GOLD, Global Strategy for Prevention, Diagnosis and Management of COPD (2024), the grades of airflow obstruction by FEV1 after a bronchodilator
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-COPD-002.upper
+  kind: threshold
+  what: 'Chronic obstructive pulmonary disease: a band edge at FEV1 after a bronchodilator 80 % of predicted. UW-COPD-002: FEV1 after a bronchodilator from 50 to below 80 % of predicted. UW-COPD-001: FEV1 after a bronchodilator of 80 % of predicted or more.'
+  where:
+    sections:
+    - '25.4'
+    impairments:
+    - copd
+    rule_ids:
+    - UW-COPD-002
+    - UW-COPD-001
+  value: '80'
+  cited:
+  - GOLD, Global Strategy for Prevention, Diagnosis and Management of COPD (2024), the grades of airflow obstruction by FEV1 after a bronchodilator
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-OSA-001.lower
+  kind: threshold
+  what: 'Obstructive sleep apnoea: a band edge at apnoea-hypopnoea index 5 events per hour. UW-OSA-001: apnoea-hypopnoea index from 5 to below 15 events per hour.'
+  where:
+    sections:
+    - '26.4'
+    impairments:
+    - obstructive_sleep_apnoea
+    rule_ids:
+    - UW-OSA-001
+  value: '5'
+  cited:
+  - AASM, Clinical Guideline for the Evaluation, Management and Long-term Care of Obstructive Sleep Apnea in Adults (2009), the severity grades by apnoea-hypopnoea index
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-OSA-001.upper
+  kind: threshold
+  what: 'Obstructive sleep apnoea: a band edge at apnoea-hypopnoea index 15 events per hour. UW-OSA-001: apnoea-hypopnoea index from 5 to below 15 events per hour. UW-OSA-002: apnoea-hypopnoea index from 15 to 30 events per hour.'
+  where:
+    sections:
+    - '26.4'
+    impairments:
+    - obstructive_sleep_apnoea
+    rule_ids:
+    - UW-OSA-001
+    - UW-OSA-002
+  value: '15'
+  cited:
+  - AASM, Clinical Guideline for the Evaluation, Management and Long-term Care of Obstructive Sleep Apnea in Adults (2009), the severity grades by apnoea-hypopnoea index
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-OSA-002.upper
+  kind: threshold
+  what: 'Obstructive sleep apnoea: a band edge at apnoea-hypopnoea index 30 events per hour. UW-OSA-002: apnoea-hypopnoea index from 15 to 30 events per hour. UW-OSA-003: apnoea-hypopnoea index above 30 events per hour.'
+  where:
+    sections:
+    - '26.4'
+    impairments:
+    - obstructive_sleep_apnoea
+    rule_ids:
+    - UW-OSA-002
+    - UW-OSA-003
+  value: '30'
+  cited:
+  - AASM, Clinical Guideline for the Evaluation, Management and Long-term Care of Obstructive Sleep Apnea in Adults (2009), the severity grades by apnoea-hypopnoea index
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CKD-004.upper
+  kind: threshold
+  what: 'Chronic kidney disease: a band edge at eGFR 15 mL/min/1.73 m2. UW-CKD-004: eGFR below 15 mL/min/1.73 m2. UW-CKD-003: eGFR from 15 to below 30 mL/min/1.73 m2.'
+  where:
+    sections:
+    - '27.4'
+    impairments:
+    - chronic_kidney_disease
+    rule_ids:
+    - UW-CKD-004
+    - UW-CKD-003
+  value: '15'
+  cited:
+  - KDIGO, Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CKD-003.upper
+  kind: threshold
+  what: 'Chronic kidney disease: a band edge at eGFR 30 mL/min/1.73 m2. UW-CKD-003: eGFR from 15 to below 30 mL/min/1.73 m2. UW-CKD-002: eGFR from 30 to below 45 mL/min/1.73 m2.'
+  where:
+    sections:
+    - '27.4'
+    impairments:
+    - chronic_kidney_disease
+    rule_ids:
+    - UW-CKD-003
+    - UW-CKD-002
+  value: '30'
+  cited:
+  - KDIGO, Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CKD-002.upper
+  kind: threshold
+  what: 'Chronic kidney disease: a band edge at eGFR 45 mL/min/1.73 m2. UW-CKD-002: eGFR from 30 to below 45 mL/min/1.73 m2. UW-CKD-001: eGFR from 45 to below 60 mL/min/1.73 m2.'
+  where:
+    sections:
+    - '27.4'
+    impairments:
+    - chronic_kidney_disease
+    rule_ids:
+    - UW-CKD-002
+    - UW-CKD-001
+  value: '45'
+  cited:
+  - KDIGO, Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CKD-001.upper
+  kind: threshold
+  what: 'Chronic kidney disease: a band edge at eGFR 60 mL/min/1.73 m2. UW-CKD-001: eGFR from 45 to below 60 mL/min/1.73 m2.'
+  where:
+    sections:
+    - '27.4'
+    impairments:
+    - chronic_kidney_disease
+    rule_ids:
+    - UW-CKD-001
+  value: '60'
+  cited:
+  - KDIGO, Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ALB-001.lower
+  kind: threshold
+  what: 'Albuminuria: a band edge at urine albumin-to-creatinine ratio 30 mg/g. UW-ALB-001: urine albumin-to-creatinine ratio from 30 to 300 mg/g.'
+  where:
+    sections:
+    - '28.4'
+    impairments:
+    - albuminuria
+    rule_ids:
+    - UW-ALB-001
+  value: '30'
+  cited:
+  - KDIGO, Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ALB-001.upper
+  kind: threshold
+  what: 'Albuminuria: a band edge at urine albumin-to-creatinine ratio 300 mg/g. UW-ALB-001: urine albumin-to-creatinine ratio from 30 to 300 mg/g. UW-ALB-002: urine albumin-to-creatinine ratio above 300 mg/g.'
+  where:
+    sections:
+    - '28.4'
+    impairments:
+    - albuminuria
+    rule_ids:
+    - UW-ALB-001
+    - UW-ALB-002
+  value: '300'
+  cited:
+  - KDIGO, Clinical Practice Guideline for the Evaluation and Management of Chronic Kidney Disease (2024), the GFR categories G1 to G5 and the albuminuria categories A1 to A3
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HBV-001.upper
+  kind: threshold
+  what: 'Chronic hepatitis B: a band edge at HBV DNA 2000 IU/mL. UW-HBV-001: HBV DNA of 2000 IU/mL or less. UW-HBV-002: HBV DNA above 2000 and up to 20000 IU/mL.'
+  where:
+    sections:
+    - '29.4'
+    impairments:
+    - chronic_hepatitis_b
+    rule_ids:
+    - UW-HBV-001
+    - UW-HBV-002
+  value: '2000'
+  cited:
+  - 'AASLD, Update on Prevention, Diagnosis, and Treatment of Chronic Hepatitis B: AASLD 2018 Hepatitis B Guidance (2018), the HBV DNA levels used to decide on treatment'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HBV-002.upper
+  kind: threshold
+  what: 'Chronic hepatitis B: a band edge at HBV DNA 20000 IU/mL. UW-HBV-002: HBV DNA above 2000 and up to 20000 IU/mL. UW-HBV-003: HBV DNA above 20000 IU/mL.'
+  where:
+    sections:
+    - '29.4'
+    impairments:
+    - chronic_hepatitis_b
+    rule_ids:
+    - UW-HBV-002
+    - UW-HBV-003
+  value: '20000'
+  cited:
+  - 'AASLD, Update on Prevention, Diagnosis, and Treatment of Chronic Hepatitis B: AASLD 2018 Hepatitis B Guidance (2018), the HBV DNA levels used to decide on treatment'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HCV-001.upper
+  kind: threshold
+  what: 'Chronic hepatitis C: a band edge at time with undetectable HCV RNA after the end of treatment 12 weeks. UW-HCV-001: time with undetectable HCV RNA after the end of treatment below 12 weeks. UW-HCV-002: time with undetectable HCV RNA after the end of treatment of 12 weeks or more.'
+  where:
+    sections:
+    - '30.4'
+    impairments:
+    - chronic_hepatitis_c
+    rule_ids:
+    - UW-HCV-001
+    - UW-HCV-002
+  value: '12'
+  cited:
+  - 'AASLD-IDSA, HCV Guidance: Recommendations for Testing, Managing, and Treating Hepatitis C (2023), the definition of sustained virologic response 12 weeks after treatment'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-FLD-001.upper
+  kind: threshold
+  what: 'Fatty liver disease: a band edge at FIB-4 index 1.3. UW-FLD-001: FIB-4 index below 1.3. UW-FLD-002: FIB-4 index from 1.3 to 2.67.'
+  where:
+    sections:
+    - '31.4'
+    impairments:
+    - fatty_liver_disease
+    rule_ids:
+    - UW-FLD-001
+    - UW-FLD-002
+  value: '1.3'
+  cited:
+  - AASLD, Practice Guidance on the clinical assessment and management of nonalcoholic fatty liver disease (2023), the FIB-4 cut-offs of 1.3 and 2.67 for the risk of advanced fibrosis
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-FLD-002.upper
+  kind: threshold
+  what: 'Fatty liver disease: a band edge at FIB-4 index 2.67. UW-FLD-002: FIB-4 index from 1.3 to 2.67. UW-FLD-003: FIB-4 index above 2.67.'
+  where:
+    sections:
+    - '31.4'
+    impairments:
+    - fatty_liver_disease
+    rule_ids:
+    - UW-FLD-002
+    - UW-FLD-003
+  value: '2.67'
+  cited:
+  - AASLD, Practice Guidance on the clinical assessment and management of nonalcoholic fatty liver disease (2023), the FIB-4 cut-offs of 1.3 and 2.67 for the risk of advanced fibrosis
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-CIR-001.upper
+  kind: threshold
+  what: 'Cirrhosis of the liver: a band edge at MELD score 15 points. UW-CIR-001: MELD score below 15 points. UW-CIR-002: MELD score of 15 points or more.'
+  where:
+    sections:
+    - '32.4'
+    impairments:
+    - cirrhosis
+    rule_ids:
+    - UW-CIR-001
+    - UW-CIR-002
+  value: '15'
+  cited:
+  - 'AASLD/AST, Evaluation for Liver Transplantation in Adults: 2013 Practice Guideline (2013), the recommendation to evaluate at a MELD score of 15 or more'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-UC-001.upper
+  kind: threshold
+  what: 'Ulcerative colitis: a band edge at faecal calprotectin 150 mcg/g. UW-UC-001: faecal calprotectin below 150 mcg/g. UW-UC-002: faecal calprotectin of 150 mcg/g or more.'
+  where:
+    sections:
+    - '33.4'
+    impairments:
+    - ulcerative_colitis
+    rule_ids:
+    - UW-UC-001
+    - UW-UC-002
+  value: '150'
+  cited:
+  - AGA, Clinical Practice Guideline on the Role of Biomarkers for the Management of Ulcerative Colitis (2023), the faecal calprotectin cut-off of 150 mcg/g
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ANA-002.upper
+  kind: threshold
+  what: 'Anaemia: a band edge at haemoglobin 8.0 g/dL. UW-ANA-002: haemoglobin below 8.0 g/dL. UW-ANA-001: haemoglobin from 8.0 to below 11.0 g/dL.'
+  where:
+    sections:
+    - '34.4'
+    impairments:
+    - anaemia
+    rule_ids:
+    - UW-ANA-002
+    - UW-ANA-001
+  value: '8.0'
+  cited:
+  - WHO, Haemoglobin concentrations for the diagnosis of anaemia and assessment of severity (2011), the table of haemoglobin levels for mild, moderate and severe anaemia
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-ANA-001.upper
+  kind: threshold
+  what: 'Anaemia: a band edge at haemoglobin 11.0 g/dL. UW-ANA-001: haemoglobin from 8.0 to below 11.0 g/dL.'
+  where:
+    sections:
+    - '34.4'
+    impairments:
+    - anaemia
+    rule_ids:
+    - UW-ANA-001
+  value: '11.0'
+  cited:
+  - WHO, Haemoglobin concentrations for the diagnosis of anaemia and assessment of severity (2011), the table of haemoglobin levels for mild, moderate and severe anaemia
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HEM-001.upper
+  kind: threshold
+  what: 'Haemophilia: a band edge at clotting factor level 1 IU/dL. UW-HEM-001: clotting factor level below 1 IU/dL. UW-HEM-002: clotting factor level from 1 to 5 IU/dL.'
+  where:
+    sections:
+    - '35.4'
+    impairments:
+    - haemophilia
+    rule_ids:
+    - UW-HEM-001
+    - UW-HEM-002
+  value: '1'
+  cited:
+  - WFH, Guidelines for the Management of Hemophilia, third edition (2020), the severity classes by clotting factor level
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HEM-002.upper
+  kind: threshold
+  what: 'Haemophilia: a band edge at clotting factor level 5 IU/dL. UW-HEM-002: clotting factor level from 1 to 5 IU/dL. UW-HEM-003: clotting factor level above 5 and below 40 IU/dL.'
+  where:
+    sections:
+    - '35.4'
+    impairments:
+    - haemophilia
+    rule_ids:
+    - UW-HEM-002
+    - UW-HEM-003
+  value: '5'
+  cited:
+  - WFH, Guidelines for the Management of Hemophilia, third edition (2020), the severity classes by clotting factor level
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HEM-003.upper
+  kind: threshold
+  what: 'Haemophilia: a band edge at clotting factor level 40 IU/dL. UW-HEM-003: clotting factor level above 5 and below 40 IU/dL.'
+  where:
+    sections:
+    - '35.4'
+    impairments:
+    - haemophilia
+    rule_ids:
+    - UW-HEM-003
+  value: '40'
+  cited:
+  - WFH, Guidelines for the Management of Hemophilia, third edition (2020), the severity classes by clotting factor level
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HIV-003.upper
+  kind: threshold
+  what: 'HIV infection: a band edge at CD4 count 200 cells/mm3. UW-HIV-003: CD4 count below 200 cells/mm3. UW-HIV-002: CD4 count from 200 to below 500 cells/mm3.'
+  where:
+    sections:
+    - '36.4'
+    impairments:
+    - hiv_infection
+    rule_ids:
+    - UW-HIV-003
+    - UW-HIV-002
+  value: '200'
+  cited:
+  - CDC, Revised Surveillance Case Definition for HIV Infection, United States (2014), the stages of infection by CD4 lymphocyte count
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-HIV-002.upper
+  kind: threshold
+  what: 'HIV infection: a band edge at CD4 count 500 cells/mm3. UW-HIV-002: CD4 count from 200 to below 500 cells/mm3. UW-HIV-001: CD4 count of 500 cells/mm3 or more.'
+  where:
+    sections:
+    - '36.4'
+    impairments:
+    - hiv_infection
+    rule_ids:
+    - UW-HIV-002
+    - UW-HIV-001
+  value: '500'
+  cited:
+  - CDC, Revised Surveillance Case Definition for HIV Infection, United States (2014), the stages of infection by CD4 lymphocyte count
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-DEP-001.upper
+  kind: threshold
+  what: 'Depression: a band edge at PHQ-9 score 16 points. UW-DEP-001: PHQ-9 score below 16 points. UW-DEP-002: PHQ-9 score of 16 points or more.'
+  where:
+    sections:
+    - '37.4'
+    impairments:
+    - depression
+    rule_ids:
+    - UW-DEP-001
+    - UW-DEP-002
+  value: '16'
+  cited:
+  - 'NICE, Depression in adults: treatment and management, guideline NG222 (2022), the definition of less severe and more severe depression by PHQ-9 score'
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-EPI-002.upper
+  kind: threshold
+  what: 'Epilepsy: a band edge at time since the last seizure 10 years. UW-EPI-002: time since the last seizure from 2 to below 10 years. UW-EPI-003: time since the last seizure of 10 years or more.'
+  where:
+    sections:
+    - '38.4'
+    impairments:
+    - epilepsy
+    rule_ids:
+    - UW-EPI-002
+    - UW-EPI-003
+  value: '10'
+  cited:
+  - ILAE, A practical clinical definition of epilepsy, official report (2014), the definition of resolved epilepsy after ten seizure-free years
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-RA-001.upper
+  kind: threshold
+  what: 'Rheumatoid arthritis: a band edge at DAS28 2.6 points. UW-RA-001: DAS28 below 2.6 points. UW-RA-002: DAS28 from 2.6 to 3.2 points.'
+  where:
+    sections:
+    - '39.4'
+    impairments:
+    - rheumatoid_arthritis
+    rule_ids:
+    - UW-RA-001
+    - UW-RA-002
+  value: '2.6'
+  cited:
+  - ACR, 2019 Update of the Recommended Rheumatoid Arthritis Disease Activity Measures (2019), the DAS28 cut-offs for remission, low, moderate and high disease activity
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-RA-002.upper
+  kind: threshold
+  what: 'Rheumatoid arthritis: a band edge at DAS28 3.2 points. UW-RA-002: DAS28 from 2.6 to 3.2 points. UW-RA-003: DAS28 above 3.2 and up to 5.1 points.'
+  where:
+    sections:
+    - '39.4'
+    impairments:
+    - rheumatoid_arthritis
+    rule_ids:
+    - UW-RA-002
+    - UW-RA-003
+  value: '3.2'
+  cited:
+  - ACR, 2019 Update of the Recommended Rheumatoid Arthritis Disease Activity Measures (2019), the DAS28 cut-offs for remission, low, moderate and high disease activity
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-RA-003.upper
+  kind: threshold
+  what: 'Rheumatoid arthritis: a band edge at DAS28 5.1 points. UW-RA-003: DAS28 above 3.2 and up to 5.1 points. UW-RA-004: DAS28 above 5.1 points.'
+  where:
+    sections:
+    - '39.4'
+    impairments:
+    - rheumatoid_arthritis
+    rule_ids:
+    - UW-RA-003
+    - UW-RA-004
+  value: '5.1'
+  cited:
+  - ACR, 2019 Update of the Recommended Rheumatoid Arthritis Disease Activity Measures (2019), the DAS28 cut-offs for remission, low, moderate and high disease activity
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-OST-001.upper
+  kind: threshold
+  what: 'Osteoporosis: a band edge at bone density T-score -2.5 standard deviations. UW-OST-001: bone density T-score of -2.5 standard deviations or less.'
+  where:
+    sections:
+    - '40.4'
+    impairments:
+    - osteoporosis
+    rule_ids:
+    - UW-OST-001
+  value: '-2.5'
+  cited:
+  - WHO, Assessment of fracture risk and its application to screening for postmenopausal osteoporosis, WHO Technical Report Series 843 (1994), the definition of osteoporosis as a T-score of -2.5 or lower
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-MEL-001.upper
+  kind: threshold
+  what: 'Melanoma of the skin: a band edge at tumour thickness 1.0 mm. UW-MEL-001: tumour thickness of 1.0 mm or less. UW-MEL-002: tumour thickness above 1.0 and up to 2.0 mm.'
+  where:
+    sections:
+    - '41.4'
+    impairments:
+    - melanoma
+    rule_ids:
+    - UW-MEL-001
+    - UW-MEL-002
+  value: '1.0'
+  cited:
+  - AJCC, Cancer Staging Manual, eighth edition, melanoma of the skin (2017), the T categories by tumour thickness
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-MEL-002.upper
+  kind: threshold
+  what: 'Melanoma of the skin: a band edge at tumour thickness 2.0 mm. UW-MEL-002: tumour thickness above 1.0 and up to 2.0 mm. UW-MEL-003: tumour thickness above 2.0 and up to 4.0 mm.'
+  where:
+    sections:
+    - '41.4'
+    impairments:
+    - melanoma
+    rule_ids:
+    - UW-MEL-002
+    - UW-MEL-003
+  value: '2.0'
+  cited:
+  - AJCC, Cancer Staging Manual, eighth edition, melanoma of the skin (2017), the T categories by tumour thickness
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: threshold.UW-MEL-003.upper
+  kind: threshold
+  what: 'Melanoma of the skin: a band edge at tumour thickness 4.0 mm. UW-MEL-003: tumour thickness above 2.0 and up to 4.0 mm. UW-MEL-004: tumour thickness above 4.0 mm.'
+  where:
+    sections:
+    - '41.4'
+    impairments:
+    - melanoma
+    rule_ids:
+    - UW-MEL-003
+    - UW-MEL-004
+  value: '4.0'
+  cited:
+  - AJCC, Cancer Staging Manual, eighth edition, melanoma of the skin (2017), the T categories by tumour thickness
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.hba1c
+  kind: conversion
+  what: 'Converting units. HbA1c: A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %.'
+  where:
+    sections:
+    - '2.3'
+    - '3.3'
+    - '4.3'
+    impairments:
+    - type_2_diabetes
+    - type_1_diabetes
+    - prediabetes
+    rule_ids: []
+  value: 'A result in mmol/mol is multiplied by 0.0915 and 2.15 is added to give per cent: 53 mmol/mol is 7.0 %.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.bmi
+  kind: conversion
+  what: 'Converting units. body mass index: From pounds and inches: weight in pounds times 703, divided by the square of height in inches.'
+  where:
+    sections:
+    - '5.3'
+    impairments:
+    - build
+    rule_ids: []
+  value: 'From pounds and inches: weight in pounds times 703, divided by the square of height in inches.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.ldl_cholesterol
+  kind: conversion
+  what: 'Converting units. LDL cholesterol: A result in mmol/L is multiplied by 38.67 to give mg/dL: 4.14 mmol/L is 160 mg/dL.'
+  where:
+    sections:
+    - '6.3'
+    impairments:
+    - raised_ldl_cholesterol
+    rule_ids: []
+  value: 'A result in mmol/L is multiplied by 38.67 to give mg/dL: 4.14 mmol/L is 160 mg/dL.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.triglycerides
+  kind: conversion
+  what: 'Converting units. fasting triglycerides: A result in mmol/L is multiplied by 88.57 to give mg/dL: 2.0 mmol/L is about 177 mg/dL.'
+  where:
+    sections:
+    - '7.3'
+    impairments:
+    - raised_triglycerides
+    rule_ids: []
+  value: 'A result in mmol/L is multiplied by 88.57 to give mg/dL: 2.0 mmol/L is about 177 mg/dL.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.serum_urate
+  kind: conversion
+  what: 'Converting units. serum urate: A result in micromol/L is divided by 59.48 to give mg/dL: 357 micromol/L is 6.0 mg/dL.'
+  where:
+    sections:
+    - '8.3'
+    impairments:
+    - gout
+    rule_ids: []
+  value: 'A result in micromol/L is divided by 59.48 to give mg/dL: 357 micromol/L is 6.0 mg/dL.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.systolic_blood_pressure
+  kind: conversion
+  what: 'Converting units. systolic blood pressure: A reading in kPa is multiplied by 7.5 to give mmHg.'
+  where:
+    sections:
+    - '10.3'
+    impairments:
+    - hypertension
+    rule_ids: []
+  value: A reading in kPa is multiplied by 7.5 to give mmHg.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.diastolic_blood_pressure
+  kind: conversion
+  what: 'Converting units. diastolic blood pressure: A reading in kPa is multiplied by 7.5 to give mmHg.'
+  where:
+    sections:
+    - '10.3'
+    impairments:
+    - hypertension
+    rule_ids: []
+  value: A reading in kPa is multiplied by 7.5 to give mmHg.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.left_ventricular_wall_thickness
+  kind: conversion
+  what: 'Converting units. maximum left ventricular wall thickness: A thickness in cm is multiplied by ten to give mm.'
+  where:
+    sections:
+    - '15.3'
+    impairments:
+    - hypertrophic_cardiomyopathy
+    rule_ids: []
+  value: A thickness in cm is multiplied by ten to give mm.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.abdominal_aortic_diameter
+  kind: conversion
+  what: 'Converting units. abdominal aortic diameter: A diameter in mm is divided by ten to give cm.'
+  where:
+    sections:
+    - '16.3'
+    impairments:
+    - abdominal_aortic_aneurysm
+    rule_ids: []
+  value: A diameter in mm is divided by ten to give cm.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.pack_years
+  kind: conversion
+  what: 'Converting units. lifetime smoking: Cigarettes a day divided by 20, times the years smoked: 10 a day for 30 years is 15 pack-years.'
+  where:
+    sections:
+    - '21.3'
+    impairments:
+    - tobacco_use
+    rule_ids: []
+  value: 'Cigarettes a day divided by 20, times the years smoked: 10 a day for 30 years is 15 pack-years.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.opioid_dose
+  kind: conversion
+  what: 'Converting units. daily opioid dose: Multiply each medicine''s daily milligrams by its factor and add the results: morphine 1, hydrocodone 1, oxycodone 1.5, hydromorphone 4, codeine 0.15, tramadol 0.1. A fentanyl patch counts 2.4 for each microgram an hour.'
+  where:
+    sections:
+    - '23.3'
+    impairments:
+    - long_term_opioid_therapy
+    rule_ids: []
+  value: 'Multiply each medicine''s daily milligrams by its factor and add the results: morphine 1, hydrocodone 1, oxycodone 1.5, hydromorphone 4, codeine 0.15, tramadol 0.1. A fentanyl patch counts 2.4 for each microgram an hour.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.urine_albumin_creatinine_ratio
+  kind: conversion
+  what: 'Converting units. urine albumin-to-creatinine ratio: A ratio in mg/mmol is multiplied by 8.84 to give mg/g: 3.4 mg/mmol is 30 mg/g and 34 mg/mmol is 300 mg/g.'
+  where:
+    sections:
+    - '28.3'
+    impairments:
+    - albuminuria
+    rule_ids: []
+  value: 'A ratio in mg/mmol is multiplied by 8.84 to give mg/g: 3.4 mg/mmol is 30 mg/g and 34 mg/mmol is 300 mg/g.'
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.hbv_dna
+  kind: conversion
+  what: 'Converting units. HBV DNA: A result in copies/mL is divided by 5 to give IU/mL, unless the laboratory report states its own factor.'
+  where:
+    sections:
+    - '29.3'
+    impairments:
+    - chronic_hepatitis_b
+    rule_ids: []
+  value: A result in copies/mL is divided by 5 to give IU/mL, unless the laboratory report states its own factor.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.fib4_index
+  kind: conversion
+  what: 'Converting units. FIB-4 index: The index is age in years times AST, divided by the platelet count in thousands per microlitre times the square root of ALT.'
+  where:
+    sections:
+    - '31.3'
+    impairments:
+    - fatty_liver_disease
+    rule_ids: []
+  value: The index is age in years times AST, divided by the platelet count in thousands per microlitre times the square root of ALT.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.faecal_calprotectin
+  kind: conversion
+  what: 'Converting units. faecal calprotectin: A result in mg/kg is the same number in mcg/g.'
+  where:
+    sections:
+    - '33.3'
+    impairments:
+    - ulcerative_colitis
+    rule_ids: []
+  value: A result in mg/kg is the same number in mcg/g.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.haemoglobin
+  kind: conversion
+  what: 'Converting units. haemoglobin: A result in g/L is divided by ten to give g/dL.'
+  where:
+    sections:
+    - '34.3'
+    impairments:
+    - anaemia
+    rule_ids: []
+  value: A result in g/L is divided by ten to give g/dL.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.clotting_factor_level
+  kind: conversion
+  what: 'Converting units. clotting factor level: A level given as a percentage of normal is the same number in IU/dL.'
+  where:
+    sections:
+    - '35.3'
+    impairments:
+    - haemophilia
+    rule_ids: []
+  value: A level given as a percentage of normal is the same number in IU/dL.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: conversion.cd4_count
+  kind: conversion
+  what: 'Converting units. CD4 count: A count in cells per microlitre is the same number in cells/mm3.'
+  where:
+    sections:
+    - '36.3'
+    impairments:
+    - hiv_infection
+    rule_ids: []
+  value: A count in cells per microlitre is the same number in cells/mm3.
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.type_2_diabetes.hba1c
+  kind: reading_rule
+  what: Type 2 diabetes mellitus. Several readings. Where the file holds more than one HbA1c reading from the last 12 months, the most recent one is rated.
+  where:
+    sections:
+    - '2.3'
+    - '2.4'
+    impairments:
+    - type_2_diabetes
+    rule_ids:
+    - UW-DM-001
+    - UW-DM-002
+    - UW-DM-003
+    - UW-DM-004
+    - UW-DM-005
+  value:
+    choose: most_recent
+    within_months: 12
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.type_1_diabetes.hba1c
+  kind: reading_rule
+  what: Type 1 diabetes mellitus. Several readings. Where the file holds more than one HbA1c reading from the last 12 months, the most recent one is rated.
+  where:
+    sections:
+    - '3.3'
+    - '3.4'
+    impairments:
+    - type_1_diabetes
+    rule_ids:
+    - UW-DI-001
+    - UW-DI-002
+    - UW-DI-003
+    - UW-DI-004
+  value:
+    choose: most_recent
+    within_months: 12
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.hypothyroidism.tsh
+  kind: reading_rule
+  what: Hypothyroidism. Several readings. Where the file holds more than one TSH reading from the last 18 months, the most recent one is rated.
+  where:
+    sections:
+    - '9.3'
+    - '9.4'
+    impairments:
+    - hypothyroidism
+    rule_ids:
+    - UW-THY-001
+    - UW-THY-002
+  value:
+    choose: most_recent
+    within_months: 18
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.hypertension.systolic_blood_pressure
+  kind: reading_rule
+  what: Hypertension. Several readings. Where the file holds more than one systolic blood pressure reading from the last 12 months, their average is rated, rounded as the bands are written.
+  where:
+    sections:
+    - '10.3'
+    - '10.4'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-001
+    - UW-HT-002
+    - UW-HT-003
+    - UW-HT-004
+  value:
+    choose: average
+    within_months: 12
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.hypertension.diastolic_blood_pressure
+  kind: reading_rule
+  what: Hypertension. Several readings. Where the file holds more than one diastolic blood pressure reading from the last 12 months, the highest one is rated.
+  where:
+    sections:
+    - '10.3'
+    - '10.4'
+    impairments:
+    - hypertension
+    rule_ids:
+    - UW-HT-005
+  value:
+    choose: highest
+    within_months: 12
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.peripheral_artery_disease.ankle_brachial_index
+  kind: reading_rule
+  what: Peripheral artery disease. Several readings. Where the file holds more than one resting ankle-brachial index reading, the lowest one is rated.
+  where:
+    sections:
+    - '17.3'
+    - '17.4'
+    impairments:
+    - peripheral_artery_disease
+    rule_ids:
+    - UW-PAD-001
+    - UW-PAD-002
+  value:
+    choose: lowest
+    within_months: null
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.chronic_kidney_disease.egfr
+  kind: reading_rule
+  what: Chronic kidney disease. Several readings. Where the file holds more than one eGFR reading, the most recent one is rated.
+  where:
+    sections:
+    - '27.3'
+    - '27.4'
+    impairments:
+    - chronic_kidney_disease
+    rule_ids:
+    - UW-CKD-001
+    - UW-CKD-002
+    - UW-CKD-003
+    - UW-CKD-004
+  value:
+    choose: most_recent
+    within_months: null
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.depression.phq9_score
+  kind: reading_rule
+  what: Depression. Several readings. Where the file holds more than one PHQ-9 score reading from the last 12 months, the most recent one is rated.
+  where:
+    sections:
+    - '37.3'
+    - '37.4'
+    impairments:
+    - depression
+    rule_ids:
+    - UW-DEP-001
+    - UW-DEP-002
+  value:
+    choose: most_recent
+    within_months: 12
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
+
+- id: reading_rule.osteoporosis.bone_density_t_score
+  kind: reading_rule
+  what: Osteoporosis. Several readings. Where the file holds more than one bone density T-score reading from the last 36 months, the lowest one is rated.
+  where:
+    sections:
+    - '40.3'
+    - '40.4'
+    impairments:
+    - osteoporosis
+    rule_ids:
+    - UW-OST-001
+  value:
+    choose: lowest
+    within_months: 36
+  cited: []
+  status: unreviewed
+  corrected_value: null
+  source: null
+  reviewed_by: null
+  reviewed_on: null
+  note: null
