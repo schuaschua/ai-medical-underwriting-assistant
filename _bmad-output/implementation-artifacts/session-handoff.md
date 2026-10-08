@@ -79,6 +79,25 @@ Things learned:
 - Decided by the owner on 2026-10-08, and built: the manual is generated from a review file, `packages/synthdata/src/synthdata/manual-review.yaml`, which lists its 38 citations, 80 band edges said to follow a guideline, 18 unit conversions and 9 reading rules. All 145 are still `unreviewed`: the medical expert or anyone with the sources works through it (`uv run python -m synthdata review`; how to record a check is in `data/README.md`). A corrected citation or conversion is applied on generation; a corrected band edge or reading rule is refused until a developer carries it into the manual's definition and the cases.
 - Whether the SPA's tests (279) should be cut as the Python suite was.
 
+## After the stories: the owner's decisions of 2026-10-08
+
+The owner went through the open decisions on 2026-10-08. What was changed for them, each verified with the full suite before its commit:
+
+| Change | Commit |
+| --- | --- |
+| `classification` reads the training container and no longer writes it; a classifier needs 10 pages scored 0.90 or more to count as calibrated (the number is the coding agent's); the redaction report counts expected-fact quotes no longer found; no Dapr access policy | `0e0c850` |
+| SPA suite cut from 279 to 145 cases | `8492cd8` |
+| Row `r4` reranks with Cohere Rerank (`Cohere-rerank-v4.0-fast`) in place of the LLM reranker | `50200bb` |
+| Python suite cut to the per-package budgets, 545 to 515 cases | `e75de42` |
+| A call to a tool that does not exist is logged as a refused step (migration `0002` of `verdict`) | `aeac3ca` |
+| The manual is generated from `packages/synthdata/src/synthdata/manual-review.yaml` (145 items, all unreviewed) and its footer reworded | `f0f858e` |
+
+The last full run, at `f0f858e`: 515 Python tests (coverage 90.7%), 146 SPA tests, lint and types clean. Every package is at its budget. The local stack was not started again after these changes: local databases need `verdict`'s migration `0002`, the manual must be ingested again (its file changed), and the scoreboard files under `.work/scoreboards` predate the new redaction counts.
+
+Confirmed by the owner as built: the training pages' redaction route, the `r6` verdict run, the two cautions of story 2.5, a case nobody decides staying open for the demo, pure fusion for a rule id typed as a query, the Compare pair's order, `verdict`'s 25 s wait, the effort measure, and the `evals` line in `CLAUDE.md`. Costs on the scoreboards are the owner's to state.
+
+Still open with the owner: whether the accepted exception in `security.md` covers queries and manual text going to the Cohere model; the 145 items of the review file, for the medical expert or anyone with the sources.
+
 ## Next
 
 1. The owner reads the unconfirmed decisions above and the "Owner to confirm" entries of `deferred-work.md`.
