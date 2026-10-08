@@ -127,7 +127,7 @@ function Redaction({ read }: { read: RedactionRead }) {
   );
 }
 
-/** The report in one line: clean or not, what was checked, leaks and unchecked cases by count. */
+/** The report in one line: clean or not, what was checked, leaks and unchecked cases by count, and the quotes redaction took away. */
 function redactionLine(report: RedactionScoreboard): string {
   const parts = [
     report.clean ? text.redactionClean : text.redactionNotClean,
@@ -139,6 +139,9 @@ function redactionLine(report: RedactionScoreboard): string {
   if (report.cases_not_checked.length > 0) {
     parts.push(text.redactionNotChecked(report.cases_not_checked.length));
   }
+  parts.push(
+    text.redactionQuotes(report.quotes_not_found, report.quotes_checked),
+  );
   return parts.join(" ");
 }
 

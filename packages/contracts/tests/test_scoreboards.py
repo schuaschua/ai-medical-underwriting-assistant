@@ -129,9 +129,17 @@ def test_story_3_4_a_scoreboard_row_has_numbers_only_when_measured_and_the_winne
         "may_also_be_redacted": 30,
         "may_also_be_redacted_masked": 0,
         "cases_not_checked": [],
+        "quotes_checked": 12,
+        "quotes_not_found": 0,
+        "quotes_not_found_at": [],
     }
     leak = {"case_key": "case-002", "page_number": 3, "category": "person_name"}
     assert RedactionScoreboard.model_validate(report).clean
+    # A quote that redaction took away is a figure: the report stays clean.
+    # It is named by its case, page and fact, never by its words.
+    gone = {"case_key": "case-002", "page_number": 3, "fact_number": 2}
+    over_redacted = {**report, "quotes_not_found": 1, "quotes_not_found_at": [gone]}
+    assert RedactionScoreboard.model_validate(over_redacted).clean
     assert not RedactionScoreboard.model_validate(
         {**report, "clean": False, "leaks": [leak]}
     ).clean
@@ -142,6 +150,11 @@ def test_story_3_4_a_scoreboard_row_has_numbers_only_when_measured_and_the_winne
         {**report, "cases_not_checked": ["case-003"]},
         {**report, "leaks": [{**leak, "value": "Kendall"}], "clean": False},
         {**report, "may_also_be_redacted_masked": 31},
+        # A file written before the quote count was built does not fit.
+        {key: value for key, value in report.items() if "quotes" not in key},
+        {**report, "quotes_not_found": 1},
+        {**over_redacted, "quotes_checked": 0},
+        {**over_redacted, "quotes_not_found_at": [{**gone, "quote": "HbA1c 8.2 %"}]},
     ):
         with pytest.raises(ValidationError):
             RedactionScoreboard.model_validate(wrong)
@@ -186,12 +199,20 @@ def test_story_3_4_a_scoreboard_row_has_numbers_only_when_measured_and_the_winne
         }
 
     assert ClassificationScoreboard.model_validate(classifiers()).winner == "llm"
-    # Calibrated at 0.85, or with no page scored 0.90 or more: it cannot win.
+    # Calibrated at 0.85, with no page scored 0.90 or more, or right on every
+    # such page but with fewer of them than the floor of 10: it cannot win.
     low = contender("llm", confident_right_pages=68, calibration=0.85)
     none_sure = contender(
         "llm", confident_pages=0, confident_right_pages=0, calibration=None
     )
-    for score in (low, none_sure):
+    too_few = contender(
+        "llm", confident_pages=9, confident_right_pages=9, calibration=1.0
+    )
+    at_the_floor = contender(
+        "llm", confident_pages=10, confident_right_pages=9, calibration=0.9
+    )
+    assert ClassifierScore.model_validate(at_the_floor).can_win
+    for score in (low, none_sure, too_few):
         assert not ClassifierScore.model_validate(score).can_win
         unable = [score, contender("doc-intelligence", measured=False)]
         assert ClassificationScoreboard.model_validate(

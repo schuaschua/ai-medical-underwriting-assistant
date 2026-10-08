@@ -323,8 +323,21 @@ class RedactionLeak(ContractModel):
     category: OneLine
 
 
+class QuoteNotFound(ContractModel):
+    """An expected-fact quote that is no longer in its page's stored text. Never the quote itself."""
+
+    case_key: OneLine
+    page_number: PageNumber
+    # The position of the fact among the case's expected facts, from 1.
+    fact_number: Annotated[int, Field(ge=1)]
+
+
 class RedactionScoreboard(ContractModel):
-    """The file `redaction.json`: whether redaction left a planted identifier behind."""
+    """The file `redaction.json`: whether redaction left a planted identifier behind.
+
+    And what it took away beside them: the expected-fact quotes that the
+    stored page text no longer holds.
+    """
 
     run: ScoreboardRun
     # No planted identifier, and no part of a planted name, in any page text,
@@ -341,6 +354,13 @@ class RedactionScoreboard(ContractModel):
     may_also_be_redacted_masked: Count
     # Cases none of whose pages could be read: nothing of them was checked.
     cases_not_checked: list[OneLine]
+    # Over-redaction (AD-17): the quotes of the checked cases' expected
+    # facts, each looked for in the stored text of its own page by the quote
+    # finder, and the ones not found there. A figure, not a fault: a quote
+    # not found does not make the report unclean.
+    quotes_checked: Count
+    quotes_not_found: Count
+    quotes_not_found_at: list[QuoteNotFound]
 
     @model_validator(mode="after")
     def _clean_means_no_leak(self) -> Self:
@@ -351,6 +371,14 @@ class RedactionScoreboard(ContractModel):
             )
         if self.may_also_be_redacted_masked > self.may_also_be_redacted:
             raise ValueError("more strings masked than were listed")
+        if (
+            self.quotes_not_found > self.quotes_checked
+            or len(self.quotes_not_found_at) != self.quotes_not_found
+        ):
+            raise ValueError(
+                "quotes_not_found counts the quotes listed as not found, which "
+                "are among those checked"
+            )
         return self
 
 
@@ -359,6 +387,10 @@ class RedactionScoreboard(ContractModel):
 # A page counts for calibration when its stored confidence is at least this,
 # and a contender can win only when its calibration is at least this too.
 CALIBRATION_BAR = 0.9
+# The fewest pages scored at the bar or above that a calibration is taken
+# from (owner's decision of 2026-10-08): one sure page that happens to be
+# right says almost nothing, and would qualify without this floor.
+CALIBRATION_FLOOR_PAGES = 10
 # The same bar in whole numbers, so that it is held against counts and not
 # against a rounded figure: at least 9 in 10.
 _BAR_PART, _BAR_WHOLE = 9, 10
@@ -367,11 +399,12 @@ _BAR_PART, _BAR_WHOLE = 9, 10
 def meets_calibration_bar(confident_right_pages: int, confident_pages: int) -> bool:
     """Whether the pages scored 0.90 or more were labelled correctly at least 9 times in 10.
 
-    False when there is no such page: a contender without a calibration
+    False when there are fewer such pages than the floor, or none: a
+    contender whose calibration rests on too few pages, or that has none,
     cannot win.
     """
     return (
-        confident_pages > 0
+        confident_pages >= CALIBRATION_FLOOR_PAGES
         and confident_right_pages * _BAR_WHOLE >= confident_pages * _BAR_PART
     )
 
@@ -448,7 +481,7 @@ class ClassifierScore(ContractModel):
 
     @property
     def can_win(self) -> bool:
-        """Measured, and calibrated at least 9 times in 10 on the pages it was sure of."""
+        """Measured, sure of at least the floor of pages, and right on them at least 9 times in 10."""
         return self.measured and meets_calibration_bar(
             self.confident_right_pages or 0, self.confident_pages or 0
         )
@@ -501,7 +534,8 @@ class ClassificationScoreboard(ContractModel):
     # Every contender once, in the order of the enum.
     contenders: list[ClassifierScore]
     # The more accurate contender among those whose calibration is at least
-    # 0.90, then the one with the lower queue rate. Null when none qualifies.
+    # 0.90 over at least 10 pages scored that high, then the one with the
+    # lower queue rate. Null when none qualifies.
     winner: ClassifierContender | None
     # For each contender that was tried and could not be run: the first file
     # of the set, the case it was uploaded as and what that case ended with,
@@ -535,7 +569,7 @@ class ClassificationScoreboard(ContractModel):
             self.winner is not None and self.winner not in able
         ):
             raise ValueError(
-                "the winner is a measured contender calibrated at 0.90 or more, "
-                "and there is one if any qualifies"
+                "the winner is a measured contender calibrated at 0.90 or more "
+                "over at least 10 pages, and there is one if any qualifies"
             )
         return self

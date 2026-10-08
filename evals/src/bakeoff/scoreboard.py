@@ -169,6 +169,13 @@ def redaction_scoreboard(
         may_also_be_redacted=check.may_also_be_redacted,
         may_also_be_redacted_masked=check.may_also_be_redacted_masked,
         cases_not_checked=sorted(check.cases_not_checked),
+        quotes_checked=check.quotes_checked,
+        quotes_not_found=len(check.quotes_not_found),
+        # The cases run side by side, so they are put in order here.
+        quotes_not_found_at=sorted(
+            check.quotes_not_found,
+            key=lambda quote: (quote.case_key, quote.page_number, quote.fact_number),
+        ),
     )
 
 
@@ -191,9 +198,9 @@ def pick_classifier_winner(
 ) -> ClassifierContender | None:
     """The winning contender: the more accurate, then the one with the lower queue rate.
 
-    Among the contenders whose calibration is at least 0.90 only: one with a
-    lower calibration, or with no page scored 0.90 or more, cannot win
-    however accurate it is. None when no contender qualifies. Contenders
+    Among the contenders whose calibration is at least 0.90 over at least
+    10 pages scored 0.90 or more only: one with a lower calibration, or with
+    fewer such pages, cannot win however accurate it is. None when no contender qualifies. Contenders
     that tie on both figures are told apart by their order in the contracts.
     """
     order = list(ClassifierContender)

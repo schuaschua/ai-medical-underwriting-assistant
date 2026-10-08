@@ -214,6 +214,9 @@ export function redactionScoreboard(changes: Record<string, unknown> = {}) {
     may_also_be_redacted: 30,
     may_also_be_redacted_masked: 4,
     cases_not_checked: [],
+    quotes_checked: 212,
+    quotes_not_found: 0,
+    quotes_not_found_at: [],
     ...changes,
   };
 }

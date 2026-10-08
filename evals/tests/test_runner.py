@@ -38,27 +38,34 @@ NAME = "Avery Specimendale"
 
 
 def case_set(tmp_path: Path) -> None:
+    first = key_entry(
+        "case-901",
+        verdict="loaded",
+        loading_pct=75,
+        # A medical page, a blank page, a medical page the gate was unsure of.
+        medical=(True, False, True),
+        facts=(
+            (HBA1C, ("UW-DM-002",)),
+            (SMOKER, ("UW-TOB-001",)),
+            # Meets no rule: never searched for.
+            ("body mass index 23.5 kg/m2", ()),
+        ),
+        identifiers=(
+            ("person_name", NAME),
+            ("policy_number", "POL-SYN-0009011"),
+        ),
+        may_also_be_redacted=("Avery", "Samplestead"),
+    )
+    # The first fact's own words on two pages. Page 1 still holds them; page
+    # 3 has no stored text here, as if redaction had masked the line.
+    first["expected_facts"][0]["places"] = [
+        {"page_number": 1, "quote": "Town: Samplestead"},
+        {"page_number": 3, "quote": "HbA1c 8.2 % at the Samplestead clinic"},
+    ]
     write_case_set(
         tmp_path / "data",
         [
-            key_entry(
-                "case-901",
-                verdict="loaded",
-                loading_pct=75,
-                # A medical page, a blank page, a medical page the gate was unsure of.
-                medical=(True, False, True),
-                facts=(
-                    (HBA1C, ("UW-DM-002",)),
-                    (SMOKER, ("UW-TOB-001",)),
-                    # Meets no rule: never searched for.
-                    ("body mass index 23.5 kg/m2", ()),
-                ),
-                identifiers=(
-                    ("person_name", NAME),
-                    ("policy_number", "POL-SYN-0009011"),
-                ),
-                may_also_be_redacted=("Avery", "Samplestead"),
-            ),
+            first,
             key_entry(
                 "case-902",
                 medical=(True, True, False),
@@ -209,6 +216,13 @@ def test_story_3_4_a_run_scores_every_available_row_on_the_same_queries_and_case
         2,
         1,
     )
+    # Over-redaction is a figure of a clean report: one of the two quotes of
+    # the expected facts is no longer in its page's text, and is named by
+    # its place.
+    assert (redaction.quotes_checked, redaction.quotes_not_found) == (2, 1)
+    assert [quote.model_dump() for quote in redaction.quotes_not_found_at] == [
+        {"case_key": "case-901", "page_number": 3, "fact_number": 1}
+    ]
 
     # Both files are the contract's shape, say when and where the run was
     # made, and say that these are stand-in figures.
@@ -483,6 +497,7 @@ def test_story_3_4_a_planted_name_left_in_a_page_text_fails_the_command_and_is_r
     ):
         assert "specimendale" not in text.lower()
     assert "leak: case-901 page 3 (person_name)" in printed.out
+    assert "quotes not found in their page text: 1 of 2" in printed.out
     assert "stand-in figures, not results" in printed.out
 
     # A local run is refused the published folder, and so is a deployed run
@@ -618,7 +633,9 @@ def test_story_4_3_the_page_set_is_taken_to_the_gate_once_per_contender_and_both
     )
     assert (classifier.confident_right_pages, classifier.confident_pages) == (3, 3)
     assert (classifier.queued_pages, classifier.pages_not_classified) == (0, 3)
-    assert board.winner == "llm"
+    # Neither is sure of 10 pages, the floor a calibration is taken from: a
+    # set of six pages has no winner, however well a contender did.
+    assert board.winner is None
     assert [case.model_dump(exclude={"case_id"}) for case in board.unscored_cases] == [
         {
             "contender": "doc-intelligence",
@@ -698,7 +715,7 @@ def test_story_4_3_the_page_set_is_taken_to_the_gate_once_per_contender_and_both
     assert alone.contenders[0] == llm
     numbers = alone.contenders[1].model_dump(exclude={"contender", "measured"})
     assert set(numbers.values()) == {None}
-    assert (alone.winner, alone.unscored_cases, alone.reason_leaks) == ("llm", [], [])
+    assert (alone.winner, alone.unscored_cases, alone.reason_leaks) == (None, [], [])
     assert len(web.uploads) == uploads + 3
     (refused,) = alone.not_run
     assert refused.case_id is not None

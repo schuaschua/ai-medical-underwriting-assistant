@@ -30,6 +30,13 @@ normalised with `contracts.text.normalise`. A planted identifier found in it is 
 part of a planted name standing as a word of its own. A leak makes the command exit with status 1;
 `redaction.json` names the case, the page and the category, never the value.
 
+The same check counts over-redaction (spine AD-17): every quote of every expected fact of a checked
+case (`places` in the answer key) is looked for in the stored text of its own page with the
+contracts' quote finder (`contracts.text.QuoteFinder`, the rule of the quote check of story 2.4).
+`redaction.json` holds how many were looked for, how many were not found, and each of those by case,
+page and fact number, never the quote. A quote that is not found is a figure: it does not fail the
+command and does not make the report unclean.
+
 A row that answers `retriever_not_available` is recorded as not measured, with no numbers, and the
 run goes on.
 
@@ -80,7 +87,7 @@ routes and decides nothing itself.
 | Calibration | Of the pages whose stored confidence is 0.90 or more, the share labelled correctly. None when no page was scored that high. |
 | Queue rate | Pages the gate left in `awaiting_triage`, over every page of the set. |
 | Cost per page | Not measured: stated in `static-metrics.yaml` under `classifiers`, with its source. `null` until somebody states it. |
-| Winner | The more accurate contender among those whose calibration is at least 0.90, then the one with the lower queue rate; all three compared on the counts, not on the rounded figures. A contender with no calibration cannot win. No winner when none qualifies. |
+| Winner | The more accurate contender among those whose calibration is at least 0.90 over at least 10 pages scored 0.90 or more, then the one with the lower queue rate; all three compared on the counts, not on the rounded figures. A contender with fewer than 10 such pages, or with no calibration, cannot win (the floor is `CALIBRATION_FLOOR_PAGES` in `contracts.models.web`; owner's decision of 2026-10-08). No winner when none qualifies. |
 
 - A page with a failed result, or none, is wrong, is in no calibration count, and is listed by case
   and page (`unclassified_pages`).
@@ -229,8 +236,11 @@ and 4.3):
   failed and the cases that were not scored, each with its reason.
 - `redaction.json` (`RedactionScoreboard`): the same `run`, `clean`, the cases and pages checked, the
   identifiers looked for, every leak by case, page and category, how many of the answer key's
-  "may also be redacted" strings are in no page text any more, and the cases none of whose pages
-  could be read.
+  "may also be redacted" strings are in no page text any more, the cases none of whose pages
+  could be read, and the expected-fact quotes: `quotes_checked`, `quotes_not_found` and each quote
+  not found by case, page and fact number (`quotes_not_found_at`). A file written before the quote
+  count was built (2026-10-08) has none of the three and does not fit the model: run the bake-off
+  again.
 - `classification.json` (`ClassificationScoreboard`, story 4.3): its own `run`, one entry per
   contender (`measured`, accuracy with `right_pages` and `pages`, calibration with
   `confident_right_pages` and `confident_pages`, queue rate with `queued_pages`,

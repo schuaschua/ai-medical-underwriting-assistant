@@ -4,6 +4,10 @@ The text of every page of every case is read through `web` and normalised
 with the contracts' function, the one the quote check uses. A planted
 identifier found in it is a leak, and so is any part of a planted name. The
 report says where a leak is and of what category, never the value.
+
+It also counts what redaction took away beside the identifiers: the quotes
+of the expected facts that the text of their page no longer holds. That is a
+figure of the report and no fault of the run.
 """
 
 import logging
@@ -12,7 +16,7 @@ from dataclasses import dataclass, field
 
 from bakeoff.answer_key import PERSON_NAME, AnswerKeyEntry
 from bakeoff.client import WebClient, WebError
-from contracts.models.web import RedactionLeak
+from contracts.models.web import QuoteNotFound, RedactionLeak
 from contracts.text import QuoteFinder, normalise
 
 logger = logging.getLogger(__name__)
@@ -64,6 +68,30 @@ def masked_allowed_strings(entry: AnswerKeyEntry, page_texts: Sequence[str]) -> 
     )
 
 
+def quotes_not_found(
+    entry: AnswerKeyEntry, page_texts: dict[int, str]
+) -> list[QuoteNotFound]:
+    """The expected-fact quotes of a case that the stored text of their page no longer holds.
+
+    A quote is found where the quote finder finds it, the rule the quote
+    check of extracted facts uses: whole, with case, spacing and line breaks
+    not counting. A quote on a page the case has no text for is not found.
+    Each is named by its place, never by its words.
+    """
+    pages = {number: QuoteFinder(text) for number, text in page_texts.items()}
+    return [
+        QuoteNotFound(
+            case_key=entry.case_key,
+            page_number=place.page_number,
+            fact_number=fact_number,
+        )
+        for fact_number, fact in enumerate(entry.expected_facts, start=1)
+        for place in fact.places
+        if place.page_number not in pages
+        or pages[place.page_number].find(place.quote) is None
+    ]
+
+
 @dataclass
 class RedactionCheck:
     """What the check found over the cases of a run."""
@@ -75,6 +103,8 @@ class RedactionCheck:
     may_also_be_redacted: int = 0
     may_also_be_redacted_masked: int = 0
     cases_not_checked: list[str] = field(default_factory=list)
+    quotes_checked: int = 0
+    quotes_not_found: list[QuoteNotFound] = field(default_factory=list)
 
     def add(self, entry: AnswerKeyEntry, page_texts: dict[int, str]) -> None:
         """Check the page texts of one case, by page number."""
@@ -105,6 +135,9 @@ class RedactionCheck:
         self.may_also_be_redacted_masked += masked_allowed_strings(
             entry, list(page_texts.values())
         )
+        # Over-redaction is counted, not logged as a fault: it fails no run.
+        self.quotes_checked += sum(len(fact.places) for fact in entry.expected_facts)
+        self.quotes_not_found.extend(quotes_not_found(entry, page_texts))
 
 
 async def read_page_texts(client: WebClient, case_id: str | None) -> dict[int, str]:

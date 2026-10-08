@@ -178,12 +178,13 @@ resource "azurerm_role_assignment" "classification_document_intelligence_user" {
 }
 
 # Scoped to the one container, not to the account (azure.md rule 9): the
-# training job lists the labelled, redacted training pages there. The role is
-# the one azure.md names for the container classification owns (spine AD-4);
-# in Azure an operator uploads the pages and the job only reads.
-resource "azurerm_role_assignment" "classification_training_contributor" {
+# training job lists the labelled, redacted training pages there and reads
+# them. Read-only, though classification owns the container (spine AD-4): in
+# Azure an operator uploads the pages and the job writes nothing (owner's
+# decision of 2026-10-08).
+resource "azurerm_role_assignment" "classification_training_reader" {
   scope                = local.foundation.storage_container_ids[local.classification_training_container]
-  role_definition_name = "Storage Blob Data Contributor"
+  role_definition_name = "Storage Blob Data Reader"
   principal_id         = local.classification_identity.principal_id
   principal_type       = "ServicePrincipal"
 }
@@ -207,12 +208,12 @@ resource "time_sleep" "classification_role_propagation" {
   create_duration = var.role_propagation_wait
 
   triggers = {
-    acr_pull_id                   = azurerm_role_assignment.classification_acr_pull.id
-    metrics_publisher_id          = azurerm_role_assignment.classification_metrics_publisher.id
-    foundry_user_id               = azurerm_role_assignment.classification_foundry_user.id
-    document_intelligence_user_id = azurerm_role_assignment.classification_document_intelligence_user.id
-    training_contributor_id       = azurerm_role_assignment.classification_training_contributor.id
-    training_reader_id            = azurerm_role_assignment.document_intelligence_training_reader.id
+    acr_pull_id                     = azurerm_role_assignment.classification_acr_pull.id
+    metrics_publisher_id            = azurerm_role_assignment.classification_metrics_publisher.id
+    foundry_user_id                 = azurerm_role_assignment.classification_foundry_user.id
+    document_intelligence_user_id   = azurerm_role_assignment.classification_document_intelligence_user.id
+    training_reader_id              = azurerm_role_assignment.classification_training_reader.id
+    document_intelligence_reader_id = azurerm_role_assignment.document_intelligence_training_reader.id
   }
 }
 

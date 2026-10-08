@@ -135,8 +135,8 @@ Placeholder until the `app` stack assigns them (story 1.3); the source is the ar
 | --- | --- | --- |
 | AcrPull | Container registry | all seven runtime identities |
 | Monitoring Metrics Publisher | Application Insights | all seven runtime identities |
-| Storage Blob Data Contributor | One blob container | `intake` (`originals`, `cases`), `classification` (`classifier-training`), Azure AI Language's own identity (`cases`) |
-| Storage Blob Data Reader | One blob container | `retrieval` (`manual`), Azure AI Language's own identity (`originals`), Document Intelligence's own identity (`classifier-training`) |
+| Storage Blob Data Contributor | One blob container | `intake` (`originals`, `cases`), Azure AI Language's own identity (`cases`) |
+| Storage Blob Data Reader | One blob container | `retrieval` (`manual`), `classification` (`classifier-training`), Azure AI Language's own identity (`originals`), Document Intelligence's own identity (`classifier-training`) |
 | Cognitive Services User | Azure AI Language, Document Intelligence or the Foundry account | `intake` (Language), `classification` and `retrieval` (Document Intelligence), Azure AI Search's own identity (Foundry account) |
 | Foundry User | Foundry project | `classification`, `extraction`, `retrieval`, `verdict` |
 | Search Index Data Contributor, Search Service Contributor | Azure AI Search | `retrieval` |

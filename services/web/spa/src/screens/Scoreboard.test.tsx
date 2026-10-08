@@ -132,6 +132,8 @@ describe("3.5 the retrieval scoreboard", () => {
           { case_key: "case-002", page_number: 3, category: "person_name" },
         ],
         cases_not_checked: ["case-007"],
+        quotes_checked: 198,
+        quotes_not_found: 3,
       }),
     );
 
@@ -237,7 +239,7 @@ describe("3.5 the retrieval scoreboard", () => {
     ).toBeVisible();
     expect(
       screen.getByText(
-        "Not clean. 90 pages of 21 cases checked. 1 leak found. 1 case was not checked.",
+        "Not clean. 90 pages of 21 cases checked. 1 leak found. 1 case was not checked. 3 of the 198 quotes expected for the facts of these cases are no longer found in the text of their page.",
       ),
     ).toBeVisible();
 
@@ -308,7 +310,7 @@ describe("3.5 the retrieval scoreboard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Read again" }));
     expect(
       await screen.findByText(
-        "Clean: no planted identifier was found in a page text. 94 pages of 22 cases checked.",
+        "Clean: no planted identifier was found in a page text. 94 pages of 22 cases checked. 0 of the 212 quotes expected for the facts of these cases are no longer found in the text of their page.",
       ),
     ).toBeVisible();
   });
@@ -543,7 +545,7 @@ describe("4.3 the classifier scoreboard", () => {
     expect(screen.queryByRole("note")).toBeNull();
     expect(
       screen.getByText(
-        "No winner: no classifier has a calibration of at least 90%.",
+        "No winner: no classifier has a calibration of at least 90% over at least 10 pages.",
       ),
     ).toBeVisible();
     // Each line names the classifier it is about, and nothing says "no
@@ -573,7 +575,9 @@ describe("4.3 the classifier scoreboard", () => {
         "No classifier was measured, so there is no winner.",
       ),
     ).toBeVisible();
-    expect(screen.queryByText(/calibration of at least 90%\./)).toBeNull();
+    expect(
+      screen.queryByText(/No winner: no classifier has a calibration/),
+    ).toBeNull();
   });
 
   it("says “not run yet” or shows an error for its own table alone, and the retrieval table stands", async () => {

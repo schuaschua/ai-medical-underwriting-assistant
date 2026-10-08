@@ -1049,10 +1049,12 @@ the top 5. **Verdict accuracy**: every case is uploaded once and started once wi
 answers and one `eval_run_id`; the runner answers the human waits from the answer key's page labels
 and compares each row's suggested verdict (and loading) with the expected one. In the same run it
 reads every page's text and fails (exit status 1) if a planted identifier, or a part of a planted
-name, is left in it. It writes `retrieval.json` (one line per ladder row with store, chunk set,
-method, rule recall, verdict accuracy, latency, the counts behind them, the stated cost and effort
-from `evals/static-metrics.yaml`, and the winner) and `redaction.json`. Both shapes are contract
-models (`RetrievalScoreboard`, `RedactionScoreboard`).
+name, is left in it; it also counts the quotes of the expected facts that are no longer found in
+the stored text of their page (over-redaction: a figure, which fails nothing). It writes
+`retrieval.json` (one line per ladder row with store, chunk set, method, rule recall, verdict
+accuracy, latency, the counts behind them, the stated cost and effort from
+`evals/static-metrics.yaml`, and the winner) and `redaction.json`. Both shapes are contract models
+(`RetrievalScoreboard`, `RedactionScoreboard`).
 
 A row that answers "not available" is recorded as not measured; a case that fails or does not finish
 counts as wrong for every row and is listed. Figures from a local run are **not results**: the
@@ -1071,7 +1073,8 @@ the stated cost and effort with their source. The winner is the row the file nam
 the word "Winner". A row that was not measured says so and shows no number. Above the table the
 screen says when and against which address the run was made and, for a run with stand-ins, that
 the figures are not results; below it, how many cases were not scored, how many searches failed,
-and one line of the redaction check. The scores are files: `web` reads `retrieval.json` and
+and one line of the redaction check, which ends with how many of the expected-fact quotes are no
+longer found in their page's text. The scores are files: `web` reads `retrieval.json` and
 `redaction.json` from one folder (`WEB_SCOREBOARDS_DIR`), checks each against its contract model
 and answers it as it is on `GET /api/scoreboards/retrieval` and `GET /api/scoreboards/redaction`,
 for the underwriter only. Until the file is there the screen says that the bake-off has not been
@@ -1081,6 +1084,7 @@ of it in Azure (the only folder of `data/` in any image); `dapr.yaml` points the
 `.work/scoreboards/`, so after `./tools/dev.sh` and a local `uv run python -m bakeoff` the screen
 shows the local stand-in figures. The screen reads the files once: use "Read again" after a new
 run. A file written before story 3.5 has no `failed_runs` and is refused: run the bake-off again.
+So is a `redaction.json` written before the count of expected-fact quotes was built (2026-10-08).
 
 **The classifier bake-off** (story 4.3) is a second mode of the same command, and a run of its own:
 
@@ -1096,8 +1100,9 @@ classifications through `web` and compares every page with its expected label. P
 every page: **accuracy** (the stored `is_medical` is the expected one), **calibration** (of the
 pages scored 0.90 or more, the share labelled correctly), **queue rate** (the share the gate sent to
 triage) and the stated **cost per page** (`evals/static-metrics.yaml`). The winner is the more
-accurate contender among those calibrated at 0.90 or more, then the one with the lower queue rate;
-there is none when no contender qualifies. A page without a result is wrong and listed; a file whose
+accurate contender among those calibrated at 0.90 or more over at least 10 pages scored that high,
+then the one with the lower queue rate; a contender with fewer such pages cannot win, and there is
+no winner when no contender qualifies. A page without a result is wrong and listed; a file whose
 case fails or does not finish counts all its pages as wrong and is listed; a contender whose
 commands `classification` refuses (`doc-intelligence` without a classifier) is recorded as not
 measured, with the case that showed it, and the run goes on. Every stored `reason` is checked for

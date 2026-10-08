@@ -191,6 +191,7 @@ UNSCORED_CASE = {
     "error_code": "stage_failed",
 }
 LEAK = {"case_key": "case-002", "page_number": 3, "category": "person_name"}
+QUOTE_NOT_FOUND = {"case_key": "case-002", "page_number": 3, "fact_number": 2}
 CLASSIFIER_SCORE = {
     "contender": "llm",
     "measured": True,
@@ -383,6 +384,7 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "unscored_cases": [UNSCORED_CASE],
     },
     "RedactionLeak": LEAK,
+    "QuoteNotFound": QUOTE_NOT_FOUND,
     "ClassifierScore": CLASSIFIER_SCORE,
     "ClassifierUnscoredCase": {**UNSCORED_CASE, "contender": "doc-intelligence"},
     "UnclassifiedPage": {
@@ -426,6 +428,9 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "may_also_be_redacted": 30,
         "may_also_be_redacted_masked": 4,
         "cases_not_checked": ["case-003"],
+        "quotes_checked": 12,
+        "quotes_not_found": 1,
+        "quotes_not_found_at": [QUOTE_NOT_FOUND],
     },
     "TriageQueue": {
         "pages": [

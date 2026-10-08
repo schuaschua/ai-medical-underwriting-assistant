@@ -1862,6 +1862,34 @@
       "title": "QueuedPage",
       "type": "object"
     },
+    "QuoteNotFound": {
+      "additionalProperties": false,
+      "description": "An expected-fact quote that is no longer in its page's stored text. Never the quote itself.",
+      "properties": {
+        "case_key": {
+          "pattern": "^[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*\\S[^\\r\\n\\x0b\\x0c\\x85\\u2028\\u2029]*$",
+          "title": "Case Key",
+          "type": "string"
+        },
+        "fact_number": {
+          "minimum": 1,
+          "title": "Fact Number",
+          "type": "integer"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "case_key",
+        "page_number",
+        "fact_number"
+      ],
+      "title": "QuoteNotFound",
+      "type": "object"
+    },
     "ReadRuleArguments": {
       "additionalProperties": false,
       "description": "Arguments of the agent tool `read_rule`.",
@@ -2073,7 +2101,7 @@
     },
     "RedactionScoreboard": {
       "additionalProperties": false,
-      "description": "The file `redaction.json`: whether redaction left a planted identifier behind.",
+      "description": "The file `redaction.json`: whether redaction left a planted identifier behind.\n\nAnd what it took away beside them: the expected-fact quotes that the\nstored page text no longer holds.",
       "properties": {
         "cases_checked": {
           "minimum": 0,
@@ -2119,6 +2147,23 @@
           "title": "Pages Checked",
           "type": "integer"
         },
+        "quotes_checked": {
+          "minimum": 0,
+          "title": "Quotes Checked",
+          "type": "integer"
+        },
+        "quotes_not_found": {
+          "minimum": 0,
+          "title": "Quotes Not Found",
+          "type": "integer"
+        },
+        "quotes_not_found_at": {
+          "items": {
+            "$ref": "#/$defs/QuoteNotFound"
+          },
+          "title": "Quotes Not Found At",
+          "type": "array"
+        },
         "run": {
           "$ref": "#/$defs/ScoreboardRun"
         }
@@ -2132,7 +2177,10 @@
         "leaks",
         "may_also_be_redacted",
         "may_also_be_redacted_masked",
-        "cases_not_checked"
+        "cases_not_checked",
+        "quotes_checked",
+        "quotes_not_found",
+        "quotes_not_found_at"
       ],
       "title": "RedactionScoreboard",
       "type": "object"

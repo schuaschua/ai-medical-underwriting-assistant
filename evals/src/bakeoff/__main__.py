@@ -116,6 +116,11 @@ def _report(result: RunResult) -> None:
         print(f"  leak: {leak.case_key} page {leak.page_number} ({leak.category})")
     for case_key in redaction.cases_not_checked:
         print(f"  not checked: {case_key}")
+    # A figure of the report, not a fault: it changes no exit status.
+    print(
+        f"  expected-fact quotes not found in their page text: "
+        f"{redaction.quotes_not_found} of {redaction.quotes_checked}"
+    )
     if is_incomplete(result):
         print(
             "incomplete: "

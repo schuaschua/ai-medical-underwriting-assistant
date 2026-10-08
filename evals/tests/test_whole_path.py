@@ -35,6 +35,7 @@ from bakeoff.runner import ClassificationRunResult, run, run_classification
 from bakeoff.settings import SCRATCH, Settings
 from contracts.ids import new_id
 from contracts.models.web import (
+    CALIBRATION_FLOOR_PAGES,
     ClassificationScoreboard,
     RedactionScoreboard,
     RetrievalScoreboard,
@@ -190,6 +191,13 @@ def test_story_3_4_the_runner_scores_the_built_rows_over_synthetic_cases_through
     assert redaction.identifiers_checked == sum(
         len(key["identifiers"]) for key in keys.values()
     )
+    # Over-redaction: every quote of every expected fact was looked for on
+    # its page, and the redaction stand-in took none of them away.
+    assert redaction.quotes_checked == sum(
+        len(fact["places"]) for key in keys.values() for fact in key["expected_facts"]
+    )
+    assert redaction.quotes_checked >= 1
+    assert (redaction.quotes_not_found, redaction.quotes_not_found_at) == (0, [])
     assert behind_web.paths("intake").count("/cases") == 2
     assert sum(path.endswith("/text") for path in behind_web.paths("intake")) == pages
 
@@ -371,7 +379,10 @@ def test_story_4_3_the_runner_takes_the_page_set_to_the_gate_with_each_contender
     assert (llm.queued_pages, classifier.queued_pages) == (lab_reports, 0)
     assert llm.confident_pages == pages - lab_reports
     assert classifier.confident_pages == pages
-    # Both are calibrated and equally accurate: the lower queue rate wins.
+    # Equally accurate, and the classifier has the lower queue rate. It is
+    # also the only one sure of 10 pages, the floor a calibration is taken
+    # from: the chat stand-in, unsure of the laboratory reports, is not.
+    assert pages >= CALIBRATION_FLOOR_PAGES > pages - lab_reports
     assert board.winner is not None and board.winner.value == "doc-intelligence"
     # The classifier was asked for each page once.
     assert len(stand_in.analysed) == pages

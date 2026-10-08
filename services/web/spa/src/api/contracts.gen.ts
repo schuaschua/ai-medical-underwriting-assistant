@@ -177,6 +177,7 @@ export interface Contracts {
   PageType: PageType;
   QueuedBy: QueuedBy;
   QueuedPage: QueuedPage;
+  QuoteNotFound: QuoteNotFound;
   ReadRuleArguments: ReadRuleArguments;
   Reason: Reason;
   ReasonEffect: ReasonEffect;
@@ -722,6 +723,14 @@ export interface PageText {
   text: string;
 }
 /**
+ * An expected-fact quote that is no longer in its page's stored text. Never the quote itself.
+ */
+export interface QuoteNotFound {
+  case_key: string;
+  fact_number: number;
+  page_number: number;
+}
+/**
  * Arguments of the agent tool `read_rule`.
  */
 export interface ReadRuleArguments {
@@ -770,6 +779,9 @@ export interface RedactionResult {
 }
 /**
  * The file `redaction.json`: whether redaction left a planted identifier behind.
+ *
+ * And what it took away beside them: the expected-fact quotes that the
+ * stored page text no longer holds.
  */
 export interface RedactionScoreboard {
   cases_checked: number;
@@ -780,6 +792,9 @@ export interface RedactionScoreboard {
   may_also_be_redacted: number;
   may_also_be_redacted_masked: number;
   pages_checked: number;
+  quotes_checked: number;
+  quotes_not_found: number;
+  quotes_not_found_at: QuoteNotFound[];
   run: ScoreboardRun;
 }
 /**

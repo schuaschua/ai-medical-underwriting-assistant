@@ -628,6 +628,10 @@ export const strings = {
       count === 1
         ? "1 case was not checked."
         : `${count} cases were not checked.`,
+    // Over-redaction: a figure of the report, shown whatever it is. It does
+    // not make the check unclean.
+    redactionQuotes: (notFound: number, checked: number) =>
+      `${notFound} of the ${checked} ${checked === 1 ? "quote" : "quotes"} expected for the facts of these cases ${notFound === 1 ? "is" : "are"} no longer found in the text of ${checked === 1 ? "its" : "their"} page.`,
     redactionMissing: "Not available.",
     redactionOtherRun: (evalRunId: string) =>
       `Not available for this run. The redaction report on file is of another bake-off run (${evalRunId}) and says nothing about the figures above.`,
@@ -637,7 +641,7 @@ export const strings = {
   classifierScoreboard: {
     heading: "Classifier scoreboard",
     intro:
-      "Both classifiers, scored by the bake-off on the same pages. Accuracy is the share of pages labelled medical or not medical as expected. Calibration is, of the pages a classifier gave a confidence of 90% or more, the share it labelled correctly. Queue rate is the share of pages sent to the underwriter's triage queue. The winner is the more accurate classifier among those with a calibration of at least 90%, then the one with the lower queue rate.",
+      "Both classifiers, scored by the bake-off on the same pages. Accuracy is the share of pages labelled medical or not medical as expected. Calibration is, of the pages a classifier gave a confidence of 90% or more, the share it labelled correctly. Queue rate is the share of pages sent to the underwriter's triage queue. The winner is the more accurate classifier among those with a calibration of at least 90%, then the one with the lower queue rate. A classifier that gave fewer than 10 pages a confidence of 90% or more cannot win, because a calibration over so few pages says too little.",
     notRun: "The classifier bake-off has not been run yet.",
     unreadable: "The classifier scoreboard could not be shown.",
     standIns:
@@ -656,7 +660,8 @@ export const strings = {
     noPages: "No pages scored",
     noConfidentPages: "No page scored 90% or more",
     notClassified: (missing: number, pages: number) => `${missing} of ${pages}`,
-    noWinner: "No winner: no classifier has a calibration of at least 90%.",
+    noWinner:
+      "No winner: no classifier has a calibration of at least 90% over at least 10 pages.",
     noneMeasured: "No classifier was measured, so there is no winner.",
     // The lines under the table name the classifier they are about.
     couldNotRun: (classifier: string, caseKey: string) =>

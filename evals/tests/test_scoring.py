@@ -212,17 +212,26 @@ def test_story_3_4_the_winner_is_by_verdict_accuracy_then_rule_recall_then_lower
 def test_story_3_4_a_planted_identifier_or_a_part_of_a_planted_name_in_normalised_text_is_a_leak() -> (
     None
 ):
-    entry = AnswerKeyEntry.model_validate(
-        key_entry(
-            "case-901",
-            identifiers=(
-                ("person_name", "Avery Lee"),
-                ("phone_number", "(303) 555-0142"),
-                ("policy_number", "POL-SYN-0001234"),
-            ),
-            may_also_be_redacted=("Avery", "Lee", "Samplestead", "Graphic designer"),
-        )
+    key = key_entry(
+        "case-901",
+        facts=(("Obstructive sleep apnoea", ()), ("Policy on file", ())),
+        identifiers=(
+            ("person_name", "Avery Lee"),
+            ("phone_number", "(303) 555-0142"),
+            ("policy_number", "POL-SYN-0001234"),
+        ),
+        may_also_be_redacted=("Avery", "Lee", "Samplestead", "Graphic designer"),
     )
+    # The pages' own words for each fact, as the generator writes them.
+    key["expected_facts"][0]["places"] = [
+        {"page_number": 1, "quote": "sleep  APNOEA, town Samplestead"},
+        {"page_number": 1, "quote": "apnoea, town Sample"},
+    ]
+    key["expected_facts"][1]["places"] = [
+        {"page_number": 3, "quote": "Policy POL-SYN-0001234 of Avery Lee"},
+        {"page_number": 4, "quote": "Policy on file"},
+    ]
+    entry = AnswerKeyEntry.model_validate(key)
     clean = (
         "Applicant: [Person]\nTelephone [PhoneNumber]\nSleep apnoea, town Samplestead"
     )
@@ -253,6 +262,17 @@ def test_story_3_4_a_planted_identifier_or_a_part_of_a_planted_name_in_normalise
     # Of the strings that may also be redacted, three are in no page text any more.
     assert (check.may_also_be_redacted, check.may_also_be_redacted_masked) == (4, 3)
     assert check.cases_not_checked == ["case-901"]
+    # Over-redaction: each quote of each expected fact is looked for on its
+    # own page, by the quote finder's rule. Found whatever the case and the
+    # spacing; not found when it would cut into a word, when redaction masked
+    # a part of it, or when the case has no such page. Named by case, page
+    # and fact, never by its words.
+    assert check.quotes_checked == 4
+    assert [quote.model_dump() for quote in check.quotes_not_found] == [
+        {"case_key": "case-901", "page_number": 1, "fact_number": 1},
+        {"case_key": "case-901", "page_number": 3, "fact_number": 2},
+        {"case_key": "case-901", "page_number": 4, "fact_number": 2},
+    ]
 
 
 def test_story_3_4_static_metrics_describe_every_row_as_retrieval_builds_it_and_source_every_figure(
@@ -472,6 +492,14 @@ def test_story_4_3_each_figure_is_a_share_of_the_stored_results_and_the_winner_i
     assert (
         pick_classifier_winner(
             [line(LLM, 93, (80, 68), 0), line(CLASSIFIER, 60, (10, 9), 50)]
+        )
+        is CLASSIFIER
+    )
+    # Right on every page it was sure of, but sure of fewer than 10 pages:
+    # the floor keeps it from winning, and the other, at the floor, wins.
+    assert (
+        pick_classifier_winner(
+            [line(LLM, 94, (9, 9), 0), line(CLASSIFIER, 60, (10, 9), 50)]
         )
         is CLASSIFIER
     )

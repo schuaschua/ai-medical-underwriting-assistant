@@ -7,7 +7,7 @@ the same with `--bake-off classification` for the third, see `evals/README.md`):
 | File | Holds |
 |---|---|
 | `retrieval.json` | One entry per retrieval row `r1` to `r6`: what the row is, rule recall, verdict accuracy, latency, cost and effort, with the counts behind each figure, and the winner. |
-| `redaction.json` | Whether redaction left a planted identifier in a stored page text: where and of what kind, never the value. |
+| `redaction.json` | Whether redaction left a planted identifier in a stored page text: where and of what kind, never the value. And how many quotes of the expected facts are no longer found in their page's text: where, never the quote. |
 | `classification.json` | One entry per classifier contender (`llm`, `doc-intelligence`): accuracy, calibration, queue rate and cost per page, with the counts behind each figure, the winner, and whether a stored reason held a planted identifier. |
 
 Until a run has been made, the folder holds this note only and the Scoreboard screen says, for each
@@ -17,6 +17,9 @@ of its two tables, that the bake-off has not been run.
   `GET /api/scoreboards/redaction` and `GET /api/scoreboards/classification`) from
   `WEB_SCOREBOARDS_DIR`: this folder in a checkout, its own copy of this folder in the `web` image.
   It reads those three names and nothing else, this note included. No service works a score out, stores one or accepts one (architecture spine AD-17).
+- A file that does not fit its contract model is refused by `web` (500). A `redaction.json` written
+  before the count of expected-fact quotes was built (2026-10-08) is such a file: run the bake-off
+  again.
 - This is the only folder of `data/` that reaches an image.
 - Never commit a file with `"stand_ins": true` here. A local run writes to `.work/scoreboards/`,
   which `dapr.yaml` points the local `web` at, and the runner refuses to write here without

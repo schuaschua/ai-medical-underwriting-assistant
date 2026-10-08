@@ -74,7 +74,7 @@ Things learned:
 
 - A rule id typed as a whole search query: keep pure fusion and require the top 3 (recommended, tests assume it), or guarantee first place.
 - The manual's page footer says every number on the page is invented, which is not true of its clinical thresholds.
-- Whether to add a Dapr access policy so only `web` can call `workflow`'s decision operation.
+- Decided by the owner on 2026-10-08: no Dapr access policy is added for the demo, so any service in the environment may call `workflow`'s decision operation.
 - Whether an attempt by the model to call a tool that does not exist should be logged as a step.
 - The manual's citations and conversion factors were written without network access and need a check against their sources.
 - Whether the SPA's tests (279) should be cut as the Python suite was.

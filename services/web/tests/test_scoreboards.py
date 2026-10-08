@@ -82,6 +82,11 @@ def redaction_report() -> dict[str, Any]:
         "may_also_be_redacted": 30,
         "may_also_be_redacted_masked": 4,
         "cases_not_checked": ["case-007"],
+        "quotes_checked": 212,
+        "quotes_not_found": 1,
+        "quotes_not_found_at": [
+            {"case_key": "case-002", "page_number": 3, "fact_number": 2}
+        ],
     }
 
 
@@ -278,6 +283,11 @@ def test_story_3_5_a_file_that_does_not_fit_its_model_is_a_plain_500_and_the_log
     assert response.status_code == 500
     assert "Specimendale" not in response.text + caplog.text
     assert "file=redaction.json" in caplog.text
+    # A report written before the quote count was built does not fit either:
+    # the bake-off has to be run again.
+    earlier = {k: v for k, v in redaction_report().items() if "quotes" not in k}
+    (scoreboards_dir / "redaction.json").write_text(json.dumps(earlier))
+    assert client.get(REDACTION, headers=UNDERWRITER).status_code == 500
 
     # Story 4.3: a classifier scoreboard whose winner was not measured.
     unmeasured_winner = {**classification_board(), "winner": "doc-intelligence"}

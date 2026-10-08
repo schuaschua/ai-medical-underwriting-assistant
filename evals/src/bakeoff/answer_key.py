@@ -35,11 +35,20 @@ class PlantedIdentifier(_KeyModel):
     value: OneLine
 
 
+class FactPlace(_KeyModel):
+    """One page that states a fact, with that page's own words for it."""
+
+    page_number: PageNumber
+    quote: NonEmptyStr
+
+
 class ExpectedFact(_KeyModel):
     # One line in the manual's vocabulary: what the query builder is given.
     statement: OneLine
     # The rules this fact meets; most facts meet none.
     rule_ids: tuple[RuleId, ...] = ()
+    # Every page that states the fact; the redaction check looks for each quote.
+    places: tuple[FactPlace, ...] = ()
 
 
 class ExpectedVerdict(_KeyModel):
