@@ -96,7 +96,7 @@ The last full run, at `f0f858e`: 515 Python tests (coverage 90.7%), 146 SPA test
 
 Confirmed by the owner as built: the training pages' redaction route, the `r6` verdict run, the two cautions of story 2.5, a case nobody decides staying open for the demo, pure fusion for a rule id typed as a query, the Compare pair's order, `verdict`'s 25 s wait, the effort measure, and the `evals` line in `CLAUDE.md`. Costs on the scoreboards are the owner's to state.
 
-Still open with the owner: whether the accepted exception in `security.md` covers queries and manual text going to the Cohere model; the 145 items of the review file, for the medical expert or anyone with the sources.
+The owner confirmed on 2026-10-08 that the accepted exception in `security.md` covers the Cohere model, and the calibration floor of 10 pages. Still open with the owner: the 145 items of the review file, for the medical expert or anyone with the sources.
 
 ## Next
 
