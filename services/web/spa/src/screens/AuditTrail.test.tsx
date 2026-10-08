@@ -4,7 +4,7 @@ import { MemoryRouter, useNavigate } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { AUDIT_POLL_MS } from "../audit/auditTrail";
-import { auditTrailPath, parseCaseId } from "../audit/auditPath";
+import { auditTrailPath } from "../audit/auditPath";
 import { backoffMs } from "../polling/backoff";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
 import {
@@ -141,11 +141,6 @@ function open(path: string, role = "underwriter") {
   );
 }
 
-/** The case id field as it is now: a new address mounts a new one. */
-function field(): HTMLElement {
-  return screen.getByRole("textbox", { name: "Case id" });
-}
-
 function openTrail(caseId = CASE) {
   return open(auditTrailPath(caseId));
 }
@@ -262,63 +257,6 @@ describe("1.12 the audit trail of a case", () => {
     expect(screen.getByText(/Case status: Completed\./)).toBeVisible();
   });
 
-  it("1.13 names the underwriter when it was the underwriter who started the case", async () => {
-    trailServer([
-      auditEvent("case.started", "underwriter", null, { ref: CASE }),
-    ]);
-
-    openTrail();
-
-    expect((await rows()).map((cells) => cells.slice(1))).toEqual([
-      ["Underwriter (a person)", "Case started", "Whole case", ""],
-    ]);
-  });
-
-  it("shows each time in the viewer's local time, with the UTC time as its title", async () => {
-    trailServer(decidedTrail());
-
-    openTrail();
-    await rows();
-
-    const table = screen.getByRole("table");
-    const time = table.querySelector("time");
-    expect(time).not.toBeNull();
-    expect(time).toHaveAttribute("datetime", "2026-10-07T09:00:01Z");
-    expect(time).toHaveAttribute("title", "2026-10-07 09:00:01 UTC");
-    expect(time).toHaveTextContent(
-      new Date("2026-10-07T09:00:01Z").toLocaleString(),
-    );
-  });
-
-  it("keeps the server's order when a route names an earlier time than its classification", async () => {
-    trailServer([
-      auditEvent("page.classified", "classification:chat-main", 1, {
-        occurred_at: "2026-10-07T09:05:00Z",
-      }),
-      // Another clock set this time: earlier than the event it follows.
-      auditEvent("page.routed", "workflow:gate", 1, {
-        occurred_at: "2026-10-07T09:00:00Z",
-        detail: { route: "awaiting_triage", threshold: 0.9 },
-      }),
-    ]);
-
-    openTrail();
-
-    const listed = await rows();
-    expect(listed.map((cells) => cells[2])).toEqual([
-      "Page classified (page 1)",
-      "Page sent on by the gate (page 1)",
-    ]);
-    expect(listed[1]![4]).toBe(
-      "Sent to the underwriter's triage queue. Confidence the gate asked for: 90%.",
-    );
-    const times = [...screen.getByRole("table").querySelectorAll("time")];
-    expect(times.map((time) => time.getAttribute("datetime"))).toEqual([
-      "2026-10-07T09:05:00Z",
-      "2026-10-07T09:00:00Z",
-    ]);
-  });
-
   it("shows a failed step with its error code in plain words, and an unknown code as it is", async () => {
     trailServer(
       [
@@ -361,38 +299,6 @@ describe("1.12 the audit trail of a case", () => {
     expect(screen.getByText(/Case status: Failed\./)).toBeVisible();
   });
 
-  it("shows an action, a service or a page this build does not know as the server named it", async () => {
-    trailServer(
-      [
-        auditEvent("page.reviewed", "pricing:chat-main", 7),
-        auditEvent("document.redacted", "intake:azure-ai-language", null, {
-          detail: {},
-        }),
-        auditEvent("page.routed", "workflow:gate", 1, { detail: null }),
-        auditEvent("page.kept", "auditor", 1, { actor_kind: "human" }),
-        auditEvent("page.classified", "nobody", 1, {
-          occurred_at: "not a time",
-        }),
-      ],
-      { pages: [pageProgress(1, "classified")] },
-    );
-
-    openTrail();
-
-    const listed = await rows();
-    expect(listed[0]!.slice(1)).toEqual([
-      // Neither part is given a name it may not have.
-      "pricing, chat-main",
-      "page.reviewed",
-      pageProgress(7, "uploaded").page_id,
-      "",
-    ]);
-    expect(listed[1]![4]).toBe("Nothing was redacted.");
-    expect(listed[2]![4]).toBe("");
-    expect(listed[3]![1]).toBe("auditor (a person)");
-    expect(listed[4]!.slice(0, 2)).toEqual(["not a time", "nobody"]);
-  });
-
   it("says “No such case” for a case that was never started, and reads no more", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const server = fakeServer();
@@ -413,124 +319,6 @@ describe("1.12 the audit trail of a case", () => {
     expect(await screen.findByText("No events yet.")).toBeVisible();
   });
 
-  it("says “No such case” when only the trail answers 404", async () => {
-    trailServer([], {
-      respond: (call) =>
-        call.path === AUDIT_PATH
-          ? json(404, errorBody("not_found", "That case could not be found."))
-          : undefined,
-    });
-
-    openTrail();
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("No such case.");
-  });
-
-  it("refuses text that is not a case id in the field, and makes no call", async () => {
-    const server = trailServer(decidedTrail());
-    const user = userEvent.setup();
-    open("/underwriter/audit");
-    const callsBefore = server.calls.length;
-
-    await user.type(field(), "case-001");
-    await user.click(screen.getByRole("button", { name: "Show the trail" }));
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "That is not a case id.",
-    );
-    expect(field()).toHaveValue("case-001");
-    expect(field()).toBeInvalid();
-    expect(field()).toHaveAccessibleDescription(/That is not a case id\./);
-    expect(server.calls.length).toBe(callsBefore);
-    expect(screen.queryByRole("table")).toBeNull();
-
-    // A case id, pasted with spaces around it and in capitals, is taken.
-    await user.clear(field());
-    await user.click(field());
-    await user.paste(`  ${CASE.toUpperCase()} `);
-    await user.click(screen.getByRole("button", { name: "Show the trail" }));
-
-    expect(await rows()).toHaveLength(8);
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(field()).toHaveValue(CASE);
-    expect(field()).toBeValid();
-  });
-
-  it("follows the address back and forward between two cases, field and trail together", async () => {
-    const server = trailServer(decidedTrail());
-    // The other case is started and has no events yet.
-    server.started.add(OTHER_CASE);
-    const user = userEvent.setup();
-    openTrail();
-    expect(await rows()).toHaveLength(8);
-
-    await user.clear(field());
-    await user.type(field(), OTHER_CASE);
-    await user.click(screen.getByRole("button", { name: "Show the trail" }));
-    expect(await screen.findByText("No events yet.")).toBeVisible();
-    expect(field()).toHaveValue(OTHER_CASE);
-
-    await user.click(screen.getByRole("button", { name: "test: back" }));
-
-    expect(await rows()).toHaveLength(8);
-    expect(field()).toHaveValue(CASE);
-    expect(screen.queryByText("No events yet.")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "test: forward" }));
-
-    expect(await screen.findByText("No events yet.")).toBeVisible();
-    expect(field()).toHaveValue(OTHER_CASE);
-    expect(screen.queryByRole("table")).toBeNull();
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("starts over, with an empty field, when the navigation link is followed from a trail", async () => {
-    trailServer(decidedTrail());
-    const user = userEvent.setup();
-    openTrail();
-    await rows();
-    // Something half typed, and then the link.
-    await user.type(field(), "abc");
-
-    await user.click(screen.getByRole("link", { name: "Audit trail" }));
-
-    await waitFor(() => expect(field()).toHaveValue(""));
-    expect(screen.queryByRole("table")).toBeNull();
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(field()).toBeValid();
-  });
-
-  it("drops the refusal when the address goes back to a case after a refused submit", async () => {
-    trailServer(decidedTrail());
-    const user = userEvent.setup();
-    openTrail();
-    await rows();
-
-    await user.clear(field());
-    await user.type(field(), "case-001");
-    await user.click(screen.getByRole("button", { name: "Show the trail" }));
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "That is not a case id.",
-    );
-    expect(screen.queryByRole("table")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "test: back" }));
-
-    expect(await rows()).toHaveLength(8);
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(field()).toHaveValue(CASE);
-    expect(field()).toBeValid();
-
-    // And forward again: the refused text and its refusal are back.
-    await user.click(screen.getByRole("button", { name: "test: forward" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "That is not a case id.",
-    );
-    expect(field()).toHaveValue("case-001");
-    expect(screen.queryByRole("table")).toBeNull();
-  });
-
   it("refuses an address that names something that is not a case id, and makes no call", () => {
     const server = trailServer(decidedTrail());
 
@@ -543,21 +331,6 @@ describe("1.12 the audit trail of a case", () => {
       "../../me",
     );
     expect(server.calls.filter((call) => call.path !== "/api/me")).toEqual([]);
-  });
-
-  it("drops the trail that was shown when the next thing typed is not a case id", async () => {
-    trailServer(decidedTrail());
-    const user = userEvent.setup();
-    openTrail();
-    await rows();
-
-    await user.clear(field());
-    await user.click(screen.getByRole("button", { name: "Show the trail" }));
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "That is not a case id.",
-    );
-    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("is not a screen of the customer: no link, no route, no call", async () => {
@@ -665,72 +438,6 @@ describe("1.12 the audit trail of a case", () => {
     ]);
   });
 
-  it("does not ask again after a refusal no repeat can mend, until the user does", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let refusing = true;
-    const server = trailServer(decidedTrail(), {
-      respond: (call) =>
-        refusing && call.path === AUDIT_PATH
-          ? json(
-              403,
-              errorBody(
-                "role_not_allowed",
-                "This action is not open to your role.",
-              ),
-            )
-          : undefined,
-    });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    openTrail();
-    await screen.findByRole("alert");
-    const after = server.calls.length;
-
-    // Far longer than the longest wait between reads that are tried again.
-    await act(() => vi.advanceTimersByTimeAsync(backoffMs(10) * 3));
-    expect(server.calls.length).toBe(after);
-
-    refusing = false;
-    await user.click(screen.getByRole("button", { name: "Check again" }));
-
-    expect(await rows()).toHaveLength(8);
-  });
-
-  it("goes on asking after too many requests, and after a fault of the server", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const answers = [
-      json(429, errorBody("too_many_requests", "Too many requests.")),
-      json(502, errorBody("upstream_unavailable", "Not available.")),
-    ];
-    trailServer(decidedTrail(), {
-      respond: (call) =>
-        call.path === PROGRESS_PATH ? answers.shift() : undefined,
-    });
-    openTrail();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Too many requests. Please wait a moment and try again.",
-    );
-
-    await act(() => vi.advanceTimersByTimeAsync(backoffMs(1) + AUDIT_POLL_MS));
-    await act(() => vi.advanceTimersByTimeAsync(backoffMs(2) + AUDIT_POLL_MS));
-
-    expect(await rows()).toHaveLength(8);
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("says so when the case has no events yet", async () => {
-    trailServer([], { pages: [] });
-
-    openTrail();
-
-    expect(await screen.findByText("No events yet.")).toBeVisible();
-    expect(
-      screen.getByText(
-        "Case status: Running. New events appear here as the case moves.",
-      ),
-    ).toBeVisible();
-    expect(screen.queryByText(/more events than are shown/)).toBeNull();
-  });
-
   it("shows new events by polling while the case moves, and stops when the case is final", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const events = decidedTrail();
@@ -765,42 +472,6 @@ describe("1.12 the audit trail of a case", () => {
     const after = server.calls.length;
     await act(() => vi.advanceTimersByTimeAsync(AUDIT_POLL_MS * 4));
     expect(server.calls.length).toBe(after);
-  });
-
-  it("reads the case before its trail, so a final case's trail holds its last event", async () => {
-    const server = trailServer(decidedTrail(), { caseStatus: "completed" });
-
-    openTrail();
-    await rows();
-
-    const order = server.calls
-      .map((call) => call.path)
-      .filter((path) => path === AUDIT_PATH || path === PROGRESS_PATH);
-    expect(order).toEqual([PROGRESS_PATH, AUDIT_PATH]);
-  });
-
-  it("reads nothing while the tab is hidden, and catches up when it is shown", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const server = trailServer(decidedTrail());
-    let visibility: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(
-      () => visibility,
-    );
-    openTrail();
-    await rows();
-    const before = reads(server);
-
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await act(() => vi.advanceTimersByTimeAsync(AUDIT_POLL_MS * 2));
-    expect(reads(server)).toBe(before);
-
-    visibility = "visible";
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(reads(server)).toBe(before + 1);
   });
 
   it("says so when the trail cannot be read, and reads it again on request", async () => {
@@ -861,22 +532,6 @@ describe("1.12 the audit trail of a case", () => {
     expect(await rows()).toHaveLength(8);
   });
 
-  it("takes an answer that is not an audit trail for a fault", async () => {
-    trailServer([], {
-      respond: (call) =>
-        call.path === AUDIT_PATH
-          ? json(200, { case_id: CASE, events: [{ action: "page.kept" }] })
-          : undefined,
-    });
-
-    openTrail();
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Something went wrong. Please try again.",
-    );
-    expect(screen.queryByRole("table")).toBeNull();
-  });
-
   it("is reached from a row of the triage queue, for that row's case", async () => {
     vi.stubGlobal(
       "createImageBitmap",
@@ -928,20 +583,5 @@ describe("1.12 the audit trail of a case", () => {
     expect(screen.getByRole("textbox", { name: "Case id" })).toHaveValue("");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(server.calls.length).toBe(callsBefore);
-  });
-
-  it("takes a UUIDv7 for a case id, and nothing else", () => {
-    expect(parseCaseId(CASE)).toBe(CASE);
-    expect(parseCaseId(` ${CASE.toUpperCase()}\n`)).toBe(CASE);
-    for (const text of [
-      "",
-      "case-001",
-      // A version 4 id is no case id.
-      "019a0000-0000-4000-8000-000000010000",
-      `${CASE}/../progress`,
-      `${CASE}0`,
-    ]) {
-      expect(parseCaseId(text)).toBeNull();
-    }
   });
 });

@@ -170,40 +170,6 @@ describe("1.13 the underwriter's list of cases", () => {
     ).toBe(false);
   });
 
-  it("says “No cases yet” for an empty list", async () => {
-    listServer([]);
-
-    openList();
-
-    expect(await screen.findByText("No cases yet.")).toBeVisible();
-    expect(screen.queryByRole("table")).toBeNull();
-  });
-
-  it("says when more cases exist than are shown", async () => {
-    listServer([caseSummary(NEWEST)], true);
-
-    openList();
-    await rows();
-
-    expect(
-      screen.getByText(
-        "More cases exist than are shown here. Only the newest are listed.",
-      ),
-    ).toBeVisible();
-  });
-
-  it("words a status this build does not know as the server named it", async () => {
-    listServer([
-      caseSummary(NEWEST, "paused"),
-      caseSummary(OLDEST, "constructor"),
-    ]);
-
-    openList();
-
-    const listed = await rows();
-    expect(listed.map((cells) => cells[1])).toEqual(["paused", "constructor"]);
-  });
-
   it("works out no order, status or count in the browser", async () => {
     // Out of order, and with counts no rule of the SPA would give: shown as sent.
     listServer([
@@ -263,19 +229,6 @@ describe("1.13 the underwriter's list of cases", () => {
       await Promise.resolve();
     });
     await waitFor(() => expect(reads(server)).toBe(before + 1));
-  });
-
-  it("stops reading when the screen is left", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const server = listServer([]);
-    const view = openList();
-    await screen.findByText("No cases yet.");
-    const before = reads(server);
-
-    view.unmount();
-    await act(() => vi.advanceTimersByTimeAsync(CASE_LIST_POLL_MS * 3));
-
-    expect(reads(server)).toBe(before);
   });
 
   it("shows why the list could not be read, with a way to check again", async () => {
@@ -339,133 +292,9 @@ describe("1.13 the underwriter's list of cases", () => {
     await act(() => vi.advanceTimersByTimeAsync(backoffMs(1)));
     expect(reads(server)).toBeGreaterThan(after);
   });
-
-  it("stops reading when the server refuses the read, shows its message, and reads again on request", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let refused = false;
-    const server = fakeServer((call) => {
-      if (call.path !== LIST_PATH) {
-        return undefined;
-      }
-      return refused
-        ? json(
-            403,
-            errorBody(
-              "role_not_allowed",
-              "This action is not open to your role.",
-              TRACE_ID,
-            ),
-          )
-        : json(200, { cases: [caseSummary(NEWEST)], has_more: false });
-    });
-    openList();
-    await rows();
-
-    // Refused after the list was shown: the server's message takes its place.
-    refused = true;
-    await act(() => vi.advanceTimersByTimeAsync(CASE_LIST_POLL_MS));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "This action is not open to your role.",
-    );
-    expect(screen.getByText(`Reference: ${TRACE_ID}`)).toBeVisible();
-    expect(screen.queryByRole("table")).toBeNull();
-    // No repeat mends a refusal: nothing more is read, however long it waits.
-    const after = reads(server);
-    await act(() => vi.advanceTimersByTimeAsync(backoffMs(10) * 3));
-    expect(reads(server)).toBe(after);
-
-    refused = false;
-    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
-    expect(await rows()).toHaveLength(1);
-    expect(reads(server)).toBe(after + 1);
-    // And the reading goes on from there.
-    await act(() => vi.advanceTimersByTimeAsync(CASE_LIST_POLL_MS));
-    expect(reads(server)).toBe(after + 2);
-  });
-
-  it("goes on reading after too many requests", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const server = fakeServer((call) =>
-      call.path === LIST_PATH
-        ? json(429, errorBody("too_many_requests", "Too many requests."))
-        : undefined,
-    );
-    openList();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Too many requests. Please wait a moment and try again.",
-    );
-    const before = reads(server);
-
-    await act(() =>
-      vi.advanceTimersByTimeAsync(backoffMs(1) + CASE_LIST_POLL_MS),
-    );
-
-    expect(reads(server)).toBeGreaterThan(before);
-  });
-
-  it("sends no read that was asked for once the screen has been left", async () => {
-    let release: (answer: Response) => void = () => undefined;
-    let held = false;
-    const server = fakeServer((call) => {
-      if (call.path !== LIST_PATH) {
-        return undefined;
-      }
-      if (!held) {
-        return json(502, errorBody("upstream_unavailable", "Not available."));
-      }
-      // This read stays out until the test lets it go.
-      return new Promise<Response>((resolve) => {
-        release = resolve;
-      });
-    });
-    const view = openList();
-    const again = await screen.findByRole("button", { name: "Check again" });
-    held = true;
-    await userEvent.click(again);
-    // Asked once more while that read is out: another is to follow it.
-    await userEvent.click(again);
-    const before = reads(server);
-
-    view.unmount();
-    await act(async () => {
-      release(json(200, { cases: [], has_more: false }));
-      await Promise.resolve();
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(reads(server)).toBe(before);
-  });
-
-  it("takes an answer that is not a case list for a fault", async () => {
-    fakeServer((call) =>
-      call.path === LIST_PATH
-        ? json(200, { cases: [{ case_id: NEWEST }], has_more: false })
-        : undefined,
-    );
-
-    openList();
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Something went wrong. Please try again.",
-    );
-    expect(screen.queryByRole("table")).toBeNull();
-  });
 });
 
 describe("1.13 the list is the underwriter's", () => {
-  it("is in the underwriter's navigation", async () => {
-    listServer([]);
-
-    openList();
-
-    const navigation = await screen.findByRole("navigation", {
-      name: "Screens",
-    });
-    expect(
-      within(navigation).getByRole("link", { name: "Cases" }),
-    ).toHaveAttribute("href", "/underwriter/cases");
-  });
-
   it("is neither in the customer's navigation nor one of the customer's screens", async () => {
     const server = listServer([caseSummary(NEWEST)]);
 

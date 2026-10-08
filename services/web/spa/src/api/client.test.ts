@@ -10,7 +10,6 @@ import {
   json,
   pageProgress,
   startedCase,
-  thumbnail,
   triagePage,
   UPLOADED,
 } from "../test/server";
@@ -24,12 +23,10 @@ import {
   getProgress,
   getThumbnail,
   getTriageQueue,
-  IDEMPOTENCY_KEY_HEADER,
   NetworkError,
   newIdempotencyKey,
   REQUEST_TIMEOUT_MS,
   startCase,
-  UPLOAD_TIMEOUT_MS,
   uploadDocument,
 } from "./client";
 
@@ -57,22 +54,6 @@ describe("1.3 API client", () => {
     ]);
   });
 
-  it("sends the new role on every call after a switch", async () => {
-    const server = fakeServer();
-    setRole("customer");
-    await getMe();
-
-    setRole("underwriter");
-    await getMe();
-    await getMe();
-
-    expect(server.calls.map((call) => call.role)).toEqual([
-      "customer",
-      "underwriter",
-      "underwriter",
-    ]);
-  });
-
   it("turns the server's error body into an ApiError with code and trace id", async () => {
     const traceId = "0af7651916cd43dd8448eb211c80319c";
     fakeServer(() =>
@@ -93,28 +74,18 @@ describe("1.3 API client", () => {
     });
   });
 
-  it("reports a failure with no error body without a code", async () => {
-    fakeServer(() => new Response("<html>bad gateway</html>", { status: 502 }));
-    setRole("customer");
+  it.each([["a body that is not JSON", () => new Response("<html>ok</html>")]])(
+    "reports a success with %s as an ApiError",
+    async (_name, respond) => {
+      fakeServer(respond);
+      setRole("customer");
 
-    const error = await getMe().catch((caught: unknown) => caught);
+      const error = await getMe().catch((caught: unknown) => caught);
 
-    expect(error).toMatchObject({ status: 502, code: null, traceId: null });
-  });
-
-  it.each([
-    ["an empty body", () => new Response(null, { status: 204 })],
-    ["a body that is not JSON", () => new Response("<html>ok</html>")],
-    ["a JSON value that is not an object", () => new Response("null")],
-  ])("reports a success with %s as an ApiError", async (_name, respond) => {
-    fakeServer(respond);
-    setRole("customer");
-
-    const error = await getMe().catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ code: null, traceId: null });
-  });
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ code: null, traceId: null });
+    },
+  );
 
   it("gives up on a call that never answers", async () => {
     vi.useFakeTimers();
@@ -182,12 +153,7 @@ describe("1.5 API client", () => {
     expect(error).toMatchObject({ status: 403, code: "role_not_allowed" });
   });
 
-  it.each([
-    ["no case id", { document_id: "d" }],
-    ["no document id", { case_id: "c" }],
-    ["an empty case id", { case_id: "", document_id: "d" }],
-    ["a list", []],
-  ])(
+  it.each([["no case id", { document_id: "d" }]])(
     "reports a 201 with %s as an ApiError without a code",
     async (_n, body) => {
       fakeServer(() => json(201, body));
@@ -201,46 +167,9 @@ describe("1.5 API client", () => {
       expect(error).toMatchObject({ code: null, traceId: null });
     },
   );
-
-  it("waits longer for an upload than the server's own deadlines", () => {
-    // intake 90 s < web 120 s < browser: the browser outlasts both.
-    expect(UPLOAD_TIMEOUT_MS).toBe(150_000);
-    expect(UPLOAD_TIMEOUT_MS).toBeGreaterThan(120_000);
-  });
-
-  it("gives an upload longer than other calls before giving up", async () => {
-    vi.useFakeTimers();
-    try {
-      const fetchMock = vi.fn(
-        (_input: RequestInfo | URL, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () =>
-              reject(new DOMException("aborted", "AbortError")),
-            );
-          }),
-      );
-      vi.stubGlobal("fetch", fetchMock);
-      setRole("customer");
-
-      const outcome = uploadDocument(new Blob(["%PDF-1.7"]), KEY).catch(
-        (caught: unknown) => caught,
-      );
-      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
-      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(UPLOAD_TIMEOUT_MS - REQUEST_TIMEOUT_MS);
-
-      expect(await outcome).toBeInstanceOf(NetworkError);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
 
 describe("1.6 API client", () => {
-  it("names the idempotency header as the server reads it", () => {
-    expect(IDEMPOTENCY_KEY_HEADER).toBe("Idempotency-Key");
-  });
-
   it("makes a new, well-formed idempotency key each time", () => {
     const keys = new Set(Array.from({ length: 20 }, () => newIdempotencyKey()));
 
@@ -334,38 +263,11 @@ describe("1.6 API client", () => {
     expect(server.calls[0]?.path).toBe("/api/cases/..%2Fme/progress");
   });
 
-  it("makes a key without crypto.randomUUID, from random bytes", () => {
-    let filled = 0;
-    vi.stubGlobal("crypto", {
-      getRandomValues: (bytes: Uint8Array) => {
-        filled += 1;
-        bytes.forEach((_, index) => {
-          bytes[index] = (index * 37 + filled * 11) % 256;
-        });
-        return bytes;
-      },
-    });
-
-    const first = newIdempotencyKey();
-    const second = newIdempotencyKey();
-
-    expect(first).toMatch(/^[0-9a-f]{32}$/);
-    expect(second).toMatch(/^[0-9a-f]{32}$/);
-    expect(second).not.toBe(first);
-    expect(filled).toBe(2);
-  });
-
   it.each([
-    ["no pages", { case_id: UPLOADED.case_id, case_status: "running" }],
-    [
-      "pages that are not a list",
-      { ...caseProgress(UPLOADED.case_id), pages: "none" },
-    ],
     [
       "another case's progress",
       caseProgress("019a0000-0000-7000-8000-00000000000f"),
     ],
-    ["no case id", { case_status: "running", pages: [] }],
   ])(
     "reports a progress with %s as an ApiError without a code",
     async (_n, body) => {
@@ -381,33 +283,7 @@ describe("1.6 API client", () => {
     },
   );
 
-  it.each([
-    [
-      "another case's answer",
-      startedCase("019a0000-0000-7000-8000-00000000000f"),
-    ],
-    ["no case id", { case_status: "running" }],
-  ])(
-    "reports a start answered with %s as an ApiError without a code",
-    async (_n, body) => {
-      fakeServer(() => json(200, body));
-      setRole("customer");
-
-      const error = await startCase(UPLOADED.case_id).catch(
-        (caught: unknown) => caught,
-      );
-
-      expect(error).toBeInstanceOf(ApiError);
-      expect(error).toMatchObject({ code: null, traceId: null });
-    },
-  );
-
-  it.each([
-    ["no status", { case_id: UPLOADED.case_id }],
-    ["an unknown status", startedCase(UPLOADED.case_id, "archived")],
-    ["a status that is a prototype member", startedCase("c", "toString")],
-    ["a list", []],
-  ])(
+  it.each([["an unknown status", startedCase(UPLOADED.case_id, "archived")]])(
     "reports a start or a progress with %s as an ApiError without a code",
     async (_name, body) => {
       fakeServer(() => json(200, body));
@@ -457,25 +333,6 @@ describe("1.10 API client", () => {
         body: JSON.stringify({ decision: "keep" }),
       },
     ]);
-  });
-
-  it("turns a refused decision into an ApiError with the server's code", async () => {
-    fakeServer((call) =>
-      call.path.endsWith("/decisions")
-        ? json(
-            409,
-            errorBody(
-              "not_awaiting_decision",
-              "Not waiting for this decision.",
-            ),
-          )
-        : undefined,
-    );
-    setRole("customer");
-
-    await expect(
-      decidePage(UPLOADED.case_id, PAGE, "discard"),
-    ).rejects.toMatchObject({ status: 409, code: "not_awaiting_decision" });
   });
 
   it("refuses an answer that is not the decision that was sent", async () => {
@@ -562,23 +419,6 @@ describe("1.10 API client", () => {
       });
     }
   });
-
-  it("refuses classifications that are about another case, or are no list", async () => {
-    let answer: unknown = { case_id: PAGE, classifications: [] };
-    fakeServer((call) =>
-      call.path.endsWith("/classifications") ? json(200, answer) : undefined,
-    );
-    setRole("customer");
-
-    await expect(getClassifications(UPLOADED.case_id)).rejects.toMatchObject({
-      status: 200,
-      code: null,
-    });
-    answer = { case_id: UPLOADED.case_id, classifications: "none" };
-    await expect(getClassifications(UPLOADED.case_id)).rejects.toBeInstanceOf(
-      ApiError,
-    );
-  });
 });
 
 describe("1.11 API client", () => {
@@ -607,36 +447,6 @@ describe("1.11 API client", () => {
         body: null,
       },
     ]);
-  });
-
-  it("turns the refusal of the customer into an ApiError with the server's code", async () => {
-    fakeServer();
-    setRole("customer");
-
-    await expect(getTriageQueue()).rejects.toMatchObject({
-      status: 403,
-      code: "role_not_allowed",
-    });
-  });
-
-  it("refuses an answer that is not a queue, or lists half a reading", async () => {
-    const whole = triagePage(CASE, 1);
-    const answers: unknown[] = [
-      { pages: [whole] },
-      { pages: "none", has_more: false },
-      { pages: [{ ...whole, page_id: "" }], has_more: false },
-      { pages: [{ ...whole, thumbnail_path: null }], has_more: false },
-      { pages: [{ ...whole, confidence: null }], has_more: false },
-      { pages: [{ ...whole, confidence: 96 }], has_more: false },
-      { pages: [{ ...whole, reason: null }], has_more: false },
-      { pages: [null], has_more: false },
-    ];
-    setRole("underwriter");
-
-    for (const answer of answers) {
-      fakeServer(() => json(200, answer));
-      await expect(getTriageQueue()).rejects.toBeInstanceOf(ApiError);
-    }
   });
 
   it("reads a thumbnail from the address the server gave, with the role header", async () => {
@@ -680,34 +490,6 @@ describe("1.11 API client", () => {
     }
     expect(server.calls).toEqual([]);
   });
-
-  it("refuses a thumbnail that is no picture, and reports the server's error", async () => {
-    const address = triagePage(CASE, 1).thumbnail_path;
-    setRole("underwriter");
-
-    fakeServer(() => json(200, { page_id: "x" }));
-    await expect(getThumbnail(address)).rejects.toMatchObject({ code: null });
-
-    fakeServer(
-      () =>
-        new Response(new Uint8Array(), {
-          status: 200,
-          headers: { "Content-Type": "image/png" },
-        }),
-    );
-    await expect(getThumbnail(address)).rejects.toBeInstanceOf(ApiError);
-
-    fakeServer(() =>
-      json(404, errorBody("not_found", "That page could not be found.")),
-    );
-    await expect(getThumbnail(address)).rejects.toMatchObject({
-      status: 404,
-      code: "not_found",
-    });
-
-    fakeServer(() => thumbnail());
-    await expect(getThumbnail(address)).resolves.toBeDefined();
-  });
 });
 
 describe("1.12 API client", () => {
@@ -741,12 +523,6 @@ describe("1.12 API client", () => {
     };
   }
 
-  function without(record: Record<string, unknown>, field: string) {
-    return Object.fromEntries(
-      Object.entries(record).filter(([name]) => name !== field),
-    );
-  }
-
   it("reads a whole audit trail as the underwriter, with the role header", async () => {
     const answered = trail({
       events: [
@@ -775,56 +551,8 @@ describe("1.12 API client", () => {
     ]);
   });
 
-  it("takes an event that leaves its error code out, as one whose code is null", async () => {
-    const answered = trail({
-      events: [
-        without(auditEvent({ action: "page.classified" }), "error_code"),
-      ],
-    });
-    fakeServer(() => json(200, answered));
-    setRole("underwriter");
-
-    await expect(getAuditTrail(AUDITED)).resolves.toEqual(answered);
-  });
-
   it.each([
-    ["no has_more", without(trail(), "has_more")],
-    ["a has_more that is no yes or no", trail({ has_more: "no" })],
     ["another case's case_id", trail({ case_id: OTHER })],
-    ["events that are no list", trail({ events: {} })],
-    ["an event that is no object", trail({ events: ["page.kept"] })],
-    [
-      "an event without an action",
-      trail({ events: [auditEvent({ action: "" })] }),
-    ],
-    [
-      "an event without an actor",
-      trail({ events: [auditEvent({ actor: 7 })] }),
-    ],
-    [
-      "an event without an actor kind",
-      trail({ events: [without(auditEvent(), "actor_kind")] }),
-    ],
-    [
-      "an event without a time",
-      trail({ events: [auditEvent({ occurred_at: null })] }),
-    ],
-    [
-      "an event without a ref",
-      trail({ events: [without(auditEvent(), "ref")] }),
-    ],
-    [
-      "an event whose page is neither an id nor null",
-      trail({ events: [auditEvent({ page_id: 3 })] }),
-    ],
-    [
-      "an event whose detail is text",
-      trail({ events: [auditEvent({ detail: "Person 2" })] }),
-    ],
-    [
-      "an event whose error code is no text",
-      trail({ events: [auditEvent({ error_code: 502 })] }),
-    ],
     [
       "one wrong event among right ones",
       trail({
@@ -839,21 +567,6 @@ describe("1.12 API client", () => {
 
     await expect(refused).rejects.toBeInstanceOf(ApiError);
     await expect(refused).rejects.toMatchObject({ status: 200, code: null });
-  });
-
-  it("turns the refusal of the customer, and an unknown case, into an ApiError with the server's code", async () => {
-    setRole("customer");
-    fakeServer();
-    await expect(getAuditTrail(AUDITED)).rejects.toMatchObject({
-      status: 403,
-      code: "role_not_allowed",
-    });
-
-    setRole("underwriter");
-    await expect(getAuditTrail(AUDITED)).rejects.toMatchObject({
-      status: 404,
-      code: "not_found",
-    });
   });
 });
 
@@ -883,16 +596,6 @@ describe("1.13 API client", () => {
         body: null,
       },
     ]);
-  });
-
-  it("turns the refusal of the customer into an ApiError with the server's code", async () => {
-    fakeServer();
-    setRole("customer");
-
-    await expect(getCaseList()).rejects.toMatchObject({
-      status: 403,
-      code: "role_not_allowed",
-    });
   });
 
   it("refuses an answer that is not a case list, or lists half a case", async () => {

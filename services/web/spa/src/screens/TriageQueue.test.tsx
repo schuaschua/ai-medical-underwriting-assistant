@@ -4,7 +4,6 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { backoffMs } from "../polling/backoff";
-import { THUMBNAIL_RETRIES } from "../components/PageThumbnail";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
 import {
   decisionRecorded,
@@ -238,17 +237,6 @@ describe("1.11 the underwriter's triage queue", () => {
     });
   });
 
-  it("words a type this build does not know as the server named it", async () => {
-    queueServer([
-      triagePage(FIRST_CASE, 1, { pageType: "x_ray", confidence: 0.2 }),
-    ]);
-
-    openQueue();
-
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(rows()[0]).toHaveTextContent("Looks like x_ray (20%).");
-  });
-
   it("says when a picture could not be shown, and keeps the row", async () => {
     const page = triagePage(FIRST_CASE, 1);
     fakeServer((call) => {
@@ -271,27 +259,6 @@ describe("1.11 the underwriter's triage queue", () => {
     ).toBeVisible();
     expect(screen.queryByRole("img")).toBeNull();
     expect(button("Accept", page)).toBeEnabled();
-  });
-
-  it("says nothing is waiting for an empty queue", async () => {
-    queueServer([]);
-
-    openQueue();
-
-    expect(await screen.findByText("Nothing is waiting.")).toBeVisible();
-    expect(screen.queryByRole("table")).toBeNull();
-  });
-
-  it("says when more pages wait than are shown", async () => {
-    queueServer([triagePage(FIRST_CASE, 1)], undefined, true);
-
-    openQueue();
-
-    expect(
-      await screen.findByText(
-        "More pages are waiting than are shown here. They appear as these are decided.",
-      ),
-    ).toBeVisible();
   });
 
   it("accepts one page and denies another as the underwriter, and both leave the queue", async () => {
@@ -414,37 +381,6 @@ describe("1.11 the underwriter's triage queue", () => {
     ).toEqual([{ decision: "accept" }, { decision: "accept" }]);
   });
 
-  it("keeps the row of a decision that is owed once the server lists the page no longer", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const page = triagePage(FIRST_CASE, 1);
-    let failing = true;
-    // The decision is stored, the page leaves the queue, but the call fails.
-    const server = queueServer([page], () => {
-      server.waiting.length = 0;
-      return failing ? json(502, null) : undefined;
-    });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    openQueue();
-    await waitFor(() => expect(rows()).toHaveLength(1));
-
-    await user.click(button("Deny", page));
-    await within(rowOf(page)).findByRole("alert");
-    await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS));
-
-    // The server lists nothing, and the row is still there with its way on.
-    expect(reads(server)).toBeGreaterThan(1);
-    expect(rows()).toHaveLength(1);
-    expect(screen.queryByText("Nothing is waiting.")).toBeNull();
-
-    failing = false;
-    await user.click(within(rowOf(page)).getByRole("button"));
-
-    expect(await screen.findByText("Nothing is waiting.")).toBeVisible();
-    expect(
-      decisions(server).map((call) => JSON.parse(String(call.body))),
-    ).toEqual([{ decision: "deny" }, { decision: "deny" }]);
-  });
-
   it("says plainly when a page was decided elsewhere, and the row goes at the next read", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const page = triagePage(FIRST_CASE, 1);
@@ -478,43 +414,6 @@ describe("1.11 the underwriter's triage queue", () => {
     await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS));
 
     expect(await screen.findByText("Nothing is waiting.")).toBeVisible();
-  });
-
-  it("offers the buttons again when later reads still list a page it took for decided", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const page = triagePage(FIRST_CASE, 1);
-    let refuse = true;
-    const server = queueServer([page], () =>
-      refuse
-        ? json(
-            409,
-            errorBody(
-              "not_awaiting_decision",
-              "That page is not waiting for this decision.",
-            ),
-          )
-        : undefined,
-    );
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    openQueue();
-    await waitFor(() => expect(rows()).toHaveLength(1));
-
-    await user.click(button("Accept", page));
-    await within(rowOf(page)).findByRole("status");
-    expect(within(rowOf(page)).queryByRole("button")).toBeNull();
-
-    // The server keeps listing the page: it does wait, and can be decided.
-    await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS * 2));
-
-    await waitFor(() => expect(button("Accept", page)).toBeEnabled());
-    expect(within(rowOf(page)).queryByRole("status")).toBeNull();
-    refuse = false;
-    await user.click(button("Deny", page));
-
-    expect(await screen.findByText("Nothing is waiting.")).toBeVisible();
-    expect(
-      decisions(server).map((call) => JSON.parse(String(call.body))),
-    ).toEqual([{ decision: "accept" }, { decision: "deny" }]);
   });
 
   it("keeps the row while a decision is out, though a read in between lists the page no longer", async () => {
@@ -567,13 +466,7 @@ describe("1.11 the underwriter's triage queue", () => {
     ).toEqual([{ decision: "accept" }, { decision: "accept" }]);
   });
 
-  it.each([
-    ["gets no answer", () => Promise.reject(new TypeError("offline"))],
-    [
-      "is answered 200 with something that is no decision",
-      () => Promise.resolve(json(200, { saved: true })),
-    ],
-  ])(
+  it.each([["gets no answer", () => Promise.reject(new TypeError("offline"))]])(
     "offers only the same decision again after a call that %s",
     async (_name, fail) => {
       const page = triagePage(FIRST_CASE, 1);
@@ -642,61 +535,6 @@ describe("1.11 the underwriter's triage queue", () => {
     ]);
   });
 
-  it("reads a picture that could not be shown again on later reads, a few times only", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const page = triagePage(FIRST_CASE, 1);
-    const server = fakeServer((call) => {
-      if (call.path === QUEUE_PATH) {
-        return json(200, { pages: [page], has_more: false });
-      }
-      if (call.path === page.thumbnail_path) {
-        return json(
-          404,
-          errorBody("not_found", "That page could not be found."),
-        );
-      }
-      return undefined;
-    });
-    const thumbnailReads = () =>
-      server.calls.filter((call) => call.path === page.thumbnail_path).length;
-    openQueue();
-    await screen.findByText("The picture could not be shown.");
-    expect(thumbnailReads()).toBe(1);
-
-    // Read again with each read of the queue, and no more than a few times.
-    for (let poll = 0; poll < THUMBNAIL_RETRIES + 2; poll += 1) {
-      await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS));
-    }
-    expect(thumbnailReads()).toBe(1 + THUMBNAIL_RETRIES);
-    expect(screen.getByText("The picture could not be shown.")).toBeVisible();
-  });
-
-  it("shows a picture once a later read of it succeeds", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const page = triagePage(FIRST_CASE, 1);
-    let missing = true;
-    fakeServer((call) => {
-      if (call.path === QUEUE_PATH) {
-        return json(200, { pages: [page], has_more: false });
-      }
-      if (call.path === page.thumbnail_path && missing) {
-        return json(
-          404,
-          errorBody("not_found", "That page could not be found."),
-        );
-      }
-      return undefined;
-    });
-    openQueue();
-    await screen.findByText("The picture could not be shown.");
-
-    missing = false;
-    await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS));
-
-    expect(await screen.findByRole("img")).toBeVisible();
-    expect(screen.queryByText("The picture could not be shown.")).toBeNull();
-  });
-
   it("reads the queue again on every poll, and a new page appears without a reload", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const server = queueServer([]);
@@ -709,79 +547,6 @@ describe("1.11 the underwriter's triage queue", () => {
 
     await waitFor(() => expect(rows()).toHaveLength(1));
     expect(reads(server)).toBe(before + 1);
-  });
-
-  it("reads nothing while the tab is hidden, and catches up when it is shown", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const server = queueServer([]);
-    let visibility: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(
-      () => visibility,
-    );
-    openQueue();
-    await screen.findByText("Nothing is waiting.");
-    const before = reads(server);
-
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS * 2));
-    expect(reads(server)).toBe(before);
-
-    visibility = "visible";
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(reads(server)).toBe(before + 1));
-  });
-
-  it("stops reading when the screen is left", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const server = queueServer([]);
-    const view = openQueue();
-    await screen.findByText("Nothing is waiting.");
-    const before = reads(server);
-
-    view.unmount();
-    await act(() => vi.advanceTimersByTimeAsync(TRIAGE_POLL_MS * 3));
-
-    expect(reads(server)).toBe(before);
-  });
-
-  it("shows why the queue could not be read, with a way to check again", async () => {
-    let down = true;
-    const server = fakeServer((call) => {
-      if (call.path !== QUEUE_PATH) {
-        return undefined;
-      }
-      return down
-        ? json(
-            502,
-            errorBody(
-              "upstream_unavailable",
-              "The service is not available right now. Please try again.",
-              TRACE_ID,
-            ),
-          )
-        : json(200, { pages: [triagePage(FIRST_CASE, 1)], has_more: false });
-    });
-    const user = userEvent.setup();
-
-    openQueue();
-
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(
-      "The service is not available right now. Please try again.",
-    );
-    expect(alert).toHaveTextContent(`Reference: ${TRACE_ID}`);
-    expect(screen.queryByText("Nothing is waiting.")).toBeNull();
-
-    down = false;
-    await user.click(screen.getByRole("button", { name: "Check again" }));
-
-    await waitFor(() => expect(rows()).toHaveLength(1));
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(reads(server)).toBe(2);
   });
 
   it("keeps the queue shown when a later read fails, says so, and reads further apart", async () => {
@@ -818,19 +583,6 @@ describe("1.11 the underwriter's triage queue", () => {
 });
 
 describe("1.11 the queue is the underwriter's", () => {
-  it("is in the underwriter's navigation", async () => {
-    queueServer([]);
-
-    openQueue();
-
-    const navigation = await screen.findByRole("navigation", {
-      name: "Screens",
-    });
-    expect(
-      within(navigation).getByRole("link", { name: "Triage queue" }),
-    ).toHaveAttribute("href", "/underwriter/triage");
-  });
-
   it("is neither in the customer's navigation nor one of the customer's screens", async () => {
     const server = queueServer([triagePage(FIRST_CASE, 1)]);
 

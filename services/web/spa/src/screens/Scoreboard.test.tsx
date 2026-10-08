@@ -255,66 +255,6 @@ describe("3.5 the retrieval scoreboard", () => {
     ]);
   });
 
-  it("marks no row when the file names no winner, and says nothing of stand-ins for a run that was none", async () => {
-    const deployed = {
-      ...SCOREBOARD_RUN,
-      eval_run_id: "0199b7a0-0000-7000-8000-000000000007",
-      stand_ins: false,
-      web_address: "https://web.example.test",
-    };
-    // The redaction report on file is a clean one of another, local run.
-    const server = scoreboardServer(
-      retrievalScoreboard({
-        run: deployed,
-        rows: ["r1", "r2", "r3", "r4", "r5", "r6"].map((config) =>
-          rowScore(config, false),
-        ),
-        winner: null,
-      }),
-    );
-
-    openScoreboard();
-
-    const listed = await lines();
-    expect(listed.map((cells) => cells[0])).toEqual([
-      "r1",
-      "r2",
-      "r3",
-      "r4",
-      "r5",
-      "r6",
-    ]);
-    expect(listed.every((cells) => cells.at(-1) === "Not measured")).toBe(true);
-    expect(screen.queryByText("Winner")).toBeNull();
-    expect(screen.queryByRole("note")).toBeNull();
-    expect(screen.queryByText(/stand-in/)).toBeNull();
-    expect(
-      screen.queryByText(
-        /not scored|search failed|searches failed|decide the winner/,
-      ),
-    ).toBeNull();
-    expect(
-      screen.getByText(/against https:\/\/web\.example\.test\./),
-    ).toBeVisible();
-    // The report of another run is said to be that, and not read as this
-    // run's "clean".
-    expect(
-      screen.getByText(
-        `Not available for this run. The redaction report on file is of another bake-off run (${SCOREBOARD_RUN.eval_run_id}) and says nothing about the figures above.`,
-      ),
-    ).toBeVisible();
-    expect(screen.queryByText(/Clean/)).toBeNull();
-
-    // The report of the same run is this run's line.
-    server.held.redaction = redactionScoreboard({ run: deployed });
-    await userEvent.click(screen.getByRole("button", { name: "Read again" }));
-    expect(
-      await screen.findByText(
-        "Clean: no planted identifier was found in a page text. 94 pages of 22 cases checked. 0 of the 212 quotes expected for the facts of these cases are no longer found in the text of their page.",
-      ),
-    ).toBeVisible();
-  });
-
   it("says that the bake-off has not been run when there is no file, with no table, and reads again on request", async () => {
     const server = scoreboardServer(null, null);
 

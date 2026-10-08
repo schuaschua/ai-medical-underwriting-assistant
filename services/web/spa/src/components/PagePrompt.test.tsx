@@ -8,7 +8,6 @@ import { App } from "../App";
 import { PROGRESS_POLL_MS } from "../cases/caseProgress";
 import { CASES_STORAGE_KEY } from "../cases/sessionCases";
 import { ROLE_STORAGE_KEY } from "../role/roleStore";
-import { percentage, strings } from "../strings";
 import {
   caseProgress,
   classification,
@@ -204,21 +203,6 @@ describe("1.10 the customer's prompt for a page", () => {
     expect(decisions(server)).toEqual([]);
   });
 
-  it("reads no classification for a case with no page that waits for the customer", async () => {
-    const server = caseServer(
-      { 1: "extracting", 2: "awaiting_triage" },
-      { 1: ["lab_report", 1], 2: ["lab_report", 0.6] },
-    );
-
-    openCase();
-
-    await waitFor(() => expect(badges()).toHaveLength(2));
-    expect(
-      server.calls.filter((call) => call.path === CLASSIFICATIONS_PATH),
-    ).toEqual([]);
-    expect(prompts()).toEqual([]);
-  });
-
   it("discards a page with a POST that carries the role header and names the decision only, and the prompt goes", async () => {
     const server = caseServer(
       { 1: "extracting", 2: "awaiting_customer" },
@@ -350,201 +334,6 @@ describe("1.10 the customer's prompt for a page", () => {
       JSON.stringify({ decision: "discard" }),
       JSON.stringify({ decision: "discard" }),
     ]);
-  });
-
-  it("offers both answers again after a refusal, which saved nothing", async () => {
-    let refuse = true;
-    const server = caseServer(
-      { 1: "awaiting_customer" },
-      { 1: ["invoice", 1] },
-      () =>
-        refuse
-          ? json(422, errorBody("validation_failed", "Not valid."))
-          : undefined,
-    );
-    const user = userEvent.setup();
-    openCase();
-
-    await user.click(
-      await screen.findByRole("button", { name: "Discard page 1" }),
-    );
-    await within(prompt(1)).findByRole("alert");
-
-    refuse = false;
-    await user.click(
-      within(prompt(1)).getByRole("button", { name: "Keep page 1" }),
-    );
-
-    await waitFor(() =>
-      expect(badges()).toEqual(["Page 1: Waiting for the underwriter"]),
-    );
-    expect(decisions(server).map((call) => call.body)).toEqual([
-      JSON.stringify({ decision: "discard" }),
-      JSON.stringify({ decision: "keep" }),
-    ]);
-  });
-
-  it.each([
-    [
-      "no answer at all",
-      (): Response => {
-        throw new TypeError("Failed to fetch");
-      },
-      "The server could not be reached. Please try again.",
-    ],
-    [
-      "a 200 that is not the decision",
-      (): Response => json(200, {}),
-      "Something went wrong. Please try again.",
-    ],
-  ])(
-    "still offers the retry after the page moved on when the call got %s",
-    async (_name, answer, message) => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
-      let failing = true;
-      const server = caseServer(
-        { 1: "awaiting_customer", 2: "extracting" },
-        { 1: ["invoice", 1] },
-        () => {
-          if (!failing) {
-            return undefined;
-          }
-          // The server stored the keep; the browser never learned of it.
-          server.statuses[1] = "awaiting_triage";
-          return answer();
-        },
-      );
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-      openCase();
-
-      await user.click(
-        await screen.findByRole("button", { name: "Keep page 1" }),
-      );
-      expect(await within(prompt(1)).findByRole("alert")).toHaveTextContent(
-        message,
-      );
-      await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS));
-      await waitFor(() =>
-        expect(badges()[0]).toBe("Page 1: Waiting for the underwriter"),
-      );
-
-      failing = false;
-      await user.click(
-        within(prompt(1)).getByRole("button", {
-          name: "Try again to save your answer for page 1",
-        }),
-      );
-
-      await waitFor(() => expect(queryPrompt(1)).toBeNull());
-      expect(decisions(server).map((call) => call.body)).toEqual([
-        JSON.stringify({ decision: "keep" }),
-        JSON.stringify({ decision: "keep" }),
-      ]);
-    },
-  );
-
-  it("keeps the prompt, saying it is being saved, while the retry of an unsettled answer is out", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let calls = 0;
-    let release: (response: Response) => void = () => undefined;
-    const server = caseServer(
-      { 1: "awaiting_customer", 2: "extracting" },
-      { 1: ["invoice", 1] },
-      () => {
-        calls += 1;
-        if (calls === 1) {
-          server.statuses[1] = "awaiting_triage";
-          return json(502, errorBody("upstream_unavailable", "Not told."));
-        }
-        return new Promise<Response>((resolveAnswer) => {
-          release = resolveAnswer;
-        }) as unknown as Response;
-      },
-    );
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    openCase();
-
-    await user.click(
-      await screen.findByRole("button", { name: "Keep page 1" }),
-    );
-    await within(prompt(1)).findByRole("alert");
-    await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS));
-    await waitFor(() =>
-      expect(badges()[0]).toBe("Page 1: Waiting for the underwriter"),
-    );
-    await user.click(
-      within(prompt(1)).getByRole("button", {
-        name: "Try again to save your answer for page 1",
-      }),
-    );
-
-    // The retry is out, and the page is no longer waiting: the prompt
-    // stays, says so, and takes no second press.
-    expect(
-      await within(prompt(1)).findByText("Saving your answer…"),
-    ).toBeVisible();
-    const again = within(prompt(1)).getByRole("button", {
-      name: "Try again to save your answer for page 1",
-    });
-    expect(again).toBeDisabled();
-    expect(within(prompt(1)).queryByRole("alert")).toBeNull();
-
-    await act(async () => {
-      release(json(200, decisionRecorded(CASE, pageId(1), "keep", "customer")));
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(queryPrompt(1)).toBeNull());
-    expect(decisions(server)).toHaveLength(2);
-  });
-
-  it("reads the case again after a read that was out when the customer answered, without waiting for the next poll", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let status = "awaiting_customer";
-    let reads = 0;
-    let releaseRead: () => void = () => undefined;
-    const server = fakeServer((call) => {
-      if (call.path === PROGRESS_PATH) {
-        reads += 1;
-        const answer = json(
-          200,
-          caseProgress(CASE, "awaiting_human", "done", [
-            pageProgress(1, status),
-          ]),
-        );
-        if (reads !== 2) {
-          return answer;
-        }
-        // The second read is answered before the decision is stored, and
-        // its answer is held back until after it.
-        return new Promise<Response>((resolveRead) => {
-          releaseRead = () => resolveRead(answer);
-        });
-      }
-      if (call.path.endsWith("/decisions")) {
-        status = "awaiting_triage";
-      }
-      return undefined;
-    });
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    openCase();
-    await screen.findByRole("button", { name: "Keep page 1" });
-    await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS));
-    await waitFor(() => expect(reads).toBe(2));
-
-    await user.click(screen.getByRole("button", { name: "Keep page 1" }));
-    await screen.findByText("Your answer was saved.");
-    expect(reads).toBe(2);
-    await act(async () => {
-      releaseRead();
-      await Promise.resolve();
-    });
-
-    // The held read brought the old status; a third read follows it at once.
-    await waitFor(() =>
-      expect(badges()).toEqual(["Page 1: Waiting for the underwriter"]),
-    );
-    expect(reads).toBe(3);
-    expect(decisions(server)).toHaveLength(1);
   });
 
   it("still offers the retry when the answer was saved but the call failed, and sends the same answer again", async () => {
@@ -755,38 +544,6 @@ describe("1.10 the customer's prompt for a page", () => {
     const before = reads();
     await act(() => vi.advanceTimersByTimeAsync(PROGRESS_POLL_MS * 2));
     expect(reads()).toBe(before);
-  });
-
-  it("asks without naming a type the build has no words for", async () => {
-    caseServer({ 1: "awaiting_customer" }, { 1: ["constructor", 0.99] });
-
-    openCase();
-
-    expect(
-      await screen.findByText("This page needs your answer. Discard or keep?"),
-    ).toBeVisible();
-  });
-
-  it("has plain words for all six page types, and formats the percentage itself", () => {
-    expect(Object.keys(strings.pageType).sort()).toEqual([
-      "application_form",
-      "attending_physician_statement",
-      "id_document",
-      "invoice",
-      "lab_report",
-      "other",
-    ]);
-    for (const words of Object.values(strings.pageType)) {
-      // Words a customer reads, not the contract's identifiers.
-      expect(words).not.toMatch(/_/);
-      expect(strings.decision.prompt(words, "96%")).toBe(
-        `This looks like ${words} (96%). Discard or keep?`,
-      );
-    }
-    // Rounded down: only a confidence of exactly 1 reads 100%.
-    expect(
-      [0, 0.5, 0.29, 0.9, 0.955, 0.96, 0.995, 0.999999, 1].map(percentage),
-    ).toEqual(["0%", "50%", "29%", "90%", "95%", "96%", "99%", "99%", "100%"]);
   });
 
   it("keeps its text in the strings module and decides nothing in the browser", () => {

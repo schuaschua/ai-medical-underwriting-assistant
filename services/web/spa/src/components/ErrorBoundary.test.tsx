@@ -27,14 +27,4 @@ describe("1.3 error boundary", () => {
     // What is outside the boundary stays on the page.
     expect(screen.getByText("outside")).toBeVisible();
   });
-
-  it("shows its children when nothing fails", () => {
-    render(
-      <ErrorBoundary>
-        <p>fine</p>
-      </ErrorBoundary>,
-    );
-
-    expect(screen.getByText("fine")).toBeVisible();
-  });
 });

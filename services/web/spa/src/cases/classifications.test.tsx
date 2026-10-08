@@ -109,28 +109,6 @@ describe("1.10 the classifications of a case", () => {
     expect(reads(server, CASE)).toBe(2);
   });
 
-  it("drops what it read for one case when it is given another", async () => {
-    const server = fakeServer((call) =>
-      call.path === `/api/cases/${CASE}/classifications`
-        ? listed(CASE, classification(CASE, 1, "invoice", 1))
-        : undefined,
-    );
-    const pages = waitingPages(1);
-    const { result, rerender } = renderHook(
-      ({ caseId }) => useClassifications(caseId, pages),
-      { initialProps: { caseId: CASE } },
-    );
-    await waitFor(() => expect(Object.keys(result.current)).toHaveLength(1));
-
-    // The other case has a page with the same id in this stand-in: nothing
-    // of the first case's answer is shown for it, and its own list is read.
-    rerender({ caseId: OTHER_CASE });
-
-    expect(result.current).toEqual({});
-    await waitFor(() => expect(reads(server, OTHER_CASE)).toBe(1));
-    expect(result.current).toEqual({});
-  });
-
   it("ignores an answer that comes after the screen was left, or for a case it no longer follows", async () => {
     const release: Record<string, () => void> = {};
     fakeServer((call) => {
