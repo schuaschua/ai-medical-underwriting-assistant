@@ -47,7 +47,7 @@ Each spec of this session says it was not reviewed before implementation. The ch
 - **3.7, `verdict`'s wait for one upstream call** went from 12 s to 25 s so that it stays above `r4`'s and `r6`'s 20 s deadline. It is one setting and applies to every row and to `extraction` calls.
 - **3.6, the Compare pair** is a setting of `web` (`r4`, `r5`; fallback `r3`, `r5`); the SPA finds out which rows can run by asking.
 - **4.2, the role on the training container.** `classification` holds write access as `azure.md` lists, though the job only reads.
-- **Costs.** Every cost on both scoreboards is empty: no figure was entered from memory.
+- **Costs.** Every cost on both scoreboards is stated (2026-10-08, by the owner's request), worked out from Azure's Retail Prices API: unit prices with their query and date in each figure's source, the arithmetic and the assumptions in the comments of `evals/static-metrics.yaml`. The POC volume (268 searches a row, the store up 730 hours), the whole PostgreSQL server for `r1` to `r4`, `r6`'s planning tokens and the `llm` classifier's tokens per call are the coding agent's assumptions, listed in the last entry of `deferred-work.md` for the owner to confirm.
 
 ## Things a later change must respect
 
@@ -94,7 +94,7 @@ The owner went through the open decisions on 2026-10-08. What was changed for th
 
 The last full run, at `f0f858e`: 515 Python tests (coverage 90.7%), 146 SPA tests, lint and types clean. Every package is at its budget. The local stack was not started again after these changes: local databases need `verdict`'s migration `0002`, the manual must be ingested again (its file changed), and the scoreboard files under `.work/scoreboards` predate the new redaction counts.
 
-Confirmed by the owner as built: the training pages' redaction route, the `r6` verdict run, the two cautions of story 2.5, a case nobody decides staying open for the demo, pure fusion for a rule id typed as a query, the Compare pair's order, `verdict`'s 25 s wait, the effort measure, and the `evals` line in `CLAUDE.md`. Costs on the scoreboards are the owner's to state.
+Confirmed by the owner as built: the training pages' redaction route, the `r6` verdict run, the two cautions of story 2.5, a case nobody decides staying open for the demo, pure fusion for a rule id typed as a query, the Compare pair's order, `verdict`'s 25 s wait, the effort measure, and the `evals` line in `CLAUDE.md`. Costs on the scoreboards were worked out from Azure's price list on 2026-10-08 at the owner's request; their assumptions are the owner's to confirm (`deferred-work.md`, last entry).
 
 The owner confirmed on 2026-10-08 that the accepted exception in `security.md` covers the Cohere model, and the calibration floor of 10 pages. Still open with the owner: the 145 items of the review file, for the medical expert or anyone with the sources.
 

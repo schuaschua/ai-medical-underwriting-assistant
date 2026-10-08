@@ -623,7 +623,9 @@ def test_story_4_3_the_page_set_is_taken_to_the_gate_once_per_contender_and_both
         1.0,
     )
     assert (llm.queued_pages, llm.queue_rate) == (2, 0.3333)
-    assert llm.pages_not_classified == 0 and llm.cost_per_page is None
+    assert llm.pages_not_classified == 0
+    # The cost per page is the stated one, with its source (static metrics).
+    assert llm.cost_per_page is not None and llm.cost_per_page.source
     # The file whose case failed counts every one of its pages as wrong.
     assert classifier.measured and board.not_run == []
     assert (classifier.right_pages, classifier.pages, classifier.accuracy) == (
@@ -713,7 +715,11 @@ def test_story_4_3_the_page_set_is_taken_to_the_gate_once_per_contender_and_both
     alone = ClassificationScoreboard.model_validate_json(file.read_text())
     assert [score.measured for score in alone.contenders] == [True, False]
     assert alone.contenders[0] == llm
-    numbers = alone.contenders[1].model_dump(exclude={"contender", "measured"})
+    # The stated cost is no measurement: the file carries it as stated, and
+    # the screen shows none for a contender that was not measured.
+    numbers = alone.contenders[1].model_dump(
+        exclude={"contender", "measured", "cost_per_page"}
+    )
     assert set(numbers.values()) == {None}
     assert (alone.winner, alone.unscored_cases, alone.reason_leaks) == (None, [], [])
     assert len(web.uploads) == uploads + 3

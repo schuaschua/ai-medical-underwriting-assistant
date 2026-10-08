@@ -12,19 +12,90 @@
 # in the words of `bake-offs.md`; a test of the runner holds the chunk sets and
 # the stores equal to that table.
 #
-# Cost: not stated yet. The unit to state it in is USD per 1,000 searches, from
-# the Azure price list of the day the bake-off is run in Azure, with the list's
-# address and that date as the source (see deferred-work.md, story 3.4).
-#
 # Effort: the stories of `_bmad-output/planning-artifacts/epics.md` that had to
 # be built before the row could answer a search. It counts stories, not their
 # size: the epics give stories no size.
+#
+# Cost: STATED on 2026-10-08 by the owner's request, worked out by the coding
+# agent from Azure's public Retail Prices API and nothing else. The unit is the
+# spec's (`bake-offs.md`): the monthly cost at POC volume, in USD. An earlier
+# note in this file named USD per 1,000 searches; the spec's unit replaced it.
+#
+# The price list gives unit prices. Everything else below is an ASSUMPTION of
+# the coding agent, for the owner to confirm or change (deferred-work.md lists
+# them). Change a named figure, redo the arithmetic of the row, and change the
+# `amount` and the `unit` with it.
+#
+# POC volume. The spec names none (`SPEC.md` and `bake-offs.md` say "POC
+# volume" and give no number). Assumed: one month in which the bake-off is run
+# once over the whole case set, with the store up for the whole month.
+#   HOURS_PER_MONTH   = 730   (8,760 hours a year / 12). The demo environment is
+#                             in fact torn down between sessions (CLAUDE.md),
+#                             so what is really billed is far less: for a
+#                             session of N hours, put N in place of 730.
+#   SEARCHES_PER_ROW  = 268   = 39 recall searches (one per expected fact with a
+#                             rule) + 229 searches of the verdict agent (one
+#                             per expected fact of the 22 cases, counted in
+#                             data/answer-key/cases; the agent decides itself
+#                             how often it searches, so this is an estimate).
+#   QUERY_TOKENS      = 10    per search, for the query's embedding: the fact
+#                             statements are 30 to 36 characters on average, at
+#                             about 4 characters a token (a rule of thumb: the
+#                             project has no tokenizer).
+#
+# Unit prices, all read on 2026-10-08 from
+# https://prices.azure.com/api/retail/prices, type Consumption, currency USD,
+# region westus3 unless said. The filter of each query is in the figure's
+# `source`; the raw answers are kept in `.work/prices/` (not committed), the
+# rows used in `.work/prices/used-meters.tsv`.
+#   PG_HOUR      0.017     per hour      'B1MS', Azure Database for PostgreSQL Flexible Server Burstable BS Series Compute
+#   PG_GB        0.115     per GB/month  'Storage Data Stored', Azure Database for PostgreSQL Flex Server Storage
+#   EMBED_1K     0.00013   per 1K tokens 'text-embedding-3-large-glbl Tokens'. The list has this Global meter for
+#                                        17 regions, all at this price, and NOT for westus3 (westus3 has only the
+#                                        'DZ' meter, 0.000143, and a 'grader' meter). Taken as the Global price.
+#   RERANK_1K    2.00      per 1K        'Rerank v4 Fast Glbl Search', Cohere Models (listed for westus3)
+#   SEARCH_HOUR  0.101     per hour      'Basic Unit', Azure AI Search (serviceName 'Azure Cognitive Search')
+#   SEMANTIC_1K  0.00      per 1K        'Free queries' (the plan `search_semantic_sku` = free);
+#                                        the paid meter 'Semantic Ranker queries' is 1.00 per 1K
+#   AGENTIC_1K   0.00      per 1K tokens 'Free Agentic Retrieval Low Reasoning Tokens' (plan free, effort low);
+#                                        the paid meter 'Agentic Retrieval Low Reasoning Tokens' is 0.000022 per 1K
+#   CHAT_IN_1M   2.50      per 1M tokens '5.4 inp Gl 1M Tokens', Azure OpenAI GPT5 (cached input, '5.4 cd inp Gl', is 0.25)
+#   CHAT_OUT_1M  15.00     per 1M tokens '5.4 opt Gl 1M Tokens'
+#
+# The store of r1 to r4: THE WHOLE PostgreSQL server is counted, not a share
+# (POSTGRES_SHARE = 1), with its 32 GB of storage (`postgresql_storage_mb`
+# 32768), no high availability and one server. Why the whole: it is what the
+# store costs a reader who wants retrieval alone, and any share (one of the
+# services' schemas, or retrieval's megabytes of 32 GB) would be a figure
+# nobody can check. The other view is as true: the project runs this server
+# anyway for every service's schema, so pgvector adds nothing to the bill and
+# these rows then cost only their per-search part (under 0.01 for r1 to r3,
+# 0.54 for r4). For a share, multiply STORE_PG by it.
+#   STORE_PG = 730 x 0.017 + 32 x 0.115 = 12.41 + 3.68 = 16.09
+# Not in it: backup storage (meter 'Backup Storage LRS Data Stored', 0.095 per
+# GB a month; the list does not say how much backup is free, and the size of
+# seven days' backups is not known), and the embedding of the manual at
+# ingestion, which is done once and is the same for every row.
+#
+# The store of r5 and r6: the whole Azure AI Search service, one replica and one
+# partition of tier basic = one unit.
+#   STORE_SEARCH = 730 x 0.101 = 73.73
+# Not in it: as built, a search with r5 or r6 also reads the chunk table on the
+# PostgreSQL server (which deployment embedded the chunks), and a rule is read
+# from there; that server is not counted for these two rows.
+#
+# The query embedding, the same for r1 to r5:
+#   EMBED = 268 x 10 tokens = 2,680 tokens x 0.00013 / 1,000 = 0.0003
 rows:
   r1:
     store: pgvector
     chunk_set: fixed
     method: Vector only
-    cost: null
+    # r1 = STORE_PG + EMBED = 16.09 + 0.0003 = 16.09
+    cost:
+      amount: "16.09"
+      unit: "USD per month at POC volume (268 searches, store up 730 hours)"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and serviceName eq 'Azure Database for PostgreSQL'] meter 'B1MS' 0.017 per hour and meter 'Storage Data Stored' (Flex Server Storage) 0.115 per GB a month; [$filter=contains(meterName, 'embedding-3-large') or contains(meterName, 'embedding 3 large')] meter 'text-embedding-3-large-glbl Tokens' 0.00013 per 1,000 tokens (listed for 17 regions at that one price, not for westus3). The arithmetic and the assumptions are in evals/static-metrics.yaml."
     effort:
       amount: "3"
       unit: stories built
@@ -33,7 +104,11 @@ rows:
     store: pgvector
     chunk_set: smart
     method: Vector only
-    cost: null
+    # r2 = STORE_PG + EMBED = 16.09 + 0.0003 = 16.09
+    cost:
+      amount: "16.09"
+      unit: "USD per month at POC volume (268 searches, store up 730 hours)"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and serviceName eq 'Azure Database for PostgreSQL'] meter 'B1MS' 0.017 per hour and meter 'Storage Data Stored' (Flex Server Storage) 0.115 per GB a month; [$filter=contains(meterName, 'embedding-3-large') or contains(meterName, 'embedding 3 large')] meter 'text-embedding-3-large-glbl Tokens' 0.00013 per 1,000 tokens (listed for 17 regions at that one price, not for westus3). The arithmetic and the assumptions are in evals/static-metrics.yaml."
     effort:
       amount: "3"
       unit: stories built
@@ -42,7 +117,11 @@ rows:
     store: pgvector
     chunk_set: smart
     method: "Hybrid: vector and PostgreSQL full-text search, fused by rank"
-    cost: null
+    # r3 = STORE_PG + EMBED = 16.09 + 0.0003 = 16.09 (the full-text search runs on the same server)
+    cost:
+      amount: "16.09"
+      unit: "USD per month at POC volume (268 searches, store up 730 hours)"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and serviceName eq 'Azure Database for PostgreSQL'] meter 'B1MS' 0.017 per hour and meter 'Storage Data Stored' (Flex Server Storage) 0.115 per GB a month; [$filter=contains(meterName, 'embedding-3-large') or contains(meterName, 'embedding 3 large')] meter 'text-embedding-3-large-glbl Tokens' 0.00013 per 1,000 tokens (listed for 17 regions at that one price, not for westus3). The arithmetic and the assumptions are in evals/static-metrics.yaml."
     effort:
       amount: "2"
       unit: stories built
@@ -51,7 +130,16 @@ rows:
     store: pgvector
     chunk_set: smart
     method: "Hybrid, then Cohere Rerank v4.0 fast on Foundry"
-    cost: null
+    # r4 = r3 + RERANK, one rerank call per search with the 20 best candidates.
+    # Assumed: one call is billed as ONE search unit (RERANK_UNITS = 1). The price
+    # list does not say what a search unit holds; `retrieval` logs `search_units=`
+    # for every call, which the Azure run will show.
+    #   RERANK = 268 x 1 x 2.00 / 1,000 = 0.536
+    #   r4 = 16.09 + 0.0003 + 0.536 = 16.63
+    cost:
+      amount: "16.63"
+      unit: "USD per month at POC volume (268 searches, store up 730 hours)"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and serviceName eq 'Azure Database for PostgreSQL'] meter 'B1MS' 0.017 per hour and meter 'Storage Data Stored' (Flex Server Storage) 0.115 per GB a month; [$filter=contains(meterName, 'embedding-3-large') or contains(meterName, 'embedding 3 large')] meter 'text-embedding-3-large-glbl Tokens' 0.00013 per 1,000 tokens (listed for 17 regions at that one price, not for westus3); [$filter=contains(productName, 'rerank') or contains(meterName, 'rerank') or contains(productName, 'Rerank') or contains(meterName, 'Rerank')] meter 'Rerank v4 Fast Glbl Search' 2.00 per 1,000 searches. The arithmetic and the assumptions are in evals/static-metrics.yaml."
     effort:
       amount: "3"
       unit: stories built
@@ -60,7 +148,15 @@ rows:
     store: Azure AI Search
     chunk_set: smart
     method: Hybrid and the semantic ranker
-    cost: null
+    # r5 = STORE_SEARCH + SEMANTIC + EMBED, one semantic query per search.
+    #   SEMANTIC = 268 x 0.00 / 1,000 = 0.00 at the plan `free` of the foundation
+    #   stack. The list does not say how many queries a month that plan allows;
+    #   at the paid plan it would be 268 x 1.00 / 1,000 = 0.27.
+    #   r5 = 73.73 + 0.00 + 0.0003 = 73.73
+    cost:
+      amount: "73.73"
+      unit: "USD per month at POC volume (268 searches, store up 730 hours)"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and serviceName eq 'Azure Cognitive Search'] meter 'Basic Unit' 0.101 per hour and meter 'Free queries' 0.00 per 1,000 (semantic ranker, plan free); [$filter=contains(meterName, 'embedding-3-large') or contains(meterName, 'embedding 3 large')] meter 'text-embedding-3-large-glbl Tokens' 0.00013 per 1,000 tokens (listed for 17 regions at that one price, not for westus3). The arithmetic and the assumptions are in evals/static-metrics.yaml."
     effort:
       amount: "3"
       unit: stories built
@@ -69,7 +165,25 @@ rows:
     store: Azure AI Search
     chunk_set: smart
     method: Agentic retrieval (knowledge base with LLM query planning)
-    cost: null
+    # r6 = STORE_SEARCH + PLANNING + AGENTIC, one retrieve request per search.
+    # The search service plans its queries on the chat deployment, and those
+    # tokens are billed there. How many is NOT KNOWN before the Azure run: the
+    # two figures below are a GUESS with nothing in the project behind them.
+    # `retrieval` logs `planning_input_tokens=` and `planning_output_tokens=` for
+    # every retrieve; put the run's averages in their place.
+    #   R6_PLANNING_INPUT_TOKENS  = 2,000 per retrieve (guess)
+    #   R6_PLANNING_OUTPUT_TOKENS =   300 per retrieve (guess)
+    #   PLANNING = 268 x (2,000 x 2.50 + 300 x 15.00) / 1,000,000 = 268 x 0.0095 = 2.546
+    #   AGENTIC  = 0.00 at the plan `free` (the list does not say how many tokens
+    #   a month that plan allows, nor how many a retrieve is billed; at the paid
+    #   meter a million tokens are 0.022).
+    # Not in it: the embedding of the queries the service plans (it embeds them
+    # itself on the embedding deployment; a few tokens each, under 0.01 a month).
+    #   r6 = 73.73 + 2.546 + 0.00 = 76.28
+    cost:
+      amount: "76.28"
+      unit: "USD per month at POC volume (268 searches, store up 730 hours)"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and serviceName eq 'Azure Cognitive Search'] meter 'Basic Unit' 0.101 per hour and meter 'Free Agentic Retrieval Low Reasoning Tokens' 0.00 per 1,000 tokens (plan free); [$filter=contains(meterName, '5.4') and serviceName eq 'Foundry Models'] meters '5.4 inp Gl 1M Tokens' 2.50 and '5.4 opt Gl 1M Tokens' 15.00 per million tokens. The planning tokens are a guess. The arithmetic and the assumptions are in evals/static-metrics.yaml."
     effort:
       amount: "4"
       unit: stories built
@@ -78,15 +192,49 @@ rows:
 # What the classifier scoreboard prints beside each contender (story 4.3): the
 # cost of classifying one page.
 #
-# Cost per page: not stated yet. The unit to state it in is USD per page, from
-# the Azure price list of the day the bake-off is run in Azure, with the list's
-# address and that date as the source. For `llm` a page is
-# `CLASSIFICATION_CLASSIFIER_RUNS` (5) chat calls with the page's text and its
-# thumbnail: state it from the tokens the deployment's metrics show for the run,
-# divided by the pages. For `doc-intelligence` it is the list price of a custom
-# classification page (see deferred-work.md, story 4.3).
+# Cost per page: STATED on 2026-10-08 by the owner's request, from the same
+# price list and by the same rules as the costs above. The spec's measure is
+# the cost per page. A page costs less than a cent with either contender, and
+# an amount holds two decimals, so the unit is USD per 1,000 pages: divide by
+# 1,000 for one page.
+#
+# `llm`: a page is `CLASSIFICATION_CLASSIFIER_RUNS` (5, `classifier_runs` in
+# `infra/demo/app/terraform.tfvars`) chat calls, each with the prompt, the
+# page's text and its thumbnail. The tokens are an ESTIMATE made without a
+# tokenizer and without a run; replace them by the tokens the deployment's
+# metrics show for the bake-off run, divided by the calls (the earlier note of
+# this file asked for exactly that).
+#   LLM_INPUT_TOKENS_PER_RUN  = 1,000, rounded up from 973:
+#       407  the prompt (`classify_page.md`, 1,627 characters, about 4 a token)
+#       216  the page's text (862 characters on average on the 86 of the 94
+#            case pages that have a text layer, before redaction)
+#       250  the thumbnail, a PNG 320 pixels wide (a GUESS: the project holds
+#            nothing that says how the model counts a picture)
+#       100  the answer's schema and the framing of the messages (a guess)
+#   LLM_OUTPUT_TOKENS_PER_RUN = 40: a JSON object with the page type and one
+#       short sentence. NO reasoning tokens are counted. If the deployment
+#       reasons before it answers, those are billed as output: every 100 of
+#       them a run add 5 x 100 x 15.00 / 1,000,000 x 1,000 = 7.50 per 1,000 pages.
+#   All input is priced at the full rate (no cached input).
+#   one run  = (1,000 x 2.50 + 40 x 15.00) / 1,000,000 = 0.0025 + 0.0006 = 0.0031
+#   one page = 5 x 0.0031 = 0.0155;  1,000 pages = 15.50
+#
+# `doc-intelligence`: one page per call of the custom classifier, tier S0
+# (`document_intelligence_sku`): meter 'S0 pages for doc classifier', 3.00 per
+# 1,000 pages. 1,000 pages = 3.00, one page = 0.003.
+# Training is NOT in it: the list has a meter 'S0 Training' at 3.00 per hour
+# and does not say whether building a custom classifier is billed on it, and
+# the time a build takes is not known before the Azure run. Preparing the 46
+# training pages is not in it either (each runs through the pipeline once:
+# one redaction and five chat calls, about 46 x 0.0155 = 0.71 for the chat calls).
 classifiers:
   llm:
-    cost_per_page: null
+    cost_per_page:
+      amount: "15.50"
+      unit: "USD per 1,000 pages"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=contains(meterName, '5.4') and serviceName eq 'Foundry Models'] meters '5.4 inp Gl 1M Tokens' 2.50 and '5.4 opt Gl 1M Tokens' 15.00 per million tokens. The tokens per page are an estimate. The arithmetic and the assumptions are in evals/static-metrics.yaml."
   doc-intelligence:
-    cost_per_page: null
+    cost_per_page:
+      amount: "3.00"
+      unit: "USD per 1,000 pages"
+      source: "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and (contains(productName, 'Document Intelligence') or contains(productName, 'Form Recognizer'))] meter 'S0 pages for doc classifier' 3.00 per 1,000 pages. Training is not in it."

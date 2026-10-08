@@ -14,7 +14,7 @@ is imported as `bakeoff`.
 | Rule recall | For every expected fact of every case that meets at least one rule: one search per row, with the query `contracts.query.build_fact_query` makes from the fact's statement, `top_k` 5. A hit is one of the fact's expected rule ids among the answered items' rule ids. Recall is hits over searches. A search that fails is a miss and is listed. |
 | Latency | The search's own `latency_ms`, as `retrieval` reports it: median and 95th percentile of the searches that answered. |
 | Verdict accuracy | Each case is uploaded once and started once with every row that answered and the run's `eval_run_id`, so every row judges the same extracted facts. A run is right when its verdict is the expected one and, for a loaded case, its loading too. Accuracy is right runs over cases. A case that failed, or was not final within its deadline, is wrong for every row and is listed. |
-| Cost and effort | Not measured: stated in `static-metrics.yaml`, each figure with its source. A figure nobody has stated is `null`. |
+| Cost and effort | Not measured: stated in `static-metrics.yaml`, each figure with its source. A figure nobody has stated is `null`. The costs were stated on 2026-10-08 ([below](#the-stated-costs)). |
 | Winner | Highest verdict accuracy, then rule recall, then lower latency, among the measured rows. |
 
 Recall and accuracy are measured apart on purpose: recall with a fixed query says how good a row's
@@ -86,7 +86,7 @@ routes and decides nothing itself.
 | Accuracy | Pages whose stored `is_medical` is the expected one, over every page of the set. The page type is not scored. |
 | Calibration | Of the pages whose stored confidence is 0.90 or more, the share labelled correctly. None when no page was scored that high. |
 | Queue rate | Pages the gate left in `awaiting_triage`, over every page of the set. |
-| Cost per page | Not measured: stated in `static-metrics.yaml` under `classifiers`, with its source. `null` until somebody states it. |
+| Cost per page | Not measured: stated in `static-metrics.yaml` under `classifiers`, with its source; `null` if nobody states it. Stated on 2026-10-08 in USD per 1,000 pages ([below](#the-stated-costs)). |
 | Winner | The more accurate contender among those whose calibration is at least 0.90 over at least 10 pages scored 0.90 or more, then the one with the lower queue rate; all three compared on the counts, not on the rounded figures. A contender with fewer than 10 such pages, or with no calibration, cannot win (the floor is `CALIBRATION_FLOOR_PAGES` in `contracts.models.web`; owner's decision of 2026-10-08). No winner when none qualifies. |
 
 - A page with a failed result, or none, is wrong, is in no calibration count, and is listed by case
@@ -181,6 +181,36 @@ case is listed as not scored; run with `--rows` then, or fix the setting.
 
 Each case costs model calls for every page and one agent run per row, against one shared token
 limit. That is why only 2 cases are under way at once by default, and why a run can be resumed.
+
+## The stated costs
+
+Worked out on 2026-10-08 by the owner's request, from Azure's public Retail Prices API
+(`https://prices.azure.com/api/retail/prices`, no sign-in) and nothing else. The unit prices, the
+filter of each query, the assumptions and the arithmetic are in the comments of
+`static-metrics.yaml`, figure by figure, so that a reader can redo them; each figure's `source`
+names its query, its meters and the date. The raw answers are in `.work/prices/` on the machine that
+read them (not committed); `.work/prices/fetch.sh <name> "<filter>"` reads a query again.
+
+| | Stated | What it counts |
+|---|---|---|
+| `r1`, `r2`, `r3` | USD 16.09 a month | The whole PostgreSQL server (B1ms, 32 GB) for 730 hours, and 268 query embeddings. |
+| `r4` | USD 16.63 a month | The same, and 268 Cohere Rerank searches. |
+| `r5` | USD 73.73 a month | The Azure AI Search service (basic, one unit) for 730 hours, the semantic ranker at the plan `free`, and 268 query embeddings. |
+| `r6` | USD 76.28 a month | The same service, and the planning tokens of 268 retrieves on the chat deployment (a guess). |
+| `llm` | USD 15.50 per 1,000 pages | Five chat calls a page, about 1,000 input and 40 output tokens each (an estimate). |
+| `doc-intelligence` | USD 3.00 per 1,000 pages | The list price of a custom classification page; training is not in it. |
+
+- **The unit for retrieval is the spec's**: the monthly cost at POC volume (`bake-offs.md`), not the
+  cost per 1,000 searches an earlier note named.
+- **POC volume is an assumption**: the spec gives no number. It is one bake-off run a month (268
+  searches a row: 39 recall searches and one agent search per expected fact, 229) with the store up
+  all 730 hours. The environment is in fact down between sessions, so the real bill is far smaller.
+- **The store is nearly all of every figure.** The pgvector rows count the whole server, though the
+  project runs it anyway for every service; counted as an addition, those rows cost under a dollar.
+- **Estimates to replace after the Azure run**: `r6`'s planning tokens and the `llm` classifier's
+  tokens per call, from `retrieval`'s and `classification`'s `model call` log lines or the
+  deployment's metrics. All of them are listed for the owner in `deferred-work.md`.
+- A cost per page is under a cent, and an amount holds two decimals: hence USD per 1,000 pages.
 
 ## Settings
 
