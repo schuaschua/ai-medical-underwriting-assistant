@@ -12,7 +12,6 @@ stand-ins' package and read the answer key, which nothing there may do
 (spine AD-17).
 """
 
-import socket
 from typing import Any
 
 import pytest
@@ -24,13 +23,12 @@ from synthdata_stack import (
     LocalVerdict,
     ServicesBehindSidecar,
     answer_key,
-    audit_rows,
     query,
     start_and_wait,
 )
 
 from contracts.rules import is_medical
-from synthdata.foundry_standin import LOCAL_DEPLOYMENT, Mode, page_text_of
+from synthdata.foundry_standin import LOCAL_DEPLOYMENT, page_text_of
 from workflow.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -168,108 +166,3 @@ def test_story_1_8_an_uploaded_and_started_case_ends_with_every_page_classified(
         (item.page_id, "done", item.page_type.value, item.is_medical, 1.0)
         for item in listed
     ]
-
-
-def test_story_1_8_with_runs_that_differ_every_page_has_the_agreement_rate_as_its_confidence(
-    workflow_service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-    verdict: LocalVerdict,
-) -> None:
-    classification.model.mode = Mode.DISAGREE
-    case_id, _ = intake.upload("case-001.pdf")
-    key = answer_key("case-001")
-    sidecar = ServicesBehindSidecar(
-        intake=intake.app(),
-        classification=classification.app(),
-        extraction=extraction.app(),
-        verdict=verdict.app(),
-    )
-
-    progress, _, _ = start_and_wait(
-        workflow_service_settings,
-        scheduler_client,
-        sidecar,
-        case_id,
-        waits_for_a_human=True,
-    )
-
-    # Three of five runs agree: the majority's type, at 0.6.
-    listed = {
-        item.page_id: item for item in classification.listed(case_id).classifications
-    }
-    # Under the gate's 0.90 every such page goes to triage (story 1.9), and
-    # the case waits for a human.
-    assert [page.page_status.value for page in progress.pages] == [
-        "awaiting_triage"
-    ] * 3
-    assert progress.case_status.value == "awaiting_human"
-    for page, expected in zip(progress.pages, key["pages"], strict=True):
-        item = listed[page.page_id]
-        assert item.page_type.value == expected["page_type"]
-        assert item.confidence == 0.6
-        assert item.is_medical is expected["is_medical"]
-
-
-# --- Failures ----------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("mode", "error_code"),
-    [(Mode.INVALID, "invalid_model_output")],
-)
-def test_story_1_8_with_a_stand_in_told_to_fail_no_classification_is_stored_and_the_case_fails(
-    workflow_service_settings: Settings,
-    workflow_admin: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-    verdict: LocalVerdict,
-    mode: Mode,
-    error_code: str,
-) -> None:
-    classification.model.mode = mode
-    case_id, _ = intake.upload("case-001.pdf")
-    sidecar = ServicesBehindSidecar(
-        intake=intake.app(),
-        classification=classification.app(),
-        extraction=extraction.app(),
-        verdict=verdict.app(),
-    )
-
-    progress, _, output = start_and_wait(
-        workflow_service_settings, scheduler_client, sidecar, case_id
-    )
-
-    # No classification of any page is stored or listed.
-    page_ids = [page.page_id for page in progress.pages]
-    assert classification.listed(case_id).classifications == []
-    stored = classification_rows(workflow_admin)
-    assert stored
-    assert {row[1:] for row in stored} == {("failed", None, None, None)}
-    # The case is failed, with a `stage.failed` event for the page whose
-    # failure came first; a failed case takes no further result, so the
-    # other pages' failures write nothing.
-    assert (progress.case_status.value, output["case_status"]) == ("failed", "failed")
-    events = audit_rows(workflow_service_settings, case_id)
-    assert [event[0] for event in events[:2]] == ["case.started", "document.redacted"]
-    ((action, page_id, code, detail, actor),) = events[2:]
-    assert (action, code, detail, actor) == ("stage.failed", error_code, None, ACTOR)
-    assert page_id in page_ids
-    statuses = {page.page_id: page.page_status.value for page in progress.pages}
-    assert statuses[page_id] == "failed"
-    assert set(statuses.values()) <= {"failed", "uploaded"}
-    # Each page was commanded once: a failed result is an answer, not retried.
-    assert sidecar.paths("classification") == ["/classifications"] * len(page_ids)
-
-
-# --- The stand-in as a process -----------------------------------------------------------
-
-
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])

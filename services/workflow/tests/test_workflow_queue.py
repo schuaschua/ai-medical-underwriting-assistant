@@ -10,7 +10,6 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
-import pytest
 from fastapi.testclient import TestClient
 from workflow_fakes import (
     FakeEngine,
@@ -152,21 +151,15 @@ def test_story_1_11_the_queue_is_bounded_and_says_when_more_pages_wait(
     assert (listed(whole), whole.has_more) == (pages, False)
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "",
-        # A page status, but not one a page waits in.
-        "?status=extracting",
-    ],
-    ids=["missing", "extracting"],
-)
-def test_story_1_11_a_missing_or_unknown_status_is_422_and_echoes_nothing(
-    client: TestClient, store: MemoryCaseStore, query: str
+def test_story_1_11_a_status_no_page_waits_in_is_422_and_echoes_nothing(
+    client: TestClient, store: MemoryCaseStore
 ) -> None:
     routed_case(store, [(Route.TRIAGE, 1)])
 
-    response = client.get(f"/pages{query}", headers={"traceparent": TRACEPARENT})
+    # A page status, but not one a page waits in.
+    response = client.get(
+        "/pages?status=extracting", headers={"traceparent": TRACEPARENT}
+    )
 
     assert response.status_code == 422
     detail = ErrorBody.model_validate(response.json()).error

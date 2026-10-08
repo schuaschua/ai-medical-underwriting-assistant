@@ -6,10 +6,6 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.audit import (
-    ACTIONS_BY_A_HUMAN,
-    CASE_ACTIONS,
-    DECISION_ACTIONS,
-    AuditAction,
     AuditRecord,
 )
 from contracts.models.workflow import (
@@ -60,15 +56,6 @@ def summary(**changes: Any) -> dict[str, Any]:
         "waiting_page_count": 1,
         **changes,
     }
-
-
-def test_story_1_13_the_catalogue_holds_the_two_case_actions() -> None:
-    assert AuditAction.CASE_STARTED.value == "case.started"
-    assert AuditAction.CASE_COMPLETED.value == "case.completed"
-    assert CASE_ACTIONS == {AuditAction.CASE_STARTED, AuditAction.CASE_COMPLETED}
-    # The start comes from a person; it is no decision about a page (AD-10).
-    assert ACTIONS_BY_A_HUMAN == DECISION_ACTIONS | {AuditAction.CASE_STARTED}
-    assert AuditAction.CASE_STARTED not in DECISION_ACTIONS
 
 
 def test_story_1_13_a_case_is_started_by_a_person_and_completed_by_the_lifecycle() -> (

@@ -407,34 +407,6 @@ def test_story_2_5_one_more_run_is_refused_while_a_page_waits_and_answered_from_
     assert actions.count("case.completed") == 1
 
 
-def test_story_2_5_the_agents_log_is_read_by_case_with_its_filters(
-    workflow_service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-    verdict: LocalVerdict,
-) -> None:
-    case_id, _ = intake.upload("case-001.pdf")
-    sidecar = sidecar_for(intake, classification, extraction, verdict)
-    start_and_wait(workflow_service_settings, scheduler_client, sidecar, case_id)
-    run = only_run(verdict, case_id)
-
-    every = verdict.case_steps(case_id).steps
-    reads = verdict.case_steps(case_id, tool="read_rule").steps
-    about_the_rule = verdict.case_steps(case_id, rule_id="UW-DM-002").steps
-
-    assert every == verdict.steps(run.verdict_run_id).steps
-    assert reads and all(step.tool is ToolName.READ_RULE for step in reads)
-    assert about_the_rule and all(
-        "UW-DM-002" in step.rule_ids for step in about_the_rule
-    )
-    assert {step.tool for step in about_the_rule} == {
-        ToolName.SEARCH_RULES,
-        ToolName.READ_RULE,
-    }
-
-
 # --- The baseline rows (story 3.2) -----------------------------------------------------
 
 

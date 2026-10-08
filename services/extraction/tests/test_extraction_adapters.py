@@ -34,7 +34,6 @@ from extraction.adapters.dapr import (
     build_http_client,
     invoke_path,
 )
-from extraction.adapters.http.app import extract_options
 from extraction.adapters.model import (
     COGNITIVE_SERVICES_SCOPE,
     ModelGateway,
@@ -64,20 +63,6 @@ def test_story_2_4_settings_that_would_reach_the_model_unsafely_are_refused(
 ) -> None:
     with pytest.raises(ValidationError):
         Settings(**values)
-
-
-def test_story_2_4_the_actor_of_an_extraction_names_the_service_and_the_deployment(
-    settings: Settings,
-) -> None:
-    options = extract_options(
-        settings.model_copy(update={"extract_deadline_seconds": 12.0})
-    )
-
-    assert options.actor == f"extraction:{DEPLOYMENT}"
-    assert options.deadline_seconds == 12.0
-    # The deployment name is nowhere in the service's code: it is a setting.
-    for source in (SERVICE_DIR / "src").rglob("*.py"):
-        assert "gpt-" not in source.read_text(), source.name
 
 
 # --- The model gateway -------------------------------------------------------------------

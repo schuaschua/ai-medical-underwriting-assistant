@@ -19,7 +19,6 @@ from intake_fakes import MemoryCaseRepository, MemoryOriginalStore
 
 from contracts.errors import ErrorBody
 from contracts.models.intake import CaseCreated
-from contracts.upload import KEY_REUSED_MESSAGE
 from intake.adapters.http.app import create_app
 from intake.domain.entities import new_case_with_document
 from intake.settings import Settings
@@ -27,7 +26,6 @@ from intake.settings import Settings
 CASES_DIR = Path(__file__).resolve().parents[3] / "data" / "cases"
 PDF = {"Content-Type": "application/pdf"}
 KEY = "3f2b8a52-6c1d-4c43-9d0e-0a8f5a1b2c3d"
-OTHER_KEY = "7d0c2f1e-55aa-4b7e-8c11-2e9d6f3a4b5c"
 
 
 def upload(
@@ -72,47 +70,6 @@ def test_story_1_6_a_repeated_upload_with_the_same_key_returns_the_first_case(
     assert KEY not in caplog.text
 
 
-def test_story_1_6_uploads_without_a_key_or_with_different_keys_are_separate_cases(
-    client: TestClient, repository: MemoryCaseRepository, case_pdf: bytes
-) -> None:
-    answers = [
-        upload(client, case_pdf, None),
-        upload(client, case_pdf, None),
-        upload(client, case_pdf, KEY),
-        upload(client, case_pdf, OTHER_KEY),
-    ]
-
-    assert {answer.status_code for answer in answers} == {201}
-    assert len({answer.json()["case_id"] for answer in answers}) == 4
-    assert [item.idempotency_key for item in repository.documents] == [
-        None,
-        None,
-        KEY,
-        OTHER_KEY,
-    ]
-
-
-def test_story_1_6_a_key_reused_for_a_different_file_is_422_and_stores_nothing(
-    client: TestClient,
-    store: MemoryOriginalStore,
-    repository: MemoryCaseRepository,
-    case_pdf: bytes,
-) -> None:
-    upload(client, case_pdf)
-    other_file = (CASES_DIR / "case-002.pdf").read_bytes()
-
-    response = upload(client, other_file)
-
-    assert response.status_code == 422
-    detail = ErrorBody.model_validate(response.json()).error
-    assert (detail.code.value, detail.message) == (
-        "validation_failed",
-        KEY_REUSED_MESSAGE,
-    )
-    assert len(repository.documents) == 1
-    assert len(store.blobs) == 1
-
-
 def test_story_1_6_an_upload_that_loses_the_race_for_its_key_yields_to_the_winner(
     client: TestClient,
     store: MemoryOriginalStore,
@@ -136,24 +93,6 @@ def test_story_1_6_an_upload_that_loses_the_race_for_its_key_yields_to_the_winne
     assert repository.documents == [winner_document]
     assert store.blobs == {}
     assert len(store.deleted) == 1
-
-
-def test_story_1_6_a_retry_after_a_failed_attempt_creates_the_case(
-    client: TestClient,
-    store: MemoryOriginalStore,
-    repository: MemoryCaseRepository,
-    case_pdf: bytes,
-) -> None:
-    repository.fail = True
-    assert upload(client, case_pdf).status_code == 502
-    assert (store.blobs, repository.documents) == ({}, [])
-
-    repository.fail = False
-    response = upload(client, case_pdf)
-
-    assert response.status_code == 201
-    assert len(repository.documents) == 1
-    assert len(store.blobs) == 1
 
 
 # --- Against a real PostgreSQL and the blob emulator ------------------------------

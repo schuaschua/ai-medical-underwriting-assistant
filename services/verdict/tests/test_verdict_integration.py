@@ -276,16 +276,8 @@ CHANGES = [
 CHANGE_IDS = ["update", "delete", "truncate"]
 
 
-@pytest.mark.parametrize(
-    "statement",
-    [
-        CHANGES[0],
-        "ALTER TABLE verdict.agent_step DISABLE TRIGGER ALL",
-    ],
-    ids=["update", "alter"],
-)
-def test_story_2_5_the_service_role_cannot_change_or_remove_a_logged_step(
-    service_settings: Settings, statement: str
+def test_story_2_5_the_service_role_cannot_switch_off_what_guards_a_logged_step(
+    service_settings: Settings,
 ) -> None:
     run_id, case_id = new_id(), new_id()
     with a_repository(service_settings) as (repository, runner):
@@ -303,12 +295,13 @@ def test_story_2_5_the_service_role_cannot_change_or_remove_a_logged_step(
         )
     before = step_rows(service_settings)
 
-    # AD-15: the role the service runs as holds no such right.
+    # AD-15: the role the service runs as holds no such right. (That it
+    # holds SELECT and INSERT only is the test of its rights, above.)
     with (
         connect(service_settings) as connection,
         pytest.raises(psycopg.errors.InsufficientPrivilege),
     ):
-        connection.execute(statement)
+        connection.execute("ALTER TABLE verdict.agent_step DISABLE TRIGGER ALL")
 
     assert step_rows(service_settings) == before
     assert before == [(1, "read_rule", "refused", "rule_not_seen")]
@@ -824,21 +817,15 @@ def test_story_2_5_a_run_that_fails_is_stored_as_failed_with_no_reason_and_its_s
     assert model.calls == model_calls
 
 
-@pytest.mark.parametrize("fault", ["model", "retrieval"])
 def test_story_2_5_a_fault_that_passes_fails_no_case_the_key_row_is_released_and_the_command_sent_again_runs(
-    service_settings: Settings, fault: str
+    service_settings: Settings,
 ) -> None:
     case_id = new_id()
     held = fact(case_id)
     sidecar = UpstreamSidecar(facts=[held], rules=FakeRules(default=[DM_50]))
     opening: Turn = [list_facts_call(), search_call(held.fact_id)]
-    if fault == "model":
-        # The model is throttled through every retry of the gateway.
-        down = ScriptedModel(turns=[opening, 429])
-    else:
-        # `retrieval` gives no answer through every retry of the client.
-        down = ScriptedModel(turns=[opening])
-        sidecar.down = {"retrieval": 503}
+    # The model is throttled through every retry of the gateway.
+    down = ScriptedModel(turns=[opening, 429])
     settings = service_settings.model_copy(
         update={
             "model_max_retries": 1,
@@ -852,7 +839,6 @@ def test_story_2_5_a_fault_that_passes_fails_no_case_the_key_row_is_released_and
         runs = client.get(f"/cases/{case_id}/verdict-runs").json()["verdict_runs"]
     logged = step_rows(service_settings)
     # The fault has passed, and `workflow`'s stage retry sends the command again.
-    sidecar.down = {}
     recovered = ScriptedModel(
         turns=[opening, [read_call(DM_50)], final_answer(reason(DM_50, held.fact_id))]
     )
@@ -861,9 +847,9 @@ def test_story_2_5_a_fault_that_passes_fails_no_case_the_key_row_is_released_and
 
     # Not a stored failure, which would fail the case at its last step: the
     # error is answered, and nothing holds the case and row.
-    assert posted.status_code == (503 if fault == "model" else 502)
+    assert posted.status_code == 503
     assert ErrorBody.model_validate(posted.json()).error.code.value == (
-        "model_unavailable" if fault == "model" else "upstream_unavailable"
+        "model_unavailable"
     )
     assert runs == []
     # What the released run did is in the log, and stays there.

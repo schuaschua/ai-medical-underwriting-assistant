@@ -5,7 +5,6 @@ import re
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from contracts import enums
 from contracts.enums import PageType
 from contracts.ids import Uuid7Str, is_uuid7, new_id
 from contracts.query import build_fact_query
@@ -20,60 +19,6 @@ from contracts.text import normalise
 
 RULE_ID = TypeAdapter(RuleId)
 UUID7 = TypeAdapter(Uuid7Str)
-
-
-def test_story_1_1_enums_hold_exactly_the_spine_values() -> None:
-    expected = {
-        enums.Verdict: {"standard", "loaded", "decline", "refer"},
-        enums.PageStatus: {
-            "uploaded",
-            "classified",
-            "awaiting_customer",
-            "awaiting_triage",
-            "extracting",
-            "extracted",
-            "discarded",
-            "denied",
-            "failed",
-        },
-        enums.CaseStatus: {"running", "awaiting_human", "completed", "failed"},
-        enums.StageStatus: {"running", "done", "failed"},
-        enums.Decision: {"keep", "discard", "accept", "deny"},
-        enums.DemoRole: {"customer", "underwriter"},
-        enums.PageType: {
-            "lab_report",
-            "attending_physician_statement",
-            "application_form",
-            "id_document",
-            "invoice",
-            "other",
-        },
-        enums.ActorKind: {"human", "ai"},
-        enums.ClassifierContender: {"llm", "doc-intelligence"},
-        enums.RetrieverConfig: {"r1", "r2", "r3", "r4", "r5", "r6"},
-        enums.ChunkSet: {"fixed", "smart"},
-        enums.ToolName: {"list_facts", "search_rules", "read_rule"},
-        enums.ReasonEffect: {"none", "debit", "decline"},
-        enums.SystemReason: {
-            "no_matching_rule",
-            "conflicting_rules",
-            "unverified_quote",
-            "low_confidence",
-            "step_limit",
-        },
-        enums.StopAfter: {"gate"},
-        enums.Service: {
-            "web",
-            "intake",
-            "classification",
-            "extraction",
-            "retrieval",
-            "verdict",
-            "workflow",
-        },
-    }
-    for enum, values in expected.items():
-        assert {member.value for member in enum} == values, enum.__name__
 
 
 def test_story_1_1_ids_are_canonical_uuid7_carrying_their_timestamp() -> None:

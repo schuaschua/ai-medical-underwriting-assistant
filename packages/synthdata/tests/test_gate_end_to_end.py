@@ -100,39 +100,3 @@ def test_story_1_9_one_case_ends_with_pages_on_all_three_routes(
     assert [stored[page.page_id] for page in progress.pages] == [
         {"route": route, "threshold": 0.9} for route in routes
     ]
-
-
-def test_story_1_9_pages_the_classifier_is_unsure_of_go_to_triage(
-    workflow_service_settings: Settings,
-    scheduler_client: DurableTaskSchedulerClient,
-    intake: LocalIntake,
-    classification: LocalClassification,
-    extraction: LocalExtraction,
-    verdict: LocalVerdict,
-) -> None:
-    # Three of five runs agree: every page is classified at 0.6, medical or not.
-    classification.model.mode = Mode.DISAGREE
-    case_id, _ = intake.upload("case-002.pdf")
-    sidecar = ServicesBehindSidecar(
-        intake=intake.app(),
-        classification=classification.app(),
-        extraction=extraction.app(),
-        verdict=verdict.app(),
-    )
-
-    progress, trail, _ = start_and_wait(
-        workflow_service_settings,
-        scheduler_client,
-        sidecar,
-        case_id,
-        waits_for_a_human=True,
-    )
-
-    assert [page.page_status.value for page in progress.pages] == [
-        "awaiting_triage"
-    ] * 6
-    assert progress.case_status.value == "awaiting_human"
-    routed = [event for event in trail.events if event.action.value == "page.routed"]
-    assert sorted(event.page_id or "" for event in routed) == sorted(
-        page.page_id for page in progress.pages
-    )

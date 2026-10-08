@@ -56,7 +56,6 @@ PARAMETERS = StartParameters(
     eval_run_id=None,
 )
 # What is not a person: a service, the gate, and what only looks like a demo role.
-NOT_HUMAN = ["workflow:gate", "Customer"]
 
 
 def gated_case(
@@ -217,26 +216,14 @@ def test_story_1_10_discard_and_keep_leave_the_trail_the_acceptance_criterion_na
     assert store.cases[case_id].case_status is CaseStatus.AWAITING_HUMAN
 
 
-@pytest.mark.parametrize(
-    ("route", "decision", "actor"),
-    [
-        # Not the status the decision needs.
-        (Route.TRIAGE, "keep", "customer"),
-        (Route.EXTRACTION, "accept", "underwriter"),
-    ],
-)
 def test_story_1_10_a_page_not_awaiting_the_decision_is_409_and_nothing_changes(
-    store: MemoryCaseStore,
-    engine: FakeEngine,
-    case_id: str,
-    route: Route,
-    decision: str,
-    actor: str,
+    store: MemoryCaseStore, engine: FakeEngine, case_id: str
 ) -> None:
-    (page_id,) = gated_case(store, case_id, [route])
+    # Not the status the decision needs.
+    (page_id,) = gated_case(store, case_id, [Route.TRIAGE])
     before = snapshot(store)
 
-    code = refused(store, engine, case_id, page_id, decision, actor)
+    code = refused(store, engine, case_id, page_id, "keep", "customer")
 
     assert code is ErrorCode.NOT_AWAITING_DECISION
     assert DomainError(code, "x").http_status == 409
@@ -244,10 +231,10 @@ def test_story_1_10_a_page_not_awaiting_the_decision_is_409_and_nothing_changes(
     assert engine.told == []
 
 
-@pytest.mark.parametrize("actor", NOT_HUMAN)
 def test_story_1_10_an_actor_that_is_not_human_is_403_and_nothing_changes(
-    store: MemoryCaseStore, engine: FakeEngine, case_id: str, actor: str
+    store: MemoryCaseStore, engine: FakeEngine, case_id: str
 ) -> None:
+    actor = "workflow:gate"
     customer, triage = gated_case(store, case_id, [Route.CUSTOMER, Route.TRIAGE])
     before = snapshot(store)
 

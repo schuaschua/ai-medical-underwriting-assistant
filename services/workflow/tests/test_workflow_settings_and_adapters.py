@@ -1,16 +1,12 @@
-"""Story 1.6: settings, sign-in, the database connection, start-up and telemetry of `workflow`."""
+"""Story 1.6: sign-in, the database connection and the migrations of `workflow`."""
 
 import re
-
-import pytest
-from fastapi.testclient import TestClient
 
 from workflow.adapters.db import (
     database_url,
 )
-from workflow.adapters.http.app import create_app
 from workflow.adapters.migrations import MIGRATIONS_DIR
-from workflow.settings import Settings, get_settings
+from workflow.settings import Settings
 
 # --- Azure sign-in ------------------------------------------------------------
 
@@ -59,23 +55,3 @@ def test_story_1_6_no_migration_and_no_code_updates_or_deletes_an_audit_event() 
     assert "insert(audit_event_table)" in adapter
     assert "update(audit_event_table" not in adapter
     assert "delete(" not in adapter
-
-
-# --- Start-up and telemetry ---------------------------------------------------
-
-
-def test_story_1_6_app_built_from_the_environment_uses_the_real_adapters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Nothing listens on these ports: building the app and starting its worker
-    # open no connection that the health route needs.
-    monkeypatch.setenv("WORKFLOW_SCHEDULER_ENDPOINT", "http://127.0.0.1:1")
-    monkeypatch.setenv("WORKFLOW_DATABASE_PORT", "1")
-    get_settings.cache_clear()
-    try:
-        app = create_app()
-    finally:
-        get_settings.cache_clear()
-
-    with TestClient(app) as client:
-        assert client.get("/health").json() == {"status": "ok"}

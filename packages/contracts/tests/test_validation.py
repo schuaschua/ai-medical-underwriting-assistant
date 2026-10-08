@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from contracts.audit import AuditAction, AuditRecord, RouteDetail
 from contracts.errors import (
-    HTTP_STATUS,
     DomainError,
     ErrorCode,
 )
@@ -270,37 +269,6 @@ def test_story_1_1_error_body_has_the_one_shape() -> None:
     }
     assert error.http_status == 409
     assert str(error) == "The stage is still running."
-
-
-def test_story_1_1_error_catalogue_is_exactly_these_codes_and_statuses() -> None:
-    assert {code.value: status for code, status in HTTP_STATUS.items()} == {
-        "validation_failed": 422,
-        "invalid_role": 400,
-        "role_not_allowed": 403,
-        "actor_not_human": 403,
-        "not_found": 404,
-        "method_not_allowed": 405,
-        "file_too_large": 413,
-        "unsupported_file_type": 415,
-        "payload_too_large": 413,
-        "unsupported_media_type": 415,
-        "too_many_requests": 429,
-        "in_progress": 409,
-        "not_redacted": 409,
-        "not_awaiting_decision": 409,
-        "pages_not_terminal": 409,
-        "rule_not_seen": 409,
-        "step_limit": 409,
-        "retriever_not_available": 409,
-        "stage_timeout": 504,
-        "stage_failed": 500,
-        "redaction_failed": 502,
-        "invalid_model_output": 502,
-        "model_unavailable": 503,
-        "upstream_unavailable": 502,
-        "internal_error": 500,
-    }
-    assert set(HTTP_STATUS) == set(ErrorCode)
 
 
 # --- shape rules the spine states

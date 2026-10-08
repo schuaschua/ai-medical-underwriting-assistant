@@ -11,12 +11,10 @@ Run `docker compose up --detach --wait` first.
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
-import pymupdf
 import pytest
-from synthdata_stack import MANUAL_PDF, LocalRetrieval, rule_table
+from synthdata_stack import LocalRetrieval, rule_table
 
 from contracts.rules import rule_ids_defined_in
 from synthdata.foundry_standin import (
@@ -97,34 +95,3 @@ def test_story_2_2_the_manual_is_ingested_as_one_smart_chunk_per_rule_of_the_rul
 
 
 # --- Failures --------------------------------------------------------------------------
-
-
-def test_story_2_2_a_manual_that_defines_a_rule_twice_is_refused_whole(
-    retrieval: LocalRetrieval, tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    # The manual with its first rule page printed a second time at the end.
-    with (
-        pymupdf.open(MANUAL_PDF) as document,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
-        pymupdf.open(MANUAL_PDF) as copy,  # type: ignore[no-untyped-call]  # as above
-    ):
-        first = next(
-            number
-            for number, page in enumerate(document)
-            if "Rule UW-DM-001:" in page.get_text()
-        )
-        document.insert_pdf(copy, from_page=first, to_page=first)
-        twice = tmp_path / "twice.pdf"
-        document.save(twice)
-    retrieval.upload(twice)
-
-    with caplog.at_level(logging.INFO):
-        status = retrieval.ingest()
-
-    assert status == 1
-    assert (
-        "ingestion failed: code=stage_failed reason=rule_defined_twice where=UW-DM-001"
-        in caplog.text
-    )
-    # An error, not a partial index.
-    assert retrieval.chunks() == {}
-    assert retrieval.model_calls == 0

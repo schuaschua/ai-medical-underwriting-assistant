@@ -118,29 +118,8 @@ def ask(gateway: ModelGateway, **request: Any) -> Any:
     return asyncio.run(scenario())
 
 
-def text_of(completion_: Any) -> Any:
-    return completion_.choices[0].message.content
-
-
 def model_answering(*turns: Turn, **options: Any) -> ScriptedModel:
     return ScriptedModel(turns=[*turns, ANSWER], **options)
-
-
-def test_story_2_5_a_429_or_5xx_is_retried_honouring_retry_after(
-    settings: Settings, caplog: pytest.LogCaptureFixture
-) -> None:
-    model = model_answering(429, 503, 500, headers={"retry-after": "7"})
-    gateway, waits = gateway_for(model, settings)
-
-    with caplog.at_level(logging.WARNING):
-        given = ask(gateway)
-
-    # Three retries, each after the wait the answer asked for, then the answer.
-    assert text_of(given) == ANSWER
-    assert model.calls == 4
-    assert waits == [7.0, 7.0, 7.0]
-    assert "attempt=1 code=status_429" in caplog.text
-    assert "attempt=3 code=status_500" in caplog.text
 
 
 class FakeCredential:

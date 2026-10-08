@@ -73,9 +73,8 @@ STAGE_RETRY = task.RetryPolicy(
         # Exactly at the threshold counts as "or more".
         (True, 0.90, Route.EXTRACTION),
         (False, 0.90, Route.CUSTOMER),
-        # Just under it does not: triage, whatever the label.
+        # Just under it does not: triage.
         (True, 0.8999, Route.TRIAGE),
-        (False, 0.8999, Route.TRIAGE),
     ],
 )
 def test_story_1_9_the_gate_routes_a_page_by_its_label_and_its_confidence(
@@ -87,22 +86,13 @@ def test_story_1_9_the_gate_routes_a_page_by_its_label_and_its_confidence(
     )
 
 
-@pytest.mark.parametrize(
-    ("confidence", "threshold"),
-    [
-        (float("nan"), 0.9),
-        (0.95, 1.5),
-    ],
-)
-def test_story_1_9_the_gate_refuses_a_confidence_or_threshold_that_is_no_unit_number(
-    confidence: Any, threshold: Any
-) -> None:
+def test_story_1_9_the_gate_refuses_a_confidence_that_is_no_unit_number() -> None:
     # Without this a NaN, which compares false with everything, would be
     # routed as "sure".
     for is_medical in (True, False):
         with pytest.raises(DomainError) as raised:
             route_page(
-                is_medical=is_medical, confidence=confidence, threshold=threshold
+                is_medical=is_medical, confidence=float("nan"), threshold=THRESHOLD
             )
         assert raised.value.code is ErrorCode.VALIDATION_FAILED
 

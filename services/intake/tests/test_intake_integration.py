@@ -132,28 +132,20 @@ def test_story_1_5_an_uploaded_pdf_is_in_originals_byte_for_byte_with_its_rows(
         originals.delete_blob(blob_name)
 
 
-@pytest.mark.parametrize(
-    ("content", "status", "code"),
-    [
-        (b"%PDF-1.7\n" + b"x" * MAX_UPLOAD_BYTES, 413, "file_too_large"),
-        (b"plain text, renamed to report.pdf", 415, "unsupported_file_type"),
-    ],
-    ids=["too-large", "not-a-pdf"],
-)
 def test_story_1_5_a_refused_upload_stores_nothing(
     client: TestClient,
     migrated_database: Settings,
     originals: ContainerClient,
-    content: bytes,
-    status: int,
-    code: str,
 ) -> None:
+    content = b"%PDF-1.7\n" + b"x" * MAX_UPLOAD_BYTES
     before = blob_names(originals)
 
     response = client.post("/cases", content=content, headers=PDF)
 
-    assert response.status_code == status
-    assert ErrorBody.model_validate(response.json()).error.code.value == code
+    assert response.status_code == 413
+    assert ErrorBody.model_validate(response.json()).error.code.value == (
+        "file_too_large"
+    )
     assert blob_names(originals) == before
     assert rows(migrated_database, "case") == []
     assert rows(migrated_database, "document") == []

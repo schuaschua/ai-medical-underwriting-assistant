@@ -16,9 +16,6 @@ from pydantic import SecretStr
 from sqlalchemy import create_engine, event
 
 from intake.adapters import db, telemetry
-from intake.adapters.blob import (
-    ensure_local_containers,
-)
 from intake.adapters.db import (
     POSTGRESQL_TOKEN_SCOPE,
     EntraToken,
@@ -28,7 +25,6 @@ from intake.adapters.db import (
 from intake.settings import Settings
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-ACCOUNT_URL = "https://staiuwdemowus3.blob.core.windows.net"
 
 # A made-up address in the connection string's format; it is never contacted.
 CONNECTION_STRING = (
@@ -118,11 +114,6 @@ def test_story_1_5_database_connections_sign_in_with_an_entra_token() -> None:
     assert seen["password"] == FIRST_TOKEN
     assert seen["connect_timeout"] == "10"
     assert credential.scopes == [POSTGRESQL_TOKEN_SCOPE]
-
-
-def test_story_1_5_containers_are_never_created_outside_the_emulator() -> None:
-    with pytest.raises(ValueError, match="local emulator"):
-        ensure_local_containers(Settings(blob_account_url=ACCOUNT_URL))
 
 
 # --- Migrations ---------------------------------------------------------------

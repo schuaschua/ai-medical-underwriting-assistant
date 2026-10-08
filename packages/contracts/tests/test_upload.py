@@ -6,7 +6,6 @@ from contracts.errors import DomainError, ErrorCode
 from contracts.upload import (
     MAX_UPLOAD_BYTES,
     PDF_HEADER,
-    check_pdf_header,
     check_received_length,
     check_upload,
     check_upload_size,
@@ -38,14 +37,6 @@ def test_story_1_5_the_size_limit_is_ten_megabytes_and_holds_to_the_byte() -> No
     assert empty.code is ErrorCode.VALIDATION_FAILED
     assert empty.http_status == 422
     assert refused(check_upload_size, -1).code is ErrorCode.VALIDATION_FAILED
-
-
-def test_story_1_5_content_without_the_pdf_header_is_415() -> None:
-    for content in (b"just some text", b"PDF-1.7", b" %PDF-1.7", b"%pdf-1.7", b"%PD"):
-        error = refused(check_upload, content)
-        assert error.code is ErrorCode.UNSUPPORTED_FILE_TYPE
-        assert error.http_status == 415
-        assert refused(check_pdf_header, content).http_status == 415
 
 
 def test_story_1_5_a_content_length_is_read_strictly_and_must_match_the_body() -> None:

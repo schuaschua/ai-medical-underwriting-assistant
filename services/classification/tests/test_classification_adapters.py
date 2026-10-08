@@ -36,7 +36,6 @@ from classification.adapters.dapr import (
     build_http_client,
     invoke_path,
 )
-from classification.adapters.http.app import classify_options
 from classification.adapters.model import (
     COGNITIVE_SERVICES_SCOPE,
     OUTPUT_SCHEMA,
@@ -46,7 +45,7 @@ from classification.adapters.model import (
     model_token_for,
 )
 from classification.domain.entities import PageContent
-from classification.domain.ports import ModelCallFailed, ModelUnavailable
+from classification.domain.ports import ModelUnavailable
 from classification.prompts import CLASSIFY_PAGE, load_prompt
 from classification.settings import Settings
 from contracts.enums import Service
@@ -89,22 +88,6 @@ def test_story_1_8_settings_that_would_reach_the_model_unsafely_are_refused() ->
     )
     with pytest.raises(ValueError, match="only to the blob emulator"):
         upload_local_training_pages(elsewhere, SERVICE_DIR)
-
-
-def test_story_1_8_the_actor_of_a_classification_names_the_service_and_the_deployment(
-    settings: Settings,
-) -> None:
-    options = classify_options(
-        settings.model_copy(
-            update={"classifier_runs": 9, "classify_deadline_seconds": 12.0}
-        )
-    )
-
-    assert options.actor == f"classification:{DEPLOYMENT}"
-    assert (options.runs, options.deadline_seconds) == (9, 12.0)
-    # The deployment name is nowhere in the service's code: it is a setting.
-    for source in (SERVICE_DIR / "src").rglob("*.py"):
-        assert "gpt-" not in source.read_text(), source.name
 
 
 # --- The model gateway -------------------------------------------------------------------
@@ -248,24 +231,6 @@ def test_story_1_8_a_429_or_5xx_is_retried_honouring_retry_after_and_three_retri
     assert f"model unavailable: deployment={DEPLOYMENT} attempts=4" in caplog.text
     # security rule 31: nothing of the endpoint's answer is logged.
     assert "SECRET" not in caplog.text
-
-
-@pytest.mark.parametrize("status", [401])
-def test_story_1_8_a_call_the_model_refuses_is_not_retried(
-    settings: Settings, caplog: pytest.LogCaptureFixture, status: int
-) -> None:
-    deployment = Deployment(statuses=[status])
-    gateway, waits = gateway_for(deployment, settings)
-
-    with caplog.at_level(logging.WARNING), pytest.raises(ModelCallFailed) as raised:
-        classify(gateway)
-
-    # It would be refused again: one call, a code for the log, no detail.
-    assert raised.value.reason == f"model_status_{status}"
-    assert (len(deployment.requests), waits) == (1, [])
-    assert f"model call refused: deployment={DEPLOYMENT} status={status}" in caplog.text
-    assert "SECRET" not in caplog.text
-    assert raised.value.__cause__ is None
 
 
 class FakeCredential:

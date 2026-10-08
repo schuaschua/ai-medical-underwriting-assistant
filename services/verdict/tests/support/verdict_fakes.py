@@ -547,8 +547,6 @@ class UpstreamSidecar:
 
     facts: list[Fact] = field(default_factory=list)
     rules: FakeRules = field(default_factory=FakeRules)
-    # Paths answered with this status instead, by the service's app id.
-    down: dict[str, int] = field(default_factory=dict)
     requests: list[httpx.Request] = field(default_factory=list)
 
     def paths(self) -> list[tuple[str, str]]:
@@ -557,11 +555,6 @@ class UpstreamSidecar:
     async def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         path = request.url.path
-        for app_id, status in self.down.items():
-            if path.startswith(f"/v1.0/invoke/{app_id}/"):
-                return httpx.Response(
-                    status, json={"errorCode": "ERR_DIRECT_INVOKE", "message": "x"}
-                )
         facts_of = _FACTS_PATH.fullmatch(path)
         if facts_of and request.method == "GET":
             case_id = facts_of.group(1)

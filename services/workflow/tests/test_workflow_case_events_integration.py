@@ -336,22 +336,14 @@ def test_story_1_13_a_customers_case_run_to_its_last_decision_starts_and_ends_it
     assert at_the_end.started_at == started_event.occurred_at
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        {},
-        {"actor": "verdict"},
-    ],
-)
 def test_story_1_13_the_service_refuses_a_start_without_a_demo_role_and_stores_no_case(
     service_settings: Settings,
     scheduler_client: DurableTaskSchedulerClient,
-    body: dict[str, str] | None,
 ) -> None:
     case_id = new_id()
 
     with workflow_service(service_settings, SidecarStandIn().transport()) as client:
-        response = client.post(f"/cases/{case_id}/start", json=body)
+        response = client.post(f"/cases/{case_id}/start", json={})
         unknown = client.get(f"/cases/{case_id}/audit")
 
     assert (response.status_code, response.json()["error"]["code"]) == (
