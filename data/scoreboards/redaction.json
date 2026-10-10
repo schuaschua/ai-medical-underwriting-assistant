@@ -1,8 +1,8 @@
 {
   "run": {
-    "eval_run_id": "01a12480-c590-7a01-b0e6-c0b57acb2f25",
-    "started_at": "2026-10-10T06:29:41.393255Z",
-    "finished_at": "2026-10-10T07:23:00.400233Z",
+    "eval_run_id": "01a124f4-0ba8-7b58-8ae9-a6af39c0d1ee",
+    "started_at": "2026-10-10T10:05:59.897608Z",
+    "finished_at": "2026-10-10T10:11:04.351488Z",
     "web_address": "https://ca-aiuw-demo-wus3-web.whiteflower-7e9a6f55.westus3.azurecontainerapps.io",
     "stand_ins": false
   },
@@ -192,21 +192,6 @@
       "category": "person_name"
     },
     {
-      "case_key": "case-011",
-      "page_number": 1,
-      "category": "identity_number"
-    },
-    {
-      "case_key": "case-011",
-      "page_number": 2,
-      "category": "policy_number"
-    },
-    {
-      "case_key": "case-011",
-      "page_number": 4,
-      "category": "person_name"
-    },
-    {
       "case_key": "case-010",
       "page_number": 1,
       "category": "identity_number"
@@ -237,6 +222,41 @@
       "category": "person_name"
     },
     {
+      "case_key": "case-011",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-011",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-011",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 4,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
       "case_key": "case-013",
       "page_number": 1,
       "category": "identity_number"
@@ -247,26 +267,6 @@
       "category": "policy_number"
     },
     {
-      "case_key": "case-012",
-      "page_number": 1,
-      "category": "identity_number"
-    },
-    {
-      "case_key": "case-012",
-      "page_number": 2,
-      "category": "policy_number"
-    },
-    {
-      "case_key": "case-012",
-      "page_number": 4,
-      "category": "identity_number"
-    },
-    {
-      "case_key": "case-012",
-      "page_number": 4,
-      "category": "person_name"
-    },
-    {
       "case_key": "case-014",
       "page_number": 1,
       "category": "identity_number"
@@ -307,21 +307,6 @@
       "category": "policy_number"
     },
     {
-      "case_key": "case-017",
-      "page_number": 1,
-      "category": "identity_number"
-    },
-    {
-      "case_key": "case-017",
-      "page_number": 1,
-      "category": "person_name"
-    },
-    {
-      "case_key": "case-017",
-      "page_number": 2,
-      "category": "policy_number"
-    },
-    {
       "case_key": "case-016",
       "page_number": 1,
       "category": "identity_number"
@@ -340,6 +325,41 @@
       "case_key": "case-016",
       "page_number": 3,
       "category": "policy_number"
+    },
+    {
+      "case_key": "case-017",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-017",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-017",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 3,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 4,
+      "category": "person_name"
     },
     {
       "case_key": "case-019",
@@ -367,24 +387,14 @@
       "category": "identity_number"
     },
     {
-      "case_key": "case-018",
+      "case_key": "case-020",
       "page_number": 1,
       "category": "identity_number"
     },
     {
-      "case_key": "case-018",
-      "page_number": 3,
-      "category": "person_name"
-    },
-    {
-      "case_key": "case-018",
-      "page_number": 3,
+      "case_key": "case-020",
+      "page_number": 2,
       "category": "policy_number"
-    },
-    {
-      "case_key": "case-018",
-      "page_number": 4,
-      "category": "person_name"
     },
     {
       "case_key": "case-021",
@@ -420,16 +430,6 @@
       "case_key": "case-021",
       "page_number": 5,
       "category": "person_name"
-    },
-    {
-      "case_key": "case-020",
-      "page_number": 1,
-      "category": "identity_number"
-    },
-    {
-      "case_key": "case-020",
-      "page_number": 2,
-      "category": "policy_number"
     },
     {
       "case_key": "case-022",
