@@ -35,10 +35,11 @@ otel_sampling_ratio           = 1
 dapr_http_max_request_size_mb = 16
 dapr_http_port                = 3500
 
-# Redaction (spine AD-21). Both values wait for the final Azure test session
-# (deferred-work.md): the API version is the one the spine names as generally
-# available, and `PolicyNumber` is this project's own name for a category the
-# service may not know. If the service refuses it, take it out here.
+# Redaction (spine AD-21). Seen in the Azure session of 2026-10-10: the
+# service takes this API version, and refuses `PolicyNumber` ("not a valid
+# value to be used in 'piiCategories'"), which was this project's own name.
+# It is left out here, so a policy number is not masked in Azure: the
+# bake-off's redaction check reports it (deferred-work.md).
 language_api_version = "2026-05-01"
 redaction_categories = [
   "Person",
@@ -46,7 +47,6 @@ redaction_categories = [
   "PhoneNumber",
   "Email",
   "USSocialSecurityNumber",
-  "PolicyNumber",
 ]
 
 # The gate (spine AD-7): medical at this confidence or more goes to

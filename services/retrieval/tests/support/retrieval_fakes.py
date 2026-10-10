@@ -79,6 +79,15 @@ def definition(rule_id: str, body: str = "") -> str:
     return f"Rule {rule_id}: {body}"
 
 
+def labelled_definition(rule_id: str) -> str:
+    """A definition with the labelled parts the project's manual prints: threshold, rating, source."""
+    return (
+        f"Rule {rule_id}: Gout (section 1.4). Threshold: a reading in the band of "
+        f"{rule_id}. Probable rating: a debit of +25 %. Source of the threshold: "
+        "a guideline (2020), its table of bands."
+    )
+
+
 Line = str | tuple[str, str]
 
 

@@ -10,6 +10,7 @@ project's manual and the stand-ins it is tested beside the stand-ins
 import asyncio
 import hashlib
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from retrieval_fakes import (
     StubModel,
     context_answer,
     definition,
+    labelled_definition,
     layout,
     manual,
     options,
@@ -46,11 +48,13 @@ from retrieval.domain.chunker import (
     chunk_id_for,
     cut_chunks,
     cut_fixed_chunks,
+    definition_in,
 )
 from retrieval.domain.entities import (
     EMBEDDING_DIMENSIONS,
     Chunk,
     IngestRun,
+    LayoutParagraph,
     StoredChunk,
 )
 from retrieval.domain.ingest import (
@@ -117,6 +121,30 @@ def test_story_2_2_a_smart_chunk_holds_exactly_one_rule_with_its_place_in_the_ma
         (RULE_A, f"Rule {RULE_A}: First band."),
         (RULE_B, f"Rule {RULE_B}: Second band."),
     ]
+    # One definition the layout model gave as two paragraphs is one chunk,
+    # as the real service does it: ended after `Source of the threshold:`,
+    # the rest after the page's footer and the next page's header; or ended
+    # before `Probable rating:`, where the first piece ends like a sentence.
+    whole_a, whole_b = labelled_definition(RULE_A), labelled_definition(RULE_B)
+    source_a, rating_b = whole_a.index("a guideline"), whole_b.index("Probable")
+    pieces = layout(
+        ["1 Gout", "1.4 Probable rating", whole_a[:source_a].rstrip()],
+        [
+            whole_a[source_a:],
+            whole_b[:rating_b].rstrip(),
+            whole_b[rating_b:],
+            "What does not change the rating.",
+        ],
+    )
+    assert [(c.rule_id, c.text, c.manual_page) for c in cut_chunks(pieces)] == [
+        (RULE_A, whole_a, 1),
+        (RULE_B, whole_b, 2),
+    ]
+    # In the `fixed` cut the pieces are one paragraph too: no line break
+    # inside the definition.
+    (fixed,) = cut_fixed_chunks(pieces, 200, 10)
+    assert definition_in(fixed.text, RULE_A) == whole_a
+    assert definition_in(fixed.text, RULE_B) == whole_b
 
 
 def test_story_2_2_a_rule_a_chunk_refers_to_is_a_reference_never_one_of_its_rule_ids() -> (
@@ -159,6 +187,24 @@ def test_story_2_2_page_furniture_is_in_no_chunk_and_inside_a_rules_text_fails_t
     assert (raised.value.reason, raised.value.where) == (
         "page_furniture_in_chunk",
         RULE_A,
+    )
+
+    # A footer line the layout model gave no role on one page, as the real
+    # service does: it is furniture there too, by the role it has on other
+    # pages, though it is on too few pages to count as repeating.
+    line = "Its thresholds were checked: 0 of 3 items."
+    long_manual = manual(filler_pages=4)
+    some_without_role = replace(
+        long_manual,
+        paragraphs=(
+            *long_manual.paragraphs,
+            *(LayoutParagraph(page, line, "pageFooter") for page in (1, 2, 3)),
+            LayoutParagraph(8, line.replace("3", "4")),
+        ),
+    )
+    assert cut_chunks(some_without_role) == cut_chunks(long_manual)
+    assert cut_fixed_chunks(some_without_role, 12, 4) == cut_fixed_chunks(
+        long_manual, 12, 4
     )
 
 
@@ -273,6 +319,19 @@ def test_story_2_2_the_chunker_checks_its_own_result_and_fails_loudly() -> None:
         # A definition cut before the end of its sentence.
         (
             layout(["1 Gout", f"Rule {RULE_A}: Threshold: a reading in the"]),
+            "definition_cut_short",
+        ),
+        # A definition that ends like a sentence and lacks its rating and
+        # its source, where the manual's definitions have them: the rest
+        # did not come before the next definition.
+        (
+            layout(
+                [
+                    "1 Gout",
+                    f"Rule {RULE_A}: Gout. Threshold: a reading.",
+                    labelled_definition(RULE_B),
+                ]
+            ),
             "definition_cut_short",
         ),
         # A rule the layout model took for a footer.

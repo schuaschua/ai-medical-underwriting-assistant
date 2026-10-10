@@ -265,7 +265,14 @@ class LanguageStandIn:
             categories = [str(name) for name in parameters["piiCategories"]]
             valid = (
                 task["kind"] == TASK_KIND
-                and parameters["redactionPolicy"]["policyKind"] == ENTITY_MASK
+                # As the service at API version 2026-05-01: a list of
+                # policies with exactly one default.
+                and [
+                    policy["policyKind"]
+                    for policy in parameters["redactionPolicies"]
+                    if policy.get("isDefault") is True
+                ]
+                == [ENTITY_MASK]
                 and isinstance(document["source"]["location"], str)
                 and isinstance(document["target"]["location"], str)
             )

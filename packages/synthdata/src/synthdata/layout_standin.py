@@ -19,6 +19,14 @@ along their line, not measured. It knows nothing of the manual: what the real
 service makes of the manual's pages is checked in Azure. Start it with
 `--no-roles` to see the result without any role.
 
+It does not keep to the PDF's paragraphs, because the real service does not
+(seen in Azure on 2026-10-10, API version 2024-11-30): on some pages the
+footer comes without a role, or as one paragraph per line, and some
+paragraphs are ended early, after a line that ends with a colon or with a
+full stop, the rest coming as the next paragraph. Which pages and paragraphs
+is a matter of counting, not of what they say (`_as_the_service`). Start it
+with `--tidy` for the PDF's own paragraphs, every footer with its role.
+
 As a process it also serves the routes of the classifier stand-in
 (`synthdata.classifier_standin`, story 4.2): in Azure one Document
 Intelligence account answers both, so locally one port does. A build reads
@@ -64,6 +72,17 @@ _SAME_COLUMN = 1.5
 _HEADING_SIZE = 11.0
 _TITLE_SIZE = 20.0
 _PAGE_NUMBER = re.compile(r"(?:Page\s+)?\d+", re.IGNORECASE)
+# As the real service: the footer's lines are a paragraph each on every page
+# whose number divides by the first, and the footer has no role on every
+# page whose number leaves the remainder after the second. On a page of both
+# kinds (20, 55 ...) each footer line stands alone without a role, which is
+# what a chunker cannot tell from body text by its repeating.
+_FOOTER_SPLIT_EVERY = 5
+_FOOTER_NO_ROLE_EVERY, _FOOTER_NO_ROLE_REMAINDER = 7, 6
+# As the real service: a body paragraph is ended after a line that ends with
+# a colon; and of those with a line that ends a sentence, every so many are
+# ended after the first such line.
+_SENTENCE_SPLIT_EVERY = 4
 _BOLD = 16  # PyMuPDF's span flag for a bold font
 
 
@@ -194,8 +213,54 @@ def _role(paragraph: _Paragraph, page_number: int, height: float) -> str | None:
     return None
 
 
-def analyze_pdf(pdf: bytes, roles: bool = True) -> dict[str, Any]:
-    """The `analyzeResult` of the layout model for a PDF, as the stand-in reads it."""
+def _split_after(paragraph: _Paragraph, last: int) -> list[_Paragraph]:
+    """The paragraph as two: its lines up to the one at `last`, and the rest."""
+    return [
+        _Paragraph(paragraph.lines[: last + 1], paragraph.role),
+        _Paragraph(paragraph.lines[last + 1 :], paragraph.role),
+    ]
+
+
+def _as_the_service(
+    paragraph: _Paragraph, page_number: int, sentence_ends: list[int]
+) -> list[_Paragraph]:
+    """A paragraph as the real service may give it: without its role, or in pieces.
+
+    `sentence_ends` counts the body paragraphs with a line that ends a
+    sentence, across the document.
+    """
+    if paragraph.role == "pageFooter":
+        pieces = (
+            [_Paragraph([line], paragraph.role) for line in paragraph.lines]
+            if page_number % _FOOTER_SPLIT_EVERY == 0
+            else [paragraph]
+        )
+        if page_number % _FOOTER_NO_ROLE_EVERY == _FOOTER_NO_ROLE_REMAINDER:
+            for piece in pieces:
+                piece.role = None
+        return pieces
+    if paragraph.role is not None:
+        return [paragraph]
+    inner = paragraph.lines[:-1]
+    for number, line in enumerate(inner):
+        if line.text.endswith(":"):
+            return _split_after(paragraph, number)
+    for number, line in enumerate(inner):
+        if line.text.endswith("."):
+            sentence_ends[0] += 1
+            if sentence_ends[0] % _SENTENCE_SPLIT_EVERY == 0:
+                return _split_after(paragraph, number)
+            break
+    return [paragraph]
+
+
+def analyze_pdf(pdf: bytes, roles: bool = True, tidy: bool = False) -> dict[str, Any]:
+    """The `analyzeResult` of the layout model for a PDF, as the stand-in reads it.
+
+    With `tidy` the paragraphs are the PDF's own and every footer has its
+    role; without, some are as the real service gives them.
+    """
+    sentence_ends = [0]
     content: list[str] = []
     offset = 0
     pages: list[dict[str, Any]] = []
@@ -209,7 +274,13 @@ def analyze_pdf(pdf: bytes, roles: bool = True) -> dict[str, Any]:
             for block in blocks:
                 if block["type"] != 0:
                     continue
-                for paragraph in _paragraphs_of(_lines_of(block)):
+                read = _paragraphs_of(_lines_of(block))
+                for whole in read:
+                    whole.role = _role(whole, page_number, page.rect.height)
+                # Only a block that is one paragraph is cut: cells stay cells.
+                if not tidy and len(read) == 1:
+                    read = _as_the_service(read[0], page_number, sentence_ends)
+                for paragraph in read:
                     start = offset
                     for line in paragraph.lines:
                         lines_out.append(
@@ -235,9 +306,8 @@ def analyze_pdf(pdf: bytes, roles: bool = True) -> dict[str, Any]:
                         ],
                         "content": text,
                     }
-                    role = _role(paragraph, page_number, page.rect.height)
-                    if roles and role is not None:
-                        entry["role"] = role
+                    if roles and paragraph.role is not None:
+                        entry["role"] = paragraph.role
                     paragraphs.append(entry)
             pages.append(
                 {
@@ -317,6 +387,9 @@ class LayoutStandIn:
     mode: Mode = Mode.OK
     # Whether paragraphs carry a role. The real service may leave roles out.
     roles: bool = True
+    # Whether the paragraphs are the PDF's own; by default some are as the
+    # real service gives them (see `_as_the_service`).
+    tidy: bool = False
     # What a throttled submit is told to wait; none by default, so that a
     # test or a local run fails at once instead of waiting.
     retry_after_seconds: int = 0
@@ -341,7 +414,7 @@ class LayoutStandIn:
             analysis.status = "failed"
         elif self.mode is not Mode.HANG:
             try:
-                analysis.result = analyze_pdf(pdf, self.roles)
+                analysis.result = analyze_pdf(pdf, self.roles, self.tidy)
                 analysis.status = "succeeded"
             except Exception:  # noqa: BLE001 - whatever went wrong, the analysis is reported as failed
                 analysis.status = "failed"
@@ -427,6 +500,11 @@ def main(argv: list[str] | None = None) -> None:
         help="leave the role out of every paragraph",
     )
     parser.add_argument(
+        "--tidy",
+        action="store_true",
+        help="give the PDF's own paragraphs, and every footer its role",
+    )
+    parser.add_argument(
         "--classifier-mode",
         type=ClassifierMode,
         choices=list(ClassifierMode),
@@ -434,7 +512,7 @@ def main(argv: list[str] | None = None) -> None:
         help="what the classifier routes do with every call (default: ok)",
     )
     args = parser.parse_args(argv)
-    stand_in = LayoutStandIn(args.mode, roles=not args.no_roles)
+    stand_in = LayoutStandIn(args.mode, roles=not args.no_roles, tidy=args.tidy)
     app = stand_in.app()
     # The classifier routes, on the same port. A build reads the training
     # pages from the blob emulator's built-in account, which is no secret;

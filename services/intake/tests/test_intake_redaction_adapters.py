@@ -167,7 +167,7 @@ def test_story_1_7_the_job_is_submitted_with_the_entity_mask_the_categories_and_
     (task,) = body["tasks"]
     assert task["kind"] == "PiiEntityRecognition"
     assert task["parameters"] == {
-        "redactionPolicy": {"policyKind": "entityMask"},
+        "redactionPolicies": [{"policyKind": "entityMask", "isDefault": True}],
         "piiCategories": ["Person", "PhoneNumber"],
     }
     assert b"%PDF" not in request.content

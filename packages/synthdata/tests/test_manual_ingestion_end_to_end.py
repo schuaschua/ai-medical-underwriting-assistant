@@ -11,6 +11,7 @@ Run `docker compose up --detach --wait` first.
 
 import json
 import logging
+import re
 from typing import Any
 
 import pytest
@@ -23,6 +24,8 @@ from synthdata.foundry_standin import (
 
 pytestmark = pytest.mark.integration
 
+# The first of the two lines of the manual's footer.
+FOOTER_LINE = "SYNTHETIC TEST DOCUMENT. Its ratings (debits and declines) are invented."
 # The rule whose text the changed manual changes, and the one it removes.
 CHANGED, REMOVED = "UW-DM-002", "UW-DM-004"
 
@@ -68,12 +71,30 @@ def test_story_2_2_the_manual_is_ingested_as_one_smart_chunk_per_rule_of_the_rul
         assert chunk["section_id"] == f"{rule['section']}.4"
         assert chunk["impairment"] == rule["impairment"]
         assert chunk["manual_page"] == rule["manual_page"]
+        # The whole definition, to its source, though the stand-in gave
+        # some definitions in two paragraphs, as the real service does.
+        assert chunk["text"].index("Threshold:") < chunk["text"].index(
+            "Probable rating:"
+        )
+        assert re.search(r"[Ss]ource (of|for) the [^:]*: .+\.$", chunk["text"])
         # One context line by the chat model, saying where the rule sits.
         line = chunk["context_line"]
         assert line and "\n" not in line
         assert f"section {rule['section']}, {rule['impairment']}" in line
         # A 3,072-dimension vector.
         assert len(vector_of(chunk)) == EMBEDDING_DIMENSIONS == 3072
+
+    # The stand-in was honest about the real service: footer lines without
+    # a role and definitions ended early were in what the job had to cut,
+    # and no chunk of either set holds a footer line.
+    (analysis,) = ingested_manual.layout.analyses.values()
+    assert analysis.result is not None
+    no_role = [p["content"] for p in analysis.result["paragraphs"] if "role" not in p]
+    assert FOOTER_LINE in no_role
+    ended_early = [text for text in no_role if text.startswith("Rule UW-")]
+    assert any(text.endswith("threshold:") for text in ended_early)
+    assert any("Probable rating:" not in text for text in ended_early)
+    assert not [c for c in every_chunk.values() if FOOTER_LINE in c["text"]]
 
     # A second run changes nothing and calls no model, for either chunk set.
     calls = ingested_manual.model_calls

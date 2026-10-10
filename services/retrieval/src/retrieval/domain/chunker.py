@@ -8,9 +8,17 @@ of words with an overlap, wherever the rules happen to fall.
 The chunker works from what the layout model read, never from what the
 generator of the manual knows. It finds a definition by the contracts'
 marker (`Rule <rule_id>:`), a section by the number printed with its
-heading, and page furniture by the layout model's roles or by its repeating
-on most pages. So it learns the rules from the manual alone, and the layout
-stand-in can be replaced by the real service.
+heading, and page furniture by the layout model's roles, by its repeating
+on most pages, or by its being the text the roles name on other pages. So it
+learns the rules from the manual alone, and the layout stand-in can be
+replaced by the real service.
+
+The real service does not keep to the manual's paragraphs: it gives some
+footer lines no role, and it ends some definitions early and gives the rest
+as the next paragraph. A definition is therefore read to its own end: where
+the manual prints its definitions with labelled parts (a threshold, a
+rating, a source), a paragraph that lacks one of them is joined with what
+follows it.
 
 Both cuts walk the manual the same way (`_body`), so both leave out the
 same page furniture and stand under the same headings.
@@ -19,12 +27,13 @@ It checks its own result and fails loudly: a partial index, or one whose
 rules stand under the wrong section, is worse than none. The checks need
 nothing but the manual: headings are numbered in order and none twice, the
 rules of one section share one id code, every rule that is referred to is
-defined, and a definition ends where a sentence ends.
+defined, and a definition ends where a sentence ends and has every part the
+manual's definitions have.
 """
 
 import re
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from contracts.enums import ChunkSet
@@ -57,6 +66,14 @@ _PART = re.compile(r"^(\d{1,3})\.(\d{1,2})\s+([A-Z].*[^.:;,])$")
 _DIGITS = re.compile(r"\d+")
 # Where a definition may end: at the end of a sentence, a bracket or a quote after it.
 _SENTENCE_END = re.compile(r"[.!?][)\]\"'”’]*$")
+# The labelled parts of a definition, in the order the manual prints them:
+# its threshold, its rating and where the threshold is from (`Source of the
+# threshold:`, `Source of the edge at 140 mmHg:`, `The source for the
+# measure and the other edges of this section:`). A manual in which any
+# definition has all three prints every definition so: see `_whole_test`.
+_LABELLED_PARTS = re.compile(
+    r"\bThreshold:.*\bProbable rating:.*\b[Ss]ource (?:of|for) the\b[^:]*:", re.DOTALL
+)
 
 
 class ManualInvalid(Exception):
@@ -193,6 +210,21 @@ def _furniture(layout: ParsedLayout) -> tuple[set[int], set[str]]:
     repeating = {
         text for text, pages in pages_of.items() if text and len(pages) > needed
     }
+    # The real service leaves the role off a footer line on some pages, and
+    # gives a footer of two lines as one paragraph or as two: a text that has
+    # a furniture role on several pages is furniture on every page. Not a
+    # text without a letter: a page number alone is also a cell of a table.
+    pages_by_role: dict[str, set[int]] = defaultdict(set)
+    for paragraph in layout.paragraphs:
+        if paragraph.role in FURNITURE_ROLES:
+            pages_by_role[_DIGITS.sub("#", squash(paragraph.text))].add(
+                paragraph.page_number
+            )
+    by_roles = {
+        text
+        for text, pages in pages_by_role.items()
+        if len(pages) >= _FURNITURE_MIN_PAGES and any(map(str.isalpha, text))
+    }
     positions: set[int] = set()
     texts: set[str] = set()
     for position, paragraph in enumerate(layout.paragraphs):
@@ -203,7 +235,9 @@ def _furniture(layout: ParsedLayout) -> tuple[set[int], set[str]]:
             # A rule the layout model took for a header or a footer would be
             # dropped without a word.
             raise ManualInvalid("definition_in_page_furniture", marker.group(1))
-        if by_role or (not content[position] and _DIGITS.sub("#", text) in repeating):
+        if by_role or (
+            not content[position] and _DIGITS.sub("#", text) in repeating | by_roles
+        ):
             positions.add(position)
             if len(text) >= _FURNITURE_MIN_CHARS:
                 texts.add(text)
@@ -272,6 +306,64 @@ def _check_chunks(chunks: Sequence[Chunk]) -> None:
                 raise ManualInvalid("reference_not_defined", reference)
 
 
+def _whole_test(layout: ParsedLayout) -> Callable[[str], bool]:
+    """How to tell whether a definition of this manual is whole, learnt from the manual.
+
+    A definition ends where a sentence ends. And where any definition of the
+    manual has the labelled parts, every definition has them: one without is
+    a piece of a definition, whatever it ends with.
+    """
+    labelled = any(
+        _LABELLED_PARTS.search(text) is not None
+        for paragraph in layout.paragraphs
+        for _, text in _definitions(paragraph)
+    )
+
+    def whole(text: str) -> bool:
+        return _SENTENCE_END.search(text) is not None and (
+            not labelled or _LABELLED_PARTS.search(text) is not None
+        )
+
+    return whole
+
+
+def _whole_paragraphs(
+    layout: ParsedLayout, furniture: set[int], roles: bool
+) -> Iterator[LayoutParagraph]:
+    """The body's paragraphs in order, a definition the layout model split made one again.
+
+    The real service ends some definitions early (after `Source of the
+    threshold:`, or before `Probable rating:`) and gives the rest as the
+    next paragraph, on the same page or after the page's furniture. A
+    paragraph whose last definition is not whole is joined with the body
+    paragraphs after it until it is. Raises `ManualInvalid` when a heading,
+    the next definition or the manual's end comes first: the rest is lost.
+    """
+    whole = _whole_test(layout)
+    unfinished: LayoutParagraph | None = None
+    rule_id = ""
+    for position, paragraph in enumerate(layout.paragraphs):
+        if position in furniture:
+            continue
+        if unfinished is not None:
+            if (
+                _DEFINITION.search(paragraph.text) is not None
+                or paragraph.role in HEADING_ROLES
+                or (not roles and _is_heading(squash(paragraph.text)))
+            ):
+                raise ManualInvalid("definition_cut_short", rule_id)
+            # It stays where it starts: its page and role are the first piece's.
+            paragraph = replace(unfinished, text=f"{unfinished.text} {paragraph.text}")
+            unfinished = None
+        defined = list(_definitions(paragraph))
+        if defined and not whole(defined[-1][1]):
+            unfinished, rule_id = paragraph, defined[-1][0]
+            continue
+        yield paragraph
+    if unfinished is not None:
+        raise ManualInvalid("definition_cut_short", rule_id)
+
+
 def _body(
     layout: ParsedLayout, furniture: set[int]
 ) -> Iterator[tuple[LayoutParagraph, list[tuple[str, str]], _Place]]:
@@ -286,9 +378,7 @@ def _body(
     roles = any(paragraph.role in HEADING_ROLES for paragraph in layout.paragraphs)
     place = _Place()
     defined_any = False
-    for position, paragraph in enumerate(layout.paragraphs):
-        if position in furniture:
-            continue
+    for paragraph in _whole_paragraphs(layout, furniture, roles):
         defined = list(_definitions(paragraph))
         if defined:
             # A heading the layout model joined to the definition below it.
@@ -311,6 +401,7 @@ def cut_chunks(layout: ParsedLayout) -> list[Chunk]:
     """
     _check_pages(layout)
     furniture, furniture_texts = _furniture(layout)
+    whole = _whole_test(layout)
     chunks: dict[str, Chunk] = {}
     for paragraph, defined, place in _body(layout, furniture):
         for rule_id, text in defined:
@@ -318,7 +409,7 @@ def cut_chunks(layout: ParsedLayout) -> list[Chunk]:
                 raise ManualInvalid("rule_defined_twice", rule_id)
             if _DEFINITION.sub("", text, count=1).strip() == "":
                 raise ManualInvalid("definition_without_text", rule_id)
-            if _SENTENCE_END.search(text) is None:
+            if not whole(text):
                 # The paragraph was cut before the definition's end.
                 raise ManualInvalid("definition_cut_short", rule_id)
             if place.section_number is None:
@@ -448,8 +539,9 @@ def cut_fixed_chunks(
     is not kept whole: one that a cut falls in is in two chunks, part in
     each. That is the baseline's weakness and is left as it is.
 
-    Raises `ManualInvalid` as the walk of the `smart` cut does for pages and
-    headings, and when a rule is defined twice; the manual defines no rule;
+    Raises `ManualInvalid` as the walk of the `smart` cut does for pages,
+    headings and a definition the layout model split and the walk could not
+    make whole, and when a rule is defined twice; the manual defines no rule;
     a paragraph holds page furniture; a rule that is referred to is not
     defined; a chunk's text reads as defining a rule no paragraph defines (a
     marker formed across two paragraphs); a rule the body defines has its

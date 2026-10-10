@@ -130,7 +130,13 @@ class LanguageRedaction:
                     "kind": TASK_KIND,
                     "taskName": "redact",
                     "parameters": {
-                        "redactionPolicy": {"policyKind": ENTITY_MASK},
+                        # API version 2026-05-01 takes a list of policies
+                        # and wants one marked as the default (seen in the
+                        # Azure session of 2026-10-10: the single
+                        # `redactionPolicy` of the preview is refused).
+                        "redactionPolicies": [
+                            {"policyKind": ENTITY_MASK, "isDefault": True}
+                        ],
                         "piiCategories": list(categories),
                     },
                 }
