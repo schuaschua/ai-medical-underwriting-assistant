@@ -160,7 +160,11 @@ resource "azurerm_role_assignment" "classification_metrics_publisher" {
 # service calls the shared chat deployment with its own identity (spine
 # AD-16). There is no key.
 resource "azurerm_role_assignment" "classification_foundry_user" {
-  scope                = local.foundation.foundry_project_id
+  # The account, not the project: the services call the account's endpoint
+  # (the OpenAI route and, for retrieval, Cohere's), and the Azure session
+  # of 2026-10-10 showed that a role on the project is not let in there
+  # (401, "lacks the required data action").
+  scope                = local.foundation.foundry_account_id
   role_definition_name = "Foundry User"
   principal_id         = local.classification_identity.principal_id
   principal_type       = "ServicePrincipal"
@@ -239,7 +243,11 @@ resource "azurerm_role_assignment" "extraction_metrics_publisher" {
 # service calls the shared chat deployment with its own identity (spine
 # AD-16). There is no key.
 resource "azurerm_role_assignment" "extraction_foundry_user" {
-  scope                = local.foundation.foundry_project_id
+  # The account, not the project: the services call the account's endpoint
+  # (the OpenAI route and, for retrieval, Cohere's), and the Azure session
+  # of 2026-10-10 showed that a role on the project is not let in there
+  # (401, "lacks the required data action").
+  scope                = local.foundation.foundry_account_id
   role_definition_name = "Foundry User"
   principal_id         = local.extraction_identity.principal_id
   principal_type       = "ServicePrincipal"
@@ -280,7 +288,11 @@ resource "azurerm_role_assignment" "verdict_metrics_publisher" {
 # agent runs on the shared chat deployment with the service's own identity
 # (spine AD-16). There is no key.
 resource "azurerm_role_assignment" "verdict_foundry_user" {
-  scope                = local.foundation.foundry_project_id
+  # The account, not the project: the services call the account's endpoint
+  # (the OpenAI route and, for retrieval, Cohere's), and the Azure session
+  # of 2026-10-10 showed that a role on the project is not let in there
+  # (401, "lacks the required data action").
+  scope                = local.foundation.foundry_account_id
   role_definition_name = "Foundry User"
   principal_id         = local.verdict_identity.principal_id
   principal_type       = "ServicePrincipal"
@@ -324,7 +336,11 @@ resource "azurerm_role_assignment" "retrieval_metrics_publisher" {
 # Not verified: the reranker's route is below the account, not the
 # project, and this scope may not cover it (deferred-work.md).
 resource "azurerm_role_assignment" "retrieval_foundry_user" {
-  scope                = local.foundation.foundry_project_id
+  # The account, not the project: the services call the account's endpoint
+  # (the OpenAI route and, for retrieval, Cohere's), and the Azure session
+  # of 2026-10-10 showed that a role on the project is not let in there
+  # (401, "lacks the required data action").
+  scope                = local.foundation.foundry_account_id
   role_definition_name = "Foundry User"
   principal_id         = local.retrieval_identity.principal_id
   principal_type       = "ServicePrincipal"
