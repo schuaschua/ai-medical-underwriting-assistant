@@ -2,9 +2,9 @@
 
 Written by the coding agent on 2026-10-08, at the end of the session that built the last eight stories. Read `CLAUDE.md` first (Azure stays down while coding; the test suite is kept at about 500 cases).
 
-## AZURE SESSION IN PROGRESS (2026-10-10): the environment is UP and costs money
+## The Azure session of 2026-10-10 is over: the environment is torn down
 
-Read this section first. The owner started the Azure session on 2026-10-10. Both stacks are applied and the environment stays up until the checks are done and the owner agrees to the teardown (`infra/bootstrap/README.md`, section 3). Web: https://ca-aiuw-demo-wus3-web.whiteflower-7e9a6f55.westus3.azurecontainerapps.io
+Read this section first. The owner started the Azure session on 2026-10-10 and had it torn down the same day: `rg-aiuw-demo-wus3` is empty and nothing costs money. What follows is the session's record; the web address it names is gone.
 
 **How it was deployed.** Pull request #1 is still open: this session's permission settings refused the merge, so the deploy workflow (which deploys only the head of `main`) was not used. The images are built by hand with `az acr build` and the `app` stack applied locally, all by `.work/azure/redeploy.sh` (gitignored; it builds the seven images from the checked-out commit and applies `infra/demo/app`). The branch is pushed after every fix. The deployed commit is the branch head at the time of the last redeploy (`git log` and the script's last line `sha=...` in its output).
 
@@ -18,7 +18,7 @@ Read this section first. The owner started the Azure session on 2026-10-10. Both
 
 **Both bake-offs are complete and committed (2026-10-10).** Retrieval (eval run `01a124f4-0ba8-7b58-8ae9-a6af39c0d1ee`, all 22 cases, `d78f2c6`): recall `r1` 38/39, `r2` 39/39, `r3` 39/39, `r4` 38/39, `r5` 39/39, `r6` 36/39; verdicts right `r1` 15, `r2` 16, `r3` 18, `r4` 16, `r5` 18, `r6` 17 of 22; winner `r3`; one `r4` search failed (`upstream_unavailable`, case 18). Redaction still leaks in every case; 44 of 332 expected quotes not found. Classification (eval run `01a1254b-ab1a-7c7b-83ac-0da091ad5c0e`, `3dd95b9`): `llm` 94/94 right with 2 pages queued; `doc-intelligence` 90/94 right with 86 of 94 pages queued (only 8 at or above the gate's threshold); winner `llm`; reasons clean.
 
-**Where it stopped.** Closed short by the owner's decision of 2026-10-10. The deployed commit `de3d0d2` serves the three scoreboard files. Four stored redaction result files were read and hold no found text. The findings, and the list of "Final Azure test session" checks that were NOT done (every screen in a browser among them), are the last five entries of `deferred-work.md`; the out-of-band log has the session's entry; the spine says what changed (AD-13, AD-21, the role table). **The environment is still up**: the only step left is the teardown (`infra/bootstrap/README.md`, section 3), with the owner's go-ahead, and its log entry.
+**Where it stopped.** Closed short by the owner's decision of 2026-10-10. The deployed commit `de3d0d2` serves the three scoreboard files. Four stored redaction result files were read and hold no found text. The findings, and the list of "Final Azure test session" checks that were NOT done (every screen in a browser among them), are the last five entries of `deferred-work.md`; the out-of-band log has the session's entry; the spine says what changed (AD-13, AD-21, the role table). The teardown is done and logged. Next, outside Azure: the owner's two decisions (the redaction leaks, the `doc-intelligence` classifier), pull request #1, and the screens in a browser against `./tools/dev.sh`.
 
 **Open with the owner from this session.** Whether to raise the chat deployment's capacity (quota allows ten times more; `security.md` names low capacity as a spending guard); what to do about the redaction leaks; the classifier's confidence looks to be always 1.0; the Foundry role's wider scope and `intake` reading an original for the blank check, both changed in `azure.md`/code and to be confirmed; `intake` is at 51 tests, one over its budget; a Cohere quota increase if `r4` is wanted at speed.
 
