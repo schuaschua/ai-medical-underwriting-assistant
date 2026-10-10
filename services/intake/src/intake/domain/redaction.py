@@ -52,6 +52,7 @@ NOT_RECORDED_MESSAGE = "The redaction could not be recorded. Please try again."
 _CATEGORY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,63}")
 _ENTITIES = "entities"
 _CATEGORY = "category"
+_TYPE = "type"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +112,11 @@ def count_categories(result_file: bytes) -> dict[str, int]:
 
 
 def _category_of(entity: object) -> str:
-    category = entity.get(_CATEGORY) if isinstance(entity, dict) else None
+    # The service at API version 2026-05-01 names it `type` (seen in the Azure
+    # session of 2026-10-10); the preview named it `category`.
+    category = (
+        entity.get(_TYPE, entity.get(_CATEGORY)) if isinstance(entity, dict) else None
+    )
     if not isinstance(category, str) or _CATEGORY_NAME.fullmatch(category) is None:
         # Not a name: it is not copied anywhere, in case it is a found value.
         raise RedactionJobError("result_category_not_a_name")
