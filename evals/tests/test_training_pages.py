@@ -11,11 +11,13 @@ the classifier it built.
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
 from pathlib import Path
 
+import httpx
 import pymupdf
 import pytest
 from bakeoff_fakes import FakeWeb
@@ -35,7 +37,7 @@ from synthdata_stack import (
     workflow_service,
 )
 
-from bakeoff import training_pages
+from bakeoff import training_layout, training_pages
 from bakeoff.settings import Settings
 from classification.adapters.blob import build_blob_service
 from contracts.enums import PageType
@@ -131,6 +133,44 @@ def test_story_4_2_each_training_page_is_uploaded_as_an_eval_case_and_its_redact
         "train-a.pdf",
         "train-b.pdf",
     ]
+    # The layout tool writes the service's answer beside every page and
+    # names its MD5 in the list; a page with other content is never sent.
+    service = "https://di.example"
+    sent: list[str] = []
+
+    def layout(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer operator-token"
+        if request.method == "POST":
+            sent.append(
+                base64.b64decode(json.loads(request.content)["base64Source"]).decode()
+            )
+            return httpx.Response(
+                202,
+                headers={"operation-location": f"{service}/results/1?api-version=x"},
+            )
+        return httpx.Response(200, json={"status": "succeeded", "analyzeResult": {}})
+
+    async def no_wait(seconds: float) -> None:
+        return None
+
+    def layout_tool() -> int:
+        return training_layout.main(
+            ["--endpoint", service, "--training-pages-dir", str(out)],
+            httpx.MockTransport(layout),
+            no_wait,
+        )
+
+    assert layout_tool() == training_layout.EXIT_REFUSED  # no token
+    monkeypatch.setenv(training_layout.TOKEN_VARIABLE, "operator-token")
+    assert layout_tool() == training_layout.EXIT_OK
+    assert sent == [f"%PDF-1.7 redacted {file}" for file in files]
+    for page in json.loads((out / "redacted-pages.json").read_text())["pages"]:
+        result = (out / f"{page['file']}.ocr.json").read_bytes()
+        assert json.loads(result)["status"] == "succeeded"
+        assert page["ocr_md5"] == hashlib.md5(result, usedforsecurity=False).hexdigest()
+    (out / files[0]).write_bytes(b"%PDF-1.7 the unredacted page")
+    assert layout_tool() == training_layout.EXIT_FAILED
+    assert len(sent) == 2
     # Uploaded as the customer, started and read as the underwriter; and
     # `web` is the only thing the tool talks to.
     assert ("customer", "POST", "cases") in web.roles

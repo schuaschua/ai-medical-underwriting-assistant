@@ -19,6 +19,14 @@ from contracts.enums import PageType
 
 # The fewest pages of one page type the classifier is trained on.
 MIN_PAGES_PER_TYPE = 5
+# What a page's layout result is called: the page's own name and this. The
+# real service finds no training data in a folder of pages without them.
+OCR_SUFFIX = ".ocr.json"
+
+
+def ocr_file_of(page: ListedPage) -> str:
+    """The blob that holds a page's layout result."""
+    return f"{page.file}{OCR_SUFFIX}"
 
 
 class TrainingRefused(Exception):
@@ -60,7 +68,9 @@ def check_pages(
     type and learns from whatever is in it. So a blob the list does not
     name, a listed page that is missing or named twice, and a page whose
     content is not the prepared one (an unredacted page under a prepared
-    page's name) each refuse the training. Every label must be a page type,
+    page's name) each refuse the training. A page's layout result is held
+    to the same: it is there only when the list vouches for it, and then
+    with that content. Every label must be a page type,
     every page lie in its type's folder, and every page type have at least
     `MIN_PAGES_PER_TYPE` pages.
     """
@@ -69,8 +79,9 @@ def check_pages(
         if times > 1:
             raise TrainingRefused("page_listed_twice", name)
     stored = {blob.name: blob for blob in blobs}
+    vouched = set(names) | {ocr_file_of(page) for page in listed if page.ocr_md5}
     for blob in blobs:
-        if blob.name not in names:
+        if blob.name not in vouched:
             raise TrainingRefused("page_without_label", blob.name)
     counts: Counter[PageType] = Counter()
     for page in listed:
@@ -85,6 +96,12 @@ def check_pages(
             raise TrainingRefused("page_missing", page.file)
         if held.md5 is None or held.md5.lower() != page.md5.lower():
             raise TrainingRefused("page_content_differs", page.file)
+        if page.ocr_md5:
+            layout = stored.get(ocr_file_of(page))
+            if layout is None:
+                raise TrainingRefused("page_missing", ocr_file_of(page))
+            if layout.md5 is None or layout.md5.lower() != page.ocr_md5.lower():
+                raise TrainingRefused("page_content_differs", ocr_file_of(page))
         counts[page_type] += 1
     for page_type in PageType:
         if counts[page_type] < MIN_PAGES_PER_TYPE:

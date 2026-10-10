@@ -27,6 +27,7 @@ from classification.adapters.credential import azure_credential
 from classification.adapters.telemetry import adapter_span
 from classification.domain.entities import ListedPage, StoredBlob
 from classification.domain.ports import TrainingFailed
+from classification.domain.training import ocr_file_of
 from classification.settings import APP_ID, LOOPBACK_HOSTS, Settings
 
 tracer = trace.get_tracer(APP_ID)
@@ -50,6 +51,10 @@ class _ListedPage(BaseModel):
     case_id: Annotated[str, StringConstraints(pattern=r"\S")]
     # The hex MD5 of the redacted file, as the tool wrote it.
     md5: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{32}$")]
+    # The hex MD5 of the page's layout result, where one was made.
+    ocr_md5: Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{32}$")] | None = (
+        None
+    )
 
 
 class _Manifest(BaseModel):
@@ -90,7 +95,12 @@ def listed_of(manifest: bytes) -> list[ListedPage]:
         # Not raised from the validation error: that one repeats the file.
         raise TrainingFailed("page_list_malformed") from None
     return [
-        ListedPage(file=page.file, page_type=page.page_type, md5=page.md5.lower())
+        ListedPage(
+            file=page.file,
+            page_type=page.page_type,
+            md5=page.md5.lower(),
+            ocr_md5=page.ocr_md5.lower() if page.ocr_md5 else None,
+        )
         for page in listed.pages
     ]
 
@@ -123,7 +133,9 @@ class BlobTrainingPages:
         if MANIFEST_BLOB_NAME in found:
             del found[MANIFEST_BLOB_NAME]
             listed = listed_of(self._read(MANIFEST_BLOB_NAME))
-        named = {page.file for page in listed}
+        named = {page.file for page in listed} | {
+            ocr_file_of(page) for page in listed if page.ocr_md5
+        }
         return listed, [
             StoredBlob(
                 name=name,

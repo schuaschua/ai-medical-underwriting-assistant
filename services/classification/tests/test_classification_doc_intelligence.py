@@ -551,7 +551,12 @@ def test_story_4_2_the_job_trains_the_classifier_once_and_refuses_pages_it_may_n
         "classification.adapters.classifier.azure_credential",
         lambda settings: FakeCredential(),
     )
-    container = FakeTrainingPages(prepared(5), held(prepared(5)))
+    # One page has its layout result beside it, vouched for by the list.
+    one, *rest = prepared(5)
+    with_layout = [ListedPage(one.file, one.page_type, one.md5, MD5), *rest]
+    container = FakeTrainingPages(
+        with_layout, [*held(with_layout), StoredBlob(f"{one.file}.ocr.json", MD5)]
+    )
     monkeypatch.setattr(train, "build_blob_service", lambda settings: None)
     monkeypatch.setattr(train, "BlobTrainingPages", lambda service, name: container)
     settings = azure_settings().model_copy(update={"training_poll_seconds": 0.001})
@@ -631,6 +636,18 @@ def test_story_4_2_the_job_trains_the_classifier_once_and_refuses_pages_it_may_n
             good,
             [other_content, *held(good)[1:]],
             f"reason=page_content_differs subject={first.file}",
+        ),
+        # A layout result is held to the same as its page: one the list
+        # does not vouch for, and one with other content.
+        (
+            good,
+            [*held(good), StoredBlob(f"{first.file}.ocr.json", None)],
+            f"reason=page_without_label subject={first.file}.ocr.json",
+        ),
+        (
+            [ListedPage(first.file, first.page_type, first.md5, MD5), *good[1:]],
+            [*held(good), StoredBlob(f"{first.file}.ocr.json", "f" * 32)],
+            f"reason=page_content_differs subject={first.file}.ocr.json",
         ),
         # A page outside its type's folder.
         (

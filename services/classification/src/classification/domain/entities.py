@@ -62,6 +62,9 @@ class ListedPage:
     page_type: str
     # The hex MD5 of the redacted file as the preparing tool wrote it.
     md5: str
+    # The hex MD5 of the page's layout result (`<file>.ocr.json`), which the
+    # real service needs beside every page; None where none was made.
+    ocr_md5: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

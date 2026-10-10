@@ -70,6 +70,8 @@ SOURCE_FOLDER = "classifier-training"
 # The generator's list of the unredacted pages, and the list this tool writes.
 SOURCE_LIST = "pages.json"
 MANIFEST_FILE = "redacted-pages.json"
+# A page's layout result: the page's own name and this.
+OCR_SUFFIX = ".ocr.json"
 # A page's place: its page type's folder, and a plain file name.
 _FILE = re.compile(r"^(?P<folder>[a-z_]+)/[A-Za-z0-9][A-Za-z0-9._-]*\.pdf$")
 _PDF_MAGIC = b"%PDF-"
@@ -107,6 +109,9 @@ class PreparedPage(BaseModel):
     # keeps of a blob too. It guards against a wrong file in the right
     # place (the unredacted source has the same name), not against an attacker.
     md5: str
+    # The hex MD5 of the page's layout result, once `bakeoff.training_layout`
+    # has written it beside the page.
+    ocr_md5: str | None = None
 
 
 class Manifest(BaseModel):
@@ -359,6 +364,9 @@ async def run(
         for left in output_dir.rglob("*.pdf"):
             if left.is_file() and left.resolve() not in named:
                 left.unlink()
+        # A layout result belongs to the page of an earlier run: none is kept.
+        for left in output_dir.rglob(f"*{OCR_SUFFIX}"):
+            left.unlink()
         write_text_whole(
             manifest,
             json.dumps(

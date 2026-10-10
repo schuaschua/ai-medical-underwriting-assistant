@@ -947,6 +947,31 @@ ls .work/classifier-training                                           # six fol
 
 A page whose case fails stops the command, naming the page; start it again with `--eval-run-id <the id it logged>`: no page is uploaded twice, but for the one whose case failed, which is uploaded again as a new case (a failed case stays failed). The command removes PDFs an earlier run left in the folder. Look at a few of the written PDFs before going on: names, addresses and numbers must be masked. **Never upload `data/classifier-training/` itself: those pages are unredacted, and they have the same file names as the prepared ones.** The job refuses them (the list names the MD5 of every redacted file, and no list vouches for the unredacted ones), but they would still be in the container.
 
+**Step 1b. Make the layout result of every page.** Added on 2026-10-10, after the first build in Azure failed with `classifier_build_failed_InvalidRequest` (the service's detail: `TrainingContentMissing`, no training data found in the folders). Document Intelligence trains only on a folder that holds, beside every page, the result of its layout model for it (`<page>.pdf.ocr.json`). The job cannot write the container, so you make the files here (owner's decision of 2026-10-10): the tool sends each redacted page the list names to the layout model, writes the answer beside the page and adds its MD5 to the list (`ocr_md5`). You hold a data role on the Document Intelligence account for this step only.
+
+```bash
+set -uo pipefail
+ME="$(az ad signed-in-user show --query id -o tsv)"
+DI="$(az cognitiveservices account show -g rg-aiuw-demo-wus3 -n di-aiuw-demo-wus3 --query id -o tsv)"
+ENDPOINT="$(az cognitiveservices account show -g rg-aiuw-demo-wus3 -n di-aiuw-demo-wus3 --query properties.endpoint -o tsv)"
+remove_role() { az role assignment delete --assignee "$ME" --role "Cognitive Services User" --scope "$DI" || true; }
+trap remove_role EXIT
+az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
+  --role "Cognitive Services User" --scope "$DI" --output none
+# A new role assignment takes a minute or two to be honoured.
+for attempt in $(seq 1 30); do
+  TOKEN="$(az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "${ENDPOINT}documentintelligence/documentClassifiers?api-version=2024-11-30")"
+  [ "$code" = 200 ] && break
+  sleep 10
+done
+EVALS_DOC_INTELLIGENCE_TOKEN="$TOKEN" uv run python -m bakeoff.training_layout --endpoint "$ENDPOINT"
+remove_role; trap - EXIT
+az role assignment list --assignee "$ME" --scope "$DI" -o table   # no Cognitive Services User of yours
+```
+
+It ends with `layout results written: 45`. A page that fails stops it (`Stopped at <page>: <code>`) and leaves the list as it was; start it again. Running step 1 again removes every layout result, so this step follows it every time.
+
 **Step 2. Upload the folder.** The `foundation` stack owns the container. As for the manual (section 7, step 5), the upload signs in with your own Azure sign-in, and you hold a data role on the container for the upload only.
 
 ```bash
@@ -989,7 +1014,7 @@ remove_upload_role; trap - EXIT
 az role assignment list --assignee "$ME" --scope "$TRAINING_SCOPE" -o table   # no Storage Blob Data Contributor of yours
 ```
 
-The container must hold these 46 files (45 pages and the list) and nothing else, each with the content the list names: anything the list does not name, a listed page that is missing, or a page with other content stops the job.
+The container must hold these 91 files (45 pages, their 45 layout results and the list) and nothing else, each with the content the list names: anything the list does not name, a listed page or layout result that is missing, or one with other content stops the job.
 
 **Step 3. Start the training job and read its result.** The job is the Container Apps job `caj-aiuw-demo-wus3-train` (`terraform -chdir=infra/demo/app output -raw classification_train_job_name`). It never starts by itself, and no deploy starts it.
 
