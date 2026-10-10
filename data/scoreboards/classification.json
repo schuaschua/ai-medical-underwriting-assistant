@@ -1,0 +1,54 @@
+{
+  "run": {
+    "eval_run_id": "01a1254b-ab1a-7c7b-83ac-0da091ad5c0e",
+    "started_at": "2026-10-10T10:11:18.427343Z",
+    "finished_at": "2026-10-10T10:43:53.870522Z",
+    "web_address": "https://ca-aiuw-demo-wus3-web.whiteflower-7e9a6f55.westus3.azurecontainerapps.io",
+    "stand_ins": false
+  },
+  "contenders": [
+    {
+      "contender": "llm",
+      "measured": true,
+      "pages": 94,
+      "accuracy": 1.0,
+      "right_pages": 94,
+      "calibration": 1.0,
+      "confident_pages": 92,
+      "confident_right_pages": 92,
+      "queue_rate": 0.0213,
+      "queued_pages": 2,
+      "pages_not_classified": 0,
+      "cost_per_page": {
+        "amount": "15.50",
+        "unit": "USD per 1,000 pages",
+        "source": "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=contains(meterName, '5.4') and serviceName eq 'Foundry Models'] meters '5.4 inp Gl 1M Tokens' 2.50 and '5.4 opt Gl 1M Tokens' 15.00 per million tokens. The tokens per page are an estimate. The arithmetic and the assumptions are in evals/static-metrics.yaml."
+      }
+    },
+    {
+      "contender": "doc-intelligence",
+      "measured": true,
+      "pages": 94,
+      "accuracy": 0.9574,
+      "right_pages": 90,
+      "calibration": 1.0,
+      "confident_pages": 8,
+      "confident_right_pages": 8,
+      "queue_rate": 0.9149,
+      "queued_pages": 86,
+      "pages_not_classified": 0,
+      "cost_per_page": {
+        "amount": "3.00",
+        "unit": "USD per 1,000 pages",
+        "source": "Azure Retail Prices API (https://prices.azure.com/api/retail/prices), read 2026-10-08, USD, westus3: [$filter=armRegionName eq 'westus3' and (contains(productName, 'Document Intelligence') or contains(productName, 'Form Recognizer'))] meter 'S0 pages for doc classifier' 3.00 per 1,000 pages. Training is not in it."
+      }
+    }
+  ],
+  "winner": "llm",
+  "not_run": [],
+  "unscored_cases": [],
+  "unclassified_pages": [],
+  "reasons_checked": 188,
+  "reason_leaks": [],
+  "reasons_not_checked": []
+}
