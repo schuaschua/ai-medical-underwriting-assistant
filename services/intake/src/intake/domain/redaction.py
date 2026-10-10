@@ -59,6 +59,8 @@ _CATEGORY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,63}")
 # A mask's label (`PER`) and an entity's number: short names, never found values.
 _MASK_LABEL = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}")
 _ENTITY_ID = re.compile(r"[0-9]{1,9}")
+# How often the removal of the service's own result file is tried.
+RESULT_REMOVAL_ATTEMPTS = 3
 _ENTITIES = "entities"
 _CATEGORY = "category"
 _TYPE = "type"
@@ -156,6 +158,28 @@ def mask_names(result_file: bytes) -> MaskNames:
         },
         labels=frozenset(by_label),
     )
+
+
+def kept_result(result_file: bytes) -> bytes:
+    """The result file as `intake` keeps it: names and counts, never a found value.
+
+    The service's own file holds the text of everything it found
+    (`entities[].text`), which may not outlive the original. Of each entity
+    only what `intake` uses is kept: its category, the number its masks
+    carry and the label they show. Every other field is left behind.
+    """
+    entities: list[dict[str, str]] = []
+    for entity in _entities(result_file):
+        kept = {_TYPE: _category_of(entity)}
+        for key, shape in ((_ENTITY_ID_KEY, _ENTITY_ID), (_MASK, _MASK_LABEL)):
+            value = entity.get(key) if isinstance(entity, dict) else None
+            # Not of the expected shape: not copied, in case it is a found value.
+            if isinstance(value, str) and shape.fullmatch(value) is not None:
+                kept[key] = value
+        entities.append(kept)
+    return json.dumps(
+        {_ENTITIES: entities, "redaction_counts": count_categories(result_file)}
+    ).encode()
 
 
 def _category_of(entity: object) -> str:
@@ -341,24 +365,43 @@ async def _redact_and_split(
     ]
 
     # The files of record get names of our own under `<case_id>/`, wherever
-    # in the container the service put them.
+    # in the container the service put them. Of the result file only names
+    # and counts are kept: the service's own holds every found value.
     redacted_name = redacted_blob_name(case_id, document.document_id)
     kept = {
         redacted_name: (pdf, PDF),
-        result_blob_name(case_id, document.document_id): (result_file, JSON),
+        result_blob_name(case_id, document.document_id): (
+            kept_result(result_file),
+            JSON,
+        ),
     }
     for name, (content, content_type) in kept.items():
         await ports.files.put(name, content, content_type)
-    for name in {output.redacted_blob_name, output.result_blob_name} - kept.keys():
+    if output.result_blob_name not in kept:
+        await _remove_found_values(run, output.result_blob_name, ports.files)
+    if output.redacted_blob_name not in kept:
         try:
-            await ports.files.delete(name)
-        except Exception as error:  # noqa: BLE001 - a second copy under the case's prefix; the redaction is good
+            await ports.files.delete(output.redacted_blob_name)
+        except Exception as error:  # noqa: BLE001 - a second copy of the redacted PDF under the case's prefix; the redaction is good
             logger.warning(
                 "redaction output not removed: case_id=%s document_id=%s type=%s",
                 case_id,
                 document.document_id,
                 type(error).__qualname__,
             )
+    matched = sum(reading.masks for reading in readings)
+    if counts and not matched:
+        # The result file names what was masked, and no mask was told from
+        # any page: the page text then holds no token for any of it.
+        logger.warning(
+            "redaction masks not matched: case_id=%s items=%d labels=%d "
+            "layer_words=%d pages=%d",
+            case_id,
+            sum(counts.values()),
+            len(names.labels),
+            sum(len(sheet.layer_words) for sheet in sheets),
+            len(sheets),
+        )
 
     pages: list[NewPage] = []
     for number, (sheet, reading) in enumerate(
@@ -406,7 +449,8 @@ async def _redact_and_split(
             logger.warning("redaction unusual: case_id=%s code=%s", case_id, code)
     logger.info(
         "document redacted: case_id=%s document_id=%s pages=%d items=%d "
-        "categories=%d words=%d masks=%d masks_unread=%d duration_ms=%d",
+        "categories=%d words=%d masks=%d masks_unread=%d words_unsure=%d "
+        "duration_ms=%d",
         case_id,
         document.document_id,
         len(pages),
@@ -415,6 +459,7 @@ async def _redact_and_split(
         sum(len(reading.words) for reading in readings),
         sum(reading.masks for reading in readings),
         sum(reading.masks_unread for reading in readings),
+        sum(page.words_unsure for page in read),
         int((time.monotonic() - run.started) * 1000),
     )
     return stored
@@ -472,6 +517,27 @@ async def _fail(
         int((time.monotonic() - run.started) * 1000),
     )
     return stored
+
+
+async def _remove_found_values(run: _Run, blob_name: str, files: CaseFiles) -> None:
+    """Remove the service's own result file, which holds what it found.
+
+    Tried a few times. If it cannot be removed the redaction fails, by the
+    path that removes everything under the case's prefix: no document is
+    offered while that file exists.
+    """
+    for attempt in range(1, RESULT_REMOVAL_ATTEMPTS + 1):
+        try:
+            await files.delete(blob_name)
+            return
+        except Exception as error:  # noqa: BLE001 - whatever kept it, it is tried again and then fails the redaction
+            logger.warning(
+                "redaction result not removed: case_id=%s attempt=%d type=%s",
+                run.case_id,
+                attempt,
+                type(error).__qualname__,
+            )
+    raise RedactionJobError("result_not_removed")
 
 
 async def _remove_files(run: _Run, files: CaseFiles) -> None:

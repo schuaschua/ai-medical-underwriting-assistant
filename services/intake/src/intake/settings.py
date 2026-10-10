@@ -177,6 +177,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _ai_services_are_reached_safely(self) -> Self:
+        if self.language_endpoint is not None and self.read_endpoint is None:
+            # A redacted PDF has no text but its masks' labels: without the
+            # read model no page would have its text.
+            raise ValueError(
+                "Set INTAKE_READ_ENDPOINT with INTAKE_LANGUAGE_ENDPOINT: the "
+                "Document Intelligence account, or the local stand-in, reads "
+                "the page text from each redacted PDF"
+            )
         for name, address, entra_auth in (
             ("LANGUAGE", self.language_endpoint, self.language_entra_auth),
             ("READ", self.read_endpoint, self.read_entra_auth),

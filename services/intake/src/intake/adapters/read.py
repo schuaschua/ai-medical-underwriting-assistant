@@ -46,6 +46,9 @@ _ENDED = frozenset({_SUCCEEDED, "failed", "canceled", "cancelled"})
 MAX_RETRY_AFTER_SECONDS = 30.0
 # This many looks at an analysis in a row without an answer end the reading.
 MAX_FAILED_POLLS = 5
+# A word the read model was less sure of than this is counted as unsure: a
+# misread digit then leaves a trace in the log, as a number.
+LOW_CONFIDENCE = 0.8
 _NOT_IN_A_CODE = re.compile(r"[^A-Za-z0-9_]")
 _CODE_MAX_CHARS = 64
 
@@ -289,20 +292,27 @@ def pages_of(result: dict[str, Any]) -> list[ReadPage]:
     """
     try:
         return [_page(page) for page in result["pages"]]
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+        # Also an entry that is no object, and a size that is no number.
         raise RedactionJobError("read_result_malformed") from None
 
 
 def _page(page: dict[str, Any]) -> ReadPage:
+    # Every span of each line: a line may hold more than one stretch of the content.
     spans = [
-        (int(span["offset"]), int(span["offset"]) + int(span["length"]))
+        [
+            (int(span["offset"]), int(span["offset"]) + int(span["length"]))
+            for span in line["spans"]
+        ]
         for line in page.get("lines", [])
-        for span in line["spans"][:1]
     ]
     lines: list[list[ReadWord]] = [[] for _ in spans]
     # Words no line holds, in the order given: kept, as one line at the end.
     loose: list[ReadWord] = []
+    unsure = 0
     for word in page.get("words", []):
+        confidence = word.get("confidence")
+        unsure += isinstance(confidence, int | float) and confidence < LOW_CONFIDENCE
         at = int(word["span"]["offset"])
         polygon = [float(value) for value in word["polygon"]]
         if len(polygon) < 8 or not all(math.isfinite(value) for value in polygon):
@@ -315,17 +325,25 @@ def _page(page: dict[str, Any]) -> ReadPage:
             y1=max(polygon[1::2]),
         )
         holder = next(
-            (number for number, (start, end) in enumerate(spans) if start <= at < end),
+            (
+                number
+                for number, stretches in enumerate(spans)
+                if any(start <= at < end for start, end in stretches)
+            ),
             None,
         )
         (lines[holder] if holder is not None else loose).append(read)
     angle = float(page.get("angle") or 0.0)
+    width, height = float(page["width"]), float(page["height"])
+    if not (math.isfinite(width) and math.isfinite(height)):
+        raise ValueError("a page's size is not a number")
     return ReadPage(
         page_number=int(page["pageNumber"]),
         angle=angle if math.isfinite(angle) else 0.0,
-        width=float(page["width"]),
-        height=float(page["height"]),
+        width=width,
+        height=height,
         lines=tuple(tuple(line) for line in (*lines, loose) if line),
+        words_unsure=unsure,
     )
 
 

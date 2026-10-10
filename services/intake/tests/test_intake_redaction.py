@@ -7,6 +7,7 @@ what the read model read from it (owner's decision of 2026-10-10).
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -127,6 +128,20 @@ def test_story_1_7_redaction_stores_the_redacted_pdf_and_the_pages_and_answers_w
     assert case_files.content_types[f"{case_id}/{document_id}.redacted.pdf"] == (
         "application/pdf"
     )
+    # The result file is kept as names and counts. The service's own, which
+    # holds each found value, is in no blob left in `cases`.
+    assert json.loads(
+        case_files.blobs[f"{case_id}/{document_id}.redaction-result.json"]
+    ) == {
+        "entities": [
+            {"type": "Person", "entityId": "1", "mask": "PER"},
+            {"type": "Person", "entityId": "2", "mask": "PER"},
+            {"type": "PhoneNumber", "entityId": "3", "mask": "PHN"},
+        ],
+        "redaction_counts": {"Person": 2, "PhoneNumber": 1},
+    }
+    for content in case_files.blobs.values():
+        assert b"secret-found-value" not in content
 
 
 def test_story_1_7_only_the_redaction_call_is_told_where_the_original_is(
@@ -168,6 +183,7 @@ def test_story_1_7_a_repeat_after_the_end_answers_the_stored_result_and_does_no_
     reader: FakeReader,
     redactions: MemoryRedactionRepository,
     case_files: MemoryCaseFiles,
+    fixed_now: datetime,
 ) -> None:
     case_id, _ = upload(client, case_pdf)
     first = client.post(f"/cases/{case_id}/redaction", json={})
@@ -183,6 +199,16 @@ def test_story_1_7_a_repeat_after_the_end_answers_the_stored_result_and_does_no_
     assert len(reader.given) == 1
     assert redactions.pages == pages_before
     assert case_files.blobs == blobs_before
+
+    # A repeat while the key row is still running is 409 `in_progress`: no
+    # job is started and no page made for it.
+    running_case, running_document = upload(client, case_pdf)
+    asyncio.run(redactions.begin(running_case, running_document, fixed_now))
+    refused = client.post(f"/cases/{running_case}/redaction", json={})
+    assert refused.status_code == 409
+    assert error_code(refused.json()) == "in_progress"
+    assert len(language.started) == 1
+    assert redactions.pages == pages_before
 
 
 # --- Reads -------------------------------------------------------------------------
@@ -475,7 +501,7 @@ def test_story_1_7_logs_carry_ids_codes_counts_and_timings_only(
 
     assert (
         f"document redacted: case_id={case_id} document_id={document_id} pages=2 "
-        "items=3 categories=2 words=5 masks=1 masks_unread=0 duration_ms="
+        "items=3 categories=2 words=5 masks=1 masks_unread=0 words_unsure=0 duration_ms="
     ) in caplog.text
     for secret in SECRETS:
         assert secret not in caplog.text

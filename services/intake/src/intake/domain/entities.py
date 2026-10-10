@@ -154,6 +154,8 @@ class ReadPage:
     height: float
     # In reading order, whatever the angle; each line's words in reading order.
     lines: tuple[tuple[ReadWord, ...], ...]
+    # How many of its words the read model was not sure of.
+    words_unsure: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -415,34 +415,38 @@ def redact_pdf(
     pdf: bytes,
     categories: Collection[str],
     known: Sequence[tuple[str, str]] | None = None,
-) -> tuple[bytes, list[tuple[str, str, str]]]:
+) -> tuple[bytes, list[tuple[str, str, str, str]]]:
     """Mask a PDF as the service does; return it with each entity found.
 
     The redacted file has a picture per page and no text but the masks'
-    labels. An entity is its category, its mask's label and its number.
+    labels. An entity is its category, its mask's label, its number and the text
+    that was found.
     """
     if known is None:
         known = planted_values()
     entities: dict[tuple[str, str], str] = {}
-    labels: dict[str, tuple[str, str, str]] = {}
     with (
         pymupdf.open(stream=pdf, filetype="pdf") as document,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
         pymupdf.open() as redacted,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
     ):
         for page in document:
             drawn = _mask_page(page, categories, known, entities)
-            for mask in drawn:
-                labels[mask.number] = (mask.category, mask.label, mask.number)
             _as_picture(redacted, page, drawn)
         redacted.set_metadata(document.metadata)
-        return bytes(redacted.tobytes(garbage=4, deflate=True)), list(labels.values())
+        return bytes(redacted.tobytes(garbage=4, deflate=True)), [
+            (category, MASK_LABEL_OF.get(category, category[:3].upper()), number, value)
+            for (category, value), number in entities.items()
+        ]
 
 
-def result_file(document_id: str, entities: Sequence[tuple[str, str, str]]) -> bytes:
+def result_file(
+    document_id: str, entities: Sequence[tuple[str, str, str, str]]
+) -> bytes:
     """The job's result file, in the service's shape: one entry per entity found.
 
-    Its category (`type`), its mask's label and its number. The real file
-    also holds each entity's found text; the stand-in leaves that out.
+    Its category (`type`), its mask's label, its number and, as in the real
+    file, the text that was found (`text`): whoever keeps this file as it is
+    keeps every identifier of the document.
     """
     return json.dumps(
         {
@@ -453,10 +457,12 @@ def result_file(document_id: str, entities: Sequence[tuple[str, str, str]]) -> b
                     "type": category,
                     "entityId": number,
                     "mask": label,
+                    "text": value,
+                    "length": len(value),
                     "confidenceScore": 1.0,
                     "tags": [{"name": category, "confidenceScore": 1.0}],
                 }
-                for category, label, number in entities
+                for category, label, number, value in entities
             ],
             "warnings": [],
         }

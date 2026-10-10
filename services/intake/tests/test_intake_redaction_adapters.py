@@ -208,11 +208,18 @@ def test_story_1_7_language_is_called_with_the_service_identity_and_no_key() -> 
         # No key header, on any call.
         assert "ocp-apim-subscription-key" not in request.headers
     # In Azure the token source is built; for the stand-in there is none.
-    in_azure = Settings(language_endpoint=ENDPOINT, language_entra_auth=True)
-    assert isinstance(language_token_for(in_azure), EntraToken)
-    assert (
-        language_token_for(Settings(language_endpoint="http://127.0.0.1:5100")) is None
+    in_azure = Settings(
+        language_endpoint=ENDPOINT,
+        language_entra_auth=True,
+        read_endpoint=READ_ENDPOINT,
+        read_entra_auth=True,
     )
+    assert isinstance(language_token_for(in_azure), EntraToken)
+    on_this_machine = Settings(
+        language_endpoint="http://127.0.0.1:5100",
+        read_endpoint="http://127.0.0.1:5102",
+    )
+    assert language_token_for(on_this_machine) is None
 
 
 def test_story_1_7_the_job_is_looked_at_until_it_ends_and_its_files_are_named() -> None:
@@ -481,6 +488,17 @@ def test_story_1_7_the_redacted_pdf_is_sent_to_the_read_model_with_the_identity_
             "read_result_malformed",
             2,
         ),
+        (
+            [
+                accepted,
+                httpx.Response(
+                    200,
+                    json={"status": "succeeded", "analyzeResult": {"pages": ["x"]}},
+                ),
+            ],
+            "read_result_malformed",
+            2,
+        ),
         ([httpx.Response(401)], "read_submit_status_401", 1),
         # Sent again twice, as the setting says, and no more.
         ([httpx.Response(503)], "read_submit_status_503", 3),
@@ -506,6 +524,8 @@ def test_story_1_7_the_redacted_pdf_is_sent_to_the_read_model_with_the_identity_
         {"read_endpoint": "http://di.example.com"},
         {"read_endpoint": "http://127.0.0.1:5102", "read_entra_auth": True},
         {"read_endpoint": READ_ENDPOINT, "read_entra_auth": True, "read_model": "a/b"},
+        # Redaction without the reading would store pages with no text.
+        {"language_endpoint": "http://127.0.0.1:5100"},
     ):
         with pytest.raises(ValidationError):
             Settings(**refused)
@@ -539,12 +559,14 @@ def test_story_1_7_the_real_read_answer_becomes_page_text_with_mask_tokens_and_b
     # The read model gave the masks as `PER` and `1`, `ADR2`, `EML4` and `4`,
     # `PHN5`, `PHHealth` (a mask drawn over the heading's number), `DrPER®`
     # and `PHN1` with `.7`. Each is one token of the contracts' shape, named
-    # by the result file; the text beside a mask is kept.
+    # by the result file; the text beside a mask is kept. A word that goes
+    # on in letters after a label's start (`PHHealth`) is a word of the
+    # page: it is kept whole beside the token, never cut.
     assert page.text == (
         "1. Applicant\nFull name\n[Person]\nDate of birth\n1974-03-18\n"
         "Home address\n[Address]\nEmail\n[Email]\n"
         "National identity number\n000-12-3456\nPolicy number\n[PhoneNumber]\n"
-        "[PhoneNumber] Health declaration\nCondition\n"
+        "[PhoneNumber] PHHealth declaration\nCondition\n"
         "Type 2 diabetes mellitus, diagnosed 2019-05-06\n"
         "3. Attending physician\nPhysician\nDr [Person] Exampleby\nPractice\n"
         "Practice telephone\nExampleton Family Practice\n[PhoneNumber]"

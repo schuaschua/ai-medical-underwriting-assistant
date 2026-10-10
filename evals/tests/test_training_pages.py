@@ -207,7 +207,11 @@ def test_story_4_2_the_training_set_is_redacted_by_the_pipeline_a_classifier_is_
     for page in listed:
         with pymupdf.open(out / page["file"]) as redacted:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
             assert redacted.page_count == 1
-            text = " ".join(str(redacted[0].get_text()).split())
+        # The redacted file is a picture with no text but its masks' labels:
+        # what is checked is the page text `intake` stored for it, which is
+        # what was read from that picture.
+        (stored,) = intake.pages(page["case_id"]).pages
+        text = " ".join(intake.page_text(stored.page_id).split())
         with pymupdf.open(TRAINING_SET / page["file"]) as original:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
             planted = [
                 value
@@ -215,6 +219,8 @@ def test_story_4_2_the_training_set_is_redacted_by_the_pipeline_a_classifier_is_
                 if value in " ".join(str(original[0].get_text()).split())
             ]
         assert not [value for value in planted if value in text], page["file"]
+        # A page that had a person on it was read: its text is not empty.
+        assert text or not planted, page["file"]
         masked += bool(planted)
     assert masked >= 30
     # The pages were cases of an eval run: none is in the underwriter's list.

@@ -245,9 +245,20 @@ def test_story_1_7_a_synthetic_case_is_redacted_and_no_planted_identifier_is_in_
         *(f"{case_id}/pages/{page_id}.png" for page_id in result.page_ids),
     }
     assert blobs[f"{case_id}/{document_id}.redacted.pdf"] == file.content
-    listed = blobs[f"{case_id}/{document_id}.redaction-result.json"].decode()
-    for value in planted(case.case_id):
-        assert value not in listed
+    # The service's own result file holds every value it found, in clear:
+    # the stand-in's does too. No blob left in `cases` holds a planted
+    # value, and the result file kept is names and counts only.
+    for name, content in blobs.items():
+        for value in planted(case.case_id):
+            assert value.encode() not in content, (name, value)
+    listed = json.loads(blobs[f"{case_id}/{document_id}.redaction-result.json"])
+    assert listed["redaction_counts"] == result.redaction_counts
+    assert listed["entities"]
+    assert {key for entity in listed["entities"] for key in entity} == {
+        "type",
+        "entityId",
+        "mask",
+    }
     # The original is where it was, unchanged; the job was told its address.
     (original_name,) = originals.list_blob_names()
     assert originals.download_blob(original_name).readall() == original

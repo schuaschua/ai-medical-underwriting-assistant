@@ -19,6 +19,7 @@ shape of the contracts' `MASK_TOKEN_PATTERN`, with one box: the mask's own.
 
 import math
 import re
+import unicodedata
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
@@ -46,6 +47,10 @@ _PAST = 1.5
 # The read may have lost the end of a label under what the mask was drawn
 # over; this many of its first letters still tell it.
 _LABEL_START = 2
+# How far the read page's width against its height may be from the stored page's.
+_SHAPE_TOLERANCE = 0.05
+# What the read gives for a mask's small raised number when it is not a digit.
+_NUMBER_MARKS = "®©º°ª"
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +180,20 @@ def _reading_axis(angle: float) -> tuple[bool, bool]:
     return horizontal, (across if horizontal else down) >= 0
 
 
+def _is_letter(character: str) -> bool:
+    # Upper and lower case letters only: `º`, which the read gives for a
+    # raised number, is a letter of another kind.
+    return unicodedata.category(character) in ("Lu", "Ll")
+
+
+def _past_number(text: str) -> str:
+    """What follows a mask's number: the text after the digits or raised-number marks at its start."""
+    at = 0
+    while at < len(text) and (text[at].isdigit() or text[at] in _NUMBER_MARKS):
+        at += 1
+    return text[at:]
+
+
 def _pieces(
     content: str,
     box: _Box,
@@ -182,47 +201,75 @@ def _pieces(
     names: MaskNames,
     axis: tuple[bool, bool],
 ) -> list[tuple[str, _Box]]:
-    """One read word as what is stored for it: itself, a mask's token, or both.
+    """One read word as what is stored for it: itself, masks' tokens, or both.
 
     A word that lies on a mask is the read's version of the mask's label
     and number, and is replaced by the mask's token. Where the read joined
-    the label to the text beside it (`DrPER®` for `Dr` and a mask), the text
-    that runs past the mask is kept as a word of its own.
+    the label to other text (`DrPER®` for `Dr` and a mask, `PER1:120/80`),
+    that text is kept as a word of its own. A real word that merely holds
+    the label's letters and lies on a mask (`PERIOD`) is kept whole beside
+    the token: it is cut only when nothing but digits or symbols follows
+    the label.
     """
-    mask = max(masks, key=lambda place: place.box.shared(box), default=None)
-    if mask is None or box.area <= 0:
+    horizontal, forward = axis
+
+    def place(spot: _Box) -> float:
+        start, end = spot.along(horizontal)
+        return (start + end) / 2 if forward else -(start + end) / 2
+
+    touched = sorted(
+        (
+            mask
+            for mask in masks
+            if box.area > 0 and mask.box.shared(box) / box.area >= _ON_A_MASK
+        ),
+        key=lambda mask: place(mask.box),
+    )
+    if not touched:
         return [(content, box)]
+    if len(touched) > 1:
+        # The read joined several masks into one word: each has its token,
+        # and what the word holds besides their labels and numbers is kept.
+        rest = content
+        for mask in touched:
+            before, label, after = rest.partition(mask.label)
+            rest = f"{before} {_past_number(after)}" if label else rest
+        tokens = [
+            (_token(mask, names), mask.box) for mask in touched if not mask.written
+        ]
+        for mask in touched:
+            mask.written = True
+        kept = "".join(part for part in rest.split() if any(map(str.isalnum, part)))
+        return [*tokens, *([(kept, box)] if kept else [])]
+    (mask,) = touched
     share = mask.box.shared(box) / box.area
-    if share < _ON_A_MASK:
-        return [(content, box)]
     around = _around_label(content, mask.label)
     if around is None and share < _ALL_MASK:
         return [(content, box)]
-    pieces: list[tuple[str, _Box]] = []
     token = [] if mask.written else [(_token(mask, names), mask.box)]
     mask.written = True
     if around is None:
         return token
-    horizontal, forward = axis
+    before, after = around
+    after = _past_number(after)
+    if any(map(_is_letter, after)):
+        # A word of the page, not the read's version of the mask.
+        whole = [(content, box)]
+        return [*token, *whole] if place(mask.box) <= place(box) else [*whole, *token]
     start, end = box.along(horizontal)
     mask_start, mask_end = mask.box.along(horizontal)
-    before, after = around
-    # What follows the label up to the first letter is its number, as read.
-    after = after[
-        next(
-            (at for at, character in enumerate(after) if character.isalpha()),
-            len(after),
-        ) :
-    ]
     # Each side of the mask: where the word's part there begins and ends, and
     # how far the word runs past the mask on that side.
     low = (start, min(mask_start, end), mask_start - start)
     high = (max(mask_end, start), end, end - mask_end)
     first, last = (low, high) if forward else (high, low)
+    pieces: list[tuple[str, _Box]] = []
     if before and first[2] >= _PAST:
         pieces.append((before, box.cut(horizontal, first[0], first[1])))
     pieces.extend(token)
-    if after and last[2] >= _PAST:
+    # Digits after a separator are a value of the page (`:120/80`), kept
+    # wherever the read put them; a stray mark is kept only past the mask.
+    if after and (last[2] >= _PAST or any(map(str.isalnum, after))):
         pieces.append((after, box.cut(horizontal, last[0], last[1])))
     return pieces
 
@@ -239,6 +286,11 @@ def page_reading(read: ReadPage, sheet: PageSheet, names: MaskNames) -> PageRead
     """
     if read.width <= 0 or read.height <= 0 or sheet.width <= 0 or sheet.height <= 0:
         raise RedactionJobError("read_page_size")
+    shape, stored = read.width / read.height, sheet.width / sheet.height
+    if abs(shape - stored) > _SHAPE_TOLERANCE * stored:
+        # The read saw a page of another shape than the stored one (turned,
+        # say): its places cannot be put on the stored page by scaling.
+        raise RedactionJobError("read_page_shape")
     across, down = sheet.width / read.width, sheet.height / read.height
     masks = mask_places(sheet.layer_words, names.labels)
     axis = _reading_axis(read.angle)

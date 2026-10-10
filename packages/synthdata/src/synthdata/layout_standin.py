@@ -73,6 +73,8 @@ LAYOUT_MODEL = "prebuilt-layout"
 READ_MODEL = "prebuilt-read"
 _MODELS = frozenset({LAYOUT_MODEL, READ_MODEL})
 PDF_CONTENT = "application/pdf"
+# How many of the PDFs sent to the read model are kept to look at.
+READ_KEPT = 8
 API_VERSION = "2024-11-30"
 DEFAULT_PORT = 5102
 
@@ -504,8 +506,8 @@ class LayoutStandIn:
     # at a result there were.
     submits: int = 0
     looks: int = 0
-    # Every PDF the read model was sent, for tests: it is only ever to be a
-    # redacted one.
+    # The last few PDFs the read model was sent, for tests: each is only ever
+    # to be a redacted one.
     read: list[bytes] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -527,6 +529,8 @@ class LayoutStandIn:
         with self._lock:
             if model == READ_MODEL:
                 self.read.append(pdf)
+                # The same stand-in runs for as long as tools/dev.sh does.
+                del self.read[:-READ_KEPT]
             self.analyses[analysis.result_id] = analysis
         return analysis
 

@@ -104,12 +104,17 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Migrations never run here (azure.md rule 22): the pipeline runs them.
         yield
-        if redaction_service is not None:
-            await redaction_service.aclose()
-        if reader is not None:
-            await reader.aclose()
-        if database is not None:
-            await database.dispose()
+        # Each is closed whatever the one before it did.
+        try:
+            if redaction_service is not None:
+                await redaction_service.aclose()
+        finally:
+            try:
+                if reader is not None:
+                    await reader.aclose()
+            finally:
+                if database is not None:
+                    await database.dispose()
 
     app = FastAPI(
         title=APP_ID, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan
