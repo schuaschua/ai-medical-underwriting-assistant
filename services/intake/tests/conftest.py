@@ -15,6 +15,7 @@ from azure.storage.blob import BlobServiceClient, ContainerClient
 from fastapi.testclient import TestClient
 from intake_fakes import (
     FakeLanguage,
+    FakeOriginalPages,
     FakeReader,
     FakeSplitter,
     MemoryCaseFiles,
@@ -95,6 +96,11 @@ def reader() -> FakeReader:
 
 
 @pytest.fixture
+def original_pages(store: MemoryOriginalStore) -> FakeOriginalPages:
+    return FakeOriginalPages(store)
+
+
+@pytest.fixture
 def redactions(repository: MemoryCaseRepository) -> MemoryRedactionRepository:
     return MemoryRedactionRepository(repository)
 
@@ -106,6 +112,7 @@ def ports(
     case_files: MemoryCaseFiles,
     splitter: FakeSplitter,
     reader: FakeReader,
+    original_pages: FakeOriginalPages,
 ) -> RedactionPorts:
     return RedactionPorts(
         repository=redactions,
@@ -113,6 +120,7 @@ def ports(
         files=case_files,
         splitter=splitter,
         reader=reader,
+        originals=original_pages,
     )
 
 

@@ -22,6 +22,16 @@ same names) trains anything.
 
 The tool talks to `web` only and is in no image. A page whose case fails
 stops it, naming the page; nothing is listed until every page is prepared.
+
+One kind of page is skipped instead (owner's decision of 2026-10-10): a page
+without any text layer whose case failed at redaction. `intake` passes a
+blank page on, and fails a page whose text is only in its picture
+(handwriting, a scan), because nobody checked that text for identifiers.
+Such a page cannot be a training page; it is left out of the list, logged by
+name, and the others are prepared. `web` shows the failure as
+`redaction_failed` and not `intake`'s own reason for it, so the tool tells
+the case apart by what it can see itself: that code, and a source file with
+no word in its text layer.
 Run again with the `eval_run_id` it logged, it uploads no page a second
 time, but for a page whose case had failed: a failed case stays failed, so
 that page is uploaded again as a new case. PDFs an earlier run left in the
@@ -42,6 +52,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pymupdf
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from bakeoff.client import Sleep, WebClient, WebError, build_http_client, upload_key
@@ -49,6 +60,7 @@ from bakeoff.settings import Settings
 from bakeoff.state import RunRefused, RunState, write_text_whole
 from bakeoff.verdicts import Clock
 from contracts.enums import CaseStatus, PageType, StopAfter
+from contracts.errors import ErrorCode
 from contracts.ids import CaseId, DocumentId, EvalRunId, new_id
 from contracts.models.workflow import CaseProgress, StartCaseOptions
 
@@ -102,6 +114,28 @@ class Manifest(BaseModel):
 
     eval_run_id: EvalRunId
     pages: list[PreparedPage]
+
+
+# Why a page is skipped: its text is only in its picture, and was not checked.
+SKIPPED_REASON = "text_not_checked"
+
+
+class PageSkipped(Exception):
+    """One page cannot be a training page and is left out; the run goes on."""
+
+    def __init__(self, file: str) -> None:
+        super().__init__(f"{file}: {SKIPPED_REASON}")
+        self.file = file
+
+
+def has_no_text(pdf: bytes) -> bool:
+    """Whether a file is a PDF none of whose pages has a word in its text layer."""
+    try:
+        with pymupdf.open(stream=pdf, filetype="pdf") as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+            return not any(str(page.get_text()).strip() for page in document)
+    except (RuntimeError, ValueError):
+        # Not a PDF that can be opened: not the case this looks for.
+        return False
 
 
 class PageFailed(Exception):
@@ -203,6 +237,11 @@ class Preparer:
             progress = await self.client.progress(recorded)
             if progress is None or progress.case_status is not CaseStatus.FAILED:
                 return recorded, progress
+            if progress.error_code is ErrorCode.REDACTION_FAILED and has_no_text(
+                (self.source_dir / page.file).read_bytes()
+            ):
+                # It would fail the same way again: not uploaded a second time.
+                raise PageSkipped(page.file)
             # The case an earlier start of this run made for the page ended
             # failed, and a failed case stays failed: the page is uploaded
             # again as a new case. The key names the failed case, so this
@@ -226,6 +265,10 @@ class Preparer:
                 return
             if status is CaseStatus.FAILED:
                 code = progress.error_code if progress is not None else None
+                if code is ErrorCode.REDACTION_FAILED and has_no_text(
+                    (self.source_dir / page.file).read_bytes()
+                ):
+                    raise PageSkipped(page.file)
                 raise PageFailed(
                     page.file, f"case_failed ({code.value if code else 'no code'})"
                 )
@@ -276,18 +319,38 @@ async def run(
         )
         limit = asyncio.Semaphore(settings.case_concurrency)
 
-        async def one(page: SourcePage) -> PreparedPage:
+        async def one(page: SourcePage) -> PreparedPage | None:
             async with limit:
-                return await preparer.prepare(page)
+                try:
+                    return await preparer.prepare(page)
+                except PageSkipped:
+                    logger.warning(
+                        "page skipped: file=%s reason=%s", page.file, SKIPPED_REASON
+                    )
+                    return None
 
         tasks = [asyncio.create_task(one(page)) for page in pages]
         try:
-            prepared = list(await asyncio.gather(*tasks))
+            outcomes = list(await asyncio.gather(*tasks))
         finally:
             # The first page that fails stops the others.
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+    prepared = [page for page in outcomes if page is not None]
+    skipped = [
+        page.file
+        for page, outcome in zip(pages, outcomes, strict=True)
+        if outcome is None
+    ]
+    # Said once more at the end, where an operator looks: the list that is
+    # written does not name these pages, and the classifier is not trained on them.
+    logger.info(
+        "training pages: prepared=%d skipped=%d skipped_files=%s",
+        len(prepared),
+        len(skipped),
+        ",".join(skipped) or "none",
+    )
     manifest = output_dir / MANIFEST_FILE
     try:
         # What an earlier run left: a PDF this run's list does not name

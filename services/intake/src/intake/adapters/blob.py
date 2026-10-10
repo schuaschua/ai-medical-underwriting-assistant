@@ -100,6 +100,25 @@ def ensure_local_containers(settings: Settings) -> list[str]:
     return names
 
 
+class BlobOriginalPages:
+    """Reads an original, for the one check the redaction makes itself (AD-21).
+
+    Only a document the redaction service said has no text is read through
+    this, to be turned into pictures and looked at by the read model
+    (owner's decision of 2026-10-10). No route is given it.
+    """
+
+    def __init__(self, service: BlobServiceClient, container: str) -> None:
+        self._container = service.get_container_client(container)
+
+    async def read(self, blob_name: str) -> bytes:
+        with adapter_span(tracer, "intake.blob.read_textless_original"):
+            return await asyncio.to_thread(self._read, blob_name)
+
+    def _read(self, blob_name: str) -> bytes:
+        return bytes(self._container.download_blob(blob_name).readall())
+
+
 class BlobCaseFiles:
     """The `cases` container: redacted PDFs, result files and thumbnails (AD-21).
 

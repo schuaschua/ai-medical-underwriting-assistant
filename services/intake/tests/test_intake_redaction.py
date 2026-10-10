@@ -16,8 +16,10 @@ import pytest
 from fastapi.testclient import TestClient
 from intake_fakes import (
     PDF_BYTES,
+    PICTURES_BYTES,
     PNG_BYTES,
     FakeLanguage,
+    FakeOriginalPages,
     FakeReader,
     FakeSplitter,
     MemoryCaseFiles,
@@ -151,6 +153,7 @@ def test_story_1_7_only_the_redaction_call_is_told_where_the_original_is(
     language: FakeLanguage,
     splitter: FakeSplitter,
     reader: FakeReader,
+    original_pages: FakeOriginalPages,
     case_files: MemoryCaseFiles,
     repository: MemoryCaseRepository,
 ) -> None:
@@ -170,6 +173,9 @@ def test_story_1_7_only_the_redaction_call_is_told_where_the_original_is(
     assert splitter.given == [PDF_BYTES]
     assert reader.given == [PDF_BYTES]
     assert case_pdf not in (*splitter.given, *reader.given)
+    # The one read `intake` itself may make of an original, for a document
+    # the service finds no text in, was not made: this one has text.
+    assert (original_pages.reads, splitter.drawn) == ([], [])
 
 
 # --- Idempotency -------------------------------------------------------------------
@@ -316,7 +322,14 @@ def test_story_4_2_one_page_of_the_redacted_file_is_served_as_a_one_page_pdf(
     ("behaviour", "cancelled"),
     # The last: the job is done and the read model then fails. The redacted
     # document is not offered without its text.
-    [("reject", []), ("fail", ["job-1"]), ("read_fails", [])],
+    [
+        ("reject", []),
+        ("fail", ["job-1"]),
+        ("read_fails", []),
+        # The service found no text in the document, and the read model then
+        # reads words in its pictures: text nobody checked for identifiers.
+        ("text_not_checked", []),
+    ],
 )
 def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     client: TestClient,
@@ -326,16 +339,18 @@ def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     redactions: MemoryRedactionRepository,
     case_files: MemoryCaseFiles,
     splitter: FakeSplitter,
+    original_pages: FakeOriginalPages,
     behaviour: str,
     cancelled: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     case_id, document_id = upload(client, case_pdf)
     read_fails = behaviour == "read_fails"
+    not_checked = behaviour == "text_not_checked"
     if read_fails:
         reader.behaviour = "fail"
     else:
-        language.behaviour = behaviour
+        language.behaviour = "text_empty" if not_checked else behaviour
 
     result = redact(client, case_id)
 
@@ -357,9 +372,19 @@ def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     # only a redacted PDF was ever split or read.
     assert redactions.pages == {}
     assert case_files.blobs == {}
-    assert splitter.given == reader.given == ([PDF_BYTES] if read_fails else [])
+    given = [PDF_BYTES] if read_fails else [PICTURES_BYTES] if not_checked else []
+    assert splitter.given == reader.given == given
     if read_fails:
         assert "error_code=redaction_failed reason=read_failed job=none" in caplog.text
+    if not_checked:
+        # The original was read once, to be drawn as pictures; it is the
+        # pictures the read model was sent, and nothing it read is stored
+        # or logged.
+        assert original_pages.reads == [f"{case_id}/{document_id}.pdf"]
+        assert splitter.drawn == [case_pdf]
+        assert "reason=text_not_checked job=none" in caplog.text
+        for secret in (*SECRETS, "Patient"):
+            assert secret not in caplog.text
     assert (
         PageList.model_validate(client.get(f"/cases/{case_id}/pages").json()).pages
         == []

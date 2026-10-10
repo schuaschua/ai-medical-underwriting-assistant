@@ -29,6 +29,10 @@ numbers by their shape, and the names and addresses the generator plants in
 the synthetic cases and in the classifier's training pages. It is not a recogniser; what the real service finds is
 checked in Azure.
 
+A document without any text layer (a blank page, a handwritten note that is
+a picture) is answered as the real service answers one: the job succeeds,
+names no document and reports the error "Document text is empty.".
+
 Run it: `uv run python -m synthdata.language_standin` (see README, 'Run locally').
 """
 
@@ -369,13 +373,8 @@ def read_words(page: pymupdf.Page) -> dict[str, Any]:
     }
 
 
-def words_of_page(document: pymupdf.Document, page: pymupdf.Page) -> dict[str, Any]:
-    """What a reader would see on a page: what this stand-in kept for it, or its text layer.
-
-    A page this stand-in redacted is a picture that points to the words
-    kept for it. Any other page is read from its own text layer, as the
-    real services read a PDF that has one.
-    """
+def kept_words(document: pymupdf.Document, page: pymupdf.Page) -> dict[str, Any] | None:
+    """The words this stand-in kept for a page it redacted; None for any other page."""
     for image in page.get_images():  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
         kind, value = document.xref_get_key(image[0], WORDS_KEY)  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
         if kind == "xref":
@@ -383,7 +382,48 @@ def words_of_page(document: pymupdf.Document, page: pymupdf.Page) -> dict[str, A
                 document.xref_stream(int(value.split()[0]))  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
             )
             return kept
-    return read_words(page)
+    return None
+
+
+def words_of_page(document: pymupdf.Document, page: pymupdf.Page) -> dict[str, Any]:
+    """What a reader would see on a page: what this stand-in kept for it, or its text layer.
+
+    A page this stand-in redacted is a picture that points to the words
+    kept for it. Any other page is read from its own text layer, as the
+    real services read a PDF that has one.
+    """
+    kept = kept_words(document, page)
+    return kept if kept is not None else read_words(page)
+
+
+def has_text(pdf: bytes) -> bool:
+    """Whether any page of a PDF has a word in its text layer."""
+    with pymupdf.open(stream=pdf, filetype="pdf") as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        return any(str(page.get_text()).strip() for page in document)
+
+
+# What the service answers for a document without any text (seen in the
+# Azure session of 2026-10-10): the job succeeds, names no document, and the
+# task's results hold this error for it.
+def text_empty_error(document_id: str) -> dict[str, Any]:
+    said = "Invalid Document in request."
+    return {
+        "id": document_id,
+        "error": {
+            "code": "InvalidRequest",
+            "message": said,
+            "details": [
+                {
+                    "code": "InvalidArgument",
+                    "message": said,
+                    "innererror": {
+                        "code": "InvalidDocument",
+                        "message": "Document text is empty.",
+                    },
+                }
+            ],
+        },
+    }
 
 
 def _as_picture(
@@ -475,6 +515,8 @@ class Job:
     document_id: str
     status: str
     targets: list[str] = field(default_factory=list)
+    # The document has no text at all: nothing was redacted or written.
+    text_empty: bool = False
 
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -512,6 +554,11 @@ class LanguageStandIn:
         )
         if self.mode is Mode.UNREADABLE:
             pdf, result = b"not a pdf", b"not json"
+        elif not has_text(original):
+            # The service reads text, not pictures: a blank document and a
+            # handwritten one are the same to it.
+            job.text_empty = True
+            return
         else:
             pdf, masked = redact_pdf(original, categories)
             result = result_file(job.document_id, masked)
@@ -609,8 +656,12 @@ class LanguageStandIn:
                         "kind": f"{TASK_KIND}LROResults",
                         "status": job.status,
                         "results": {
-                            "documents": documents if succeeded else [],
-                            "errors": [],
+                            "documents": documents
+                            if succeeded and not job.text_empty
+                            else [],
+                            "errors": [text_empty_error(job.document_id)]
+                            if job.text_empty
+                            else [],
                             "modelVersion": "stand-in",
                         },
                     }

@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from intake.adapters.blob import (
     BlobCaseFiles,
+    BlobOriginalPages,
     BlobOriginalStore,
     build_blob_service,
     container_url,
@@ -92,6 +93,7 @@ def create_app(
                     settings.max_pages,
                 ),
                 reader=reader,
+                originals=BlobOriginalPages(blobs, settings.originals_container),
             ),
             upload_deadline_seconds=settings.upload_deadline_seconds,
             redaction_categories=tuple(settings.redaction_categories),

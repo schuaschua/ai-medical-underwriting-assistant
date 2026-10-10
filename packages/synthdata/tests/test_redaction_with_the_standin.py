@@ -49,6 +49,11 @@ PDF = {"Content-Type": "application/pdf"}
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 CASES_DIR = REPOSITORY_ROOT / "data" / "cases"
 ANSWER_KEY_DIR = REPOSITORY_ROOT / "data" / "answer-key" / "cases"
+# Two one-page documents of the classifier's training set that have no text
+# layer: a blank page, and a handwritten note that is a picture.
+TRAINING_DIR = REPOSITORY_ROOT / "data" / "classifier-training"
+BLANK_PAGE = "other/train-002-p09-blank.pdf"
+NOTE_PAGE = "attending_physician_statement/train-001-p09-handwritten_note.pdf"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 TABLES = ("redaction", "page", "page_text", "word_box")
 
@@ -274,3 +279,48 @@ def test_story_1_7_a_synthetic_case_is_redacted_and_no_planted_identifier_is_in_
     counts = row_counts(migrated_database)
     assert (counts["page"], counts["page_text"]) == (len(case.pages), len(case.pages))
     assert counts["word_box"] == sum(len(text.split()) for text in texts)
+
+    # --- A document without any text (owner's decision of 2026-10-10) -----
+    # The redaction service finds no text in a blank page or in a note that
+    # is a picture, and redacts nothing. `intake` then draws the original's
+    # pages as pictures and has the read model look at them.
+    sources = {
+        name: (TRAINING_DIR / name).read_bytes() for name in (BLANK_PAGE, NOTE_PAGE)
+    }
+    created = client.post("/cases", content=sources[BLANK_PAGE], headers=PDF).json()
+    blank_case, blank_document = created["case_id"], created["document_id"]
+    passed = redact(client, blank_case)
+    # No word on it: it goes on as a redacted document with nothing found,
+    # one page with empty text and no boxes.
+    assert (passed.status.value, passed.redaction_counts) == ("done", {})
+    (blank_page,) = passed.page_ids
+    assert client.get(f"/pages/{blank_page}/text").json()["text"] == ""
+    assert client.get(f"/pages/{blank_page}/boxes").json()["boxes"] == []
+    served = client.get(f"/documents/{blank_document}/file").content
+    assert served != sources[BLANK_PAGE]
+    with pymupdf.open(stream=served, filetype="pdf") as pictures:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        assert [len(page.get_images()) for page in pictures] == [1]
+        assert str(pictures[0].get_text()).strip() == ""
+    assert json.loads(
+        cases_container.download_blob(
+            f"{blank_case}/{blank_document}.redaction-result.json"
+        ).readall()
+    ) == {"entities": [], "redaction_counts": {}}
+
+    note_case = client.post("/cases", content=sources[NOTE_PAGE], headers=PDF).json()[
+        "case_id"
+    ]
+    refused = redact(client, note_case)
+    # Words in its picture that nobody checked for identifiers: the
+    # redaction fails, and nothing of the case is left in `cases`.
+    assert (refused.status.value, refused.page_ids) == ("failed", [])
+    assert refused.error_code is not None
+    assert refused.error_code.value == "redaction_failed"
+    assert not [
+        name for name in cases_container.list_blob_names() if name.startswith(note_case)
+    ]
+    assert client.get(f"/cases/{note_case}/pages").json()["pages"] == []
+    # What the read model was sent for the two: pictures `intake` drew, the
+    # blank one being the file it then stored.
+    assert layout_stand_in.read[-2] == served
+    assert layout_stand_in.read[-1] not in sources.values()

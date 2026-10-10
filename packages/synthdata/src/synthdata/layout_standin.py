@@ -34,7 +34,10 @@ stand-in redacted it answers with the words that stand-in kept for it in the
 file (`synthdata.language_standin.words_of_page`); for any other page with
 its text layer, as the real model reads a PDF that has one. A mask comes back
 as a reader sees it, such as `PER5`, never as a token: making the token is
-`intake`'s work. The read model takes the PDF as the request's body, or as
+`intake`'s work. For a picture nobody kept words for (the original's pages
+that `intake` draws for a document the redaction service found no text in) it
+tells paper from ink: no word for a blank page, the one word `(unread)` for a
+page with anything on it. The read model takes the PDF as the request's body, or as
 `base64Source` like the layout model.
 
 As a process it also serves the routes of the classifier stand-in
@@ -66,13 +69,18 @@ from fastapi.responses import JSONResponse, Response
 
 from synthdata.classifier_standin import ClassifierStandIn, blob_container_reader
 from synthdata.classifier_standin import Mode as ClassifierMode
-from synthdata.language_standin import EMULATOR, words_of_page
+from synthdata.language_standin import EMULATOR, kept_words, read_words
 
 MODELS_PATH = "/documentintelligence/documentModels"
 LAYOUT_MODEL = "prebuilt-layout"
 READ_MODEL = "prebuilt-read"
 _MODELS = frozenset({LAYOUT_MODEL, READ_MODEL})
 PDF_CONTENT = "application/pdf"
+# The word answered for a picture with something drawn on it, and how a page
+# is told to be blank: looked at coarsely, all of it is one colour.
+UNREAD_WORD = "(unread)"
+_INK_DPI = 36
+_PAPER_SHARE = 0.9995
 # How many of the PDFs sent to the read model are kept to look at.
 READ_KEPT = 8
 API_VERSION = "2024-11-30"
@@ -358,6 +366,20 @@ def analyze_pdf(pdf: bytes, roles: bool = True, tidy: bool = False) -> dict[str,
     }
 
 
+def _unread(page: pymupdf.Page) -> list[list[list[Any]]]:
+    """What the stand-in answers for a picture nobody kept words for.
+
+    It cannot read a picture, but it can tell paper from ink: a page that is
+    one colour all over has no word, and a page with anything drawn on it
+    (the handwritten note) is answered with one word that says so, where
+    the real model would give the words themselves.
+    """
+    picture = page.get_pixmap(dpi=_INK_DPI, alpha=False)
+    if picture.color_topusage()[0] >= _PAPER_SHARE:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        return []
+    return [[[UNREAD_WORD, 0.0, 0.0, page.rect.width, page.rect.height]]]
+
+
 def read_pdf(pdf: bytes) -> dict[str, Any]:
     """The `analyzeResult` of the read model for a PDF, as the stand-in reads it.
 
@@ -372,7 +394,9 @@ def read_pdf(pdf: bytes) -> dict[str, Any]:
     paragraphs: list[dict[str, Any]] = []
     with pymupdf.open(stream=pdf, filetype="pdf") as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
         for page_number, page in enumerate(document, start=1):
-            seen = words_of_page(document, page)
+            seen = kept_words(document, page) or read_words(page)
+            if not seen["lines"] and kept_words(document, page) is None:
+                seen = {**seen, "lines": _unread(page)}
             page_start = offset
             lines_out: list[dict[str, Any]] = []
             words_out: list[dict[str, Any]] = []

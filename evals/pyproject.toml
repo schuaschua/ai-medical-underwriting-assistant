@@ -10,6 +10,9 @@ dependencies = [
     "httpx==0.28.1",
     "pydantic==2.13.5",
     "pydantic-settings==2.15.0",
+    # training_pages: whether a training page has any text layer, to tell a
+    # page that failed redaction because its text is only in its picture.
+    "pymupdf==1.28.2",
     # static-metrics.yaml: the stated cost and effort of each row.
     "pyyaml==6.0.3",
 ]

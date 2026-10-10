@@ -70,6 +70,26 @@ class RedactionJobError(Exception):
         self.reason = reason
 
 
+class DocumentTextEmpty(RedactionJobError):
+    """The redaction service found no text in the document at all, and so redacted nothing.
+
+    A blank document, or one whose text is only in its pictures (a scan,
+    handwriting), which the service does not read.
+    """
+
+
+class OriginalPages(Protocol):
+    """The one read of an original by `intake` itself (owner's decision of 2026-10-10).
+
+    Used only for a document the redaction service said has no text: its
+    pages are then turned into pictures and looked at by the read model, to
+    tell a blank document from one with text in its pictures. Nothing else
+    reads an original, and no route serves one (AD-21).
+    """
+
+    async def read(self, blob_name: str) -> bytes: ...
+
+
 class RedactionService(Protocol):
     """Azure AI Language's document PII redaction, with the entity mask.
 
@@ -86,7 +106,8 @@ class RedactionService(Protocol):
     async def output(self, job_id: str, case_id: str) -> JobOutput:
         """Wait for the job to end and say where its files are.
 
-        Raises `RedactionJobError` if the job fails, is cancelled or names no
+        Raises `DocumentTextEmpty` if the service says the document has no
+        text. Raises `RedactionJobError` if the job fails, is cancelled or names no
         usable files, or files outside the case's own prefix `<case_id>/`. It waits as long as the job runs: the caller sets the deadline.
         """
         ...
@@ -124,6 +145,13 @@ class PageSplitter(Protocol):
 
     async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
         """One page of a PDF as a PDF of its own; None when it has no such page."""
+        ...
+
+    async def pictures(self, pdf: bytes) -> bytes:
+        """A PDF as a PDF of pictures: one picture per page, no text layer.
+
+        The shape of the redacted file the redaction service writes.
+        """
         ...
 
 

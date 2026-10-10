@@ -26,7 +26,7 @@ from intake.domain.entities import (
     Redaction,
     Word,
 )
-from intake.domain.ports import DuplicateUpload, RedactionJobError
+from intake.domain.ports import DocumentTextEmpty, DuplicateUpload, RedactionJobError
 from intake.domain.redaction import RedactionPorts
 
 
@@ -148,6 +148,7 @@ class MemorySchemaRevision:
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n-synthetic-thumbnail"
 PDF_BYTES = b"%PDF-1.7 synthetic redacted file"
+PICTURES_BYTES = b"%PDF-1.7 the original's pages as pictures"
 
 
 # The label the service draws for each category.
@@ -289,6 +290,9 @@ class FakeLanguage:
         if self.behaviour == "call_timeout":
             # One call of the adapter gave up, well before the deadline.
             raise TimeoutError
+        if self.behaviour == "text_empty":
+            # The service found no text in the document, and wrote no file.
+            raise DocumentTextEmpty("job_document_text_empty")
         if self.behaviour == "no_files":
             raise RedactionJobError("job_output_incomplete")
         # Where the service puts its files: a folder of its own for the job.
@@ -319,6 +323,8 @@ class FakeSplitter:
     )
     fail: bool = False
     given: list[bytes] = field(default_factory=list)
+    # Every file it was asked to turn into pictures.
+    drawn: list[bytes] = field(default_factory=list)
 
     async def split(self, pdf: bytes) -> list[PageSheet]:
         self.given.append(pdf)
@@ -329,6 +335,22 @@ class FakeSplitter:
     async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
         # The real cut: a test that asks for a page gives the fake a real PDF.
         return cut_page(pdf, page_number)
+
+    async def pictures(self, pdf: bytes) -> bytes:
+        self.drawn.append(pdf)
+        return PICTURES_BYTES
+
+
+@dataclass
+class FakeOriginalPages:
+    """The one read of an original; it notes every blob it was asked for."""
+
+    store: MemoryOriginalStore
+    reads: list[str] = field(default_factory=list)
+
+    async def read(self, blob_name: str) -> bytes:
+        self.reads.append(blob_name)
+        return self.store.blobs[blob_name]
 
 
 @dataclass
@@ -450,6 +472,7 @@ def memory_redaction(cases: MemoryCaseRepository | None = None) -> dict[str, Any
             files=files,
             splitter=FakeSplitter(),
             reader=FakeReader(),
+            originals=FakeOriginalPages(MemoryOriginalStore()),
         ),
         "pages": repository,
     }

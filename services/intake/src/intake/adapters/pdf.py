@@ -26,6 +26,8 @@ tracer = trace.get_tracer(APP_ID)
 # The limits when a caller names none; the service passes its settings.
 MAX_PAGES = 200
 THUMBNAIL_MAX_HEIGHT_PX = 1280
+# Dots per inch of a page drawn as a picture: what the redaction service uses.
+PICTURE_DPI = 200
 
 # The fields of one entry of PyMuPDF's "words" extraction.
 _X0, _Y0, _X1, _Y1, _TEXT = range(5)
@@ -103,6 +105,26 @@ def cut_page(pdf: bytes, page_number: int) -> bytes | None:
             return bytes(single.tobytes(garbage=3, deflate=True))
 
 
+def as_pictures(pdf: bytes, max_pages: int = MAX_PAGES) -> bytes:
+    """A PDF as a PDF of pictures: each page drawn as one picture, as it is shown.
+
+    The shape of the file the redaction service writes: no text layer, and a
+    turned page comes out upright with its content turned. A document of
+    more than `max_pages` pages is refused before any page is drawn.
+    """
+    with (
+        pymupdf.open(stream=pdf, filetype="pdf") as document,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        pymupdf.open() as pictures,  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+    ):
+        if document.page_count > max_pages:
+            raise RedactionJobError("too_many_pages")
+        for page in document:
+            picture = page.get_pixmap(dpi=PICTURE_DPI, alpha=False)
+            sheet = pictures.new_page(width=page.rect.width, height=page.rect.height)
+            sheet.insert_image(sheet.rect, pixmap=picture)
+        return bytes(pictures.tobytes(garbage=3, deflate=True))
+
+
 class PdfPageSplitter:
     def __init__(
         self,
@@ -120,3 +142,7 @@ class PdfPageSplitter:
     async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
         with adapter_span(tracer, "intake.pdf.cut_page"):
             return await asyncio.to_thread(cut_page, pdf, page_number)
+
+    async def pictures(self, pdf: bytes) -> bytes:
+        with adapter_span(tracer, "intake.pdf.as_pictures"):
+            return await asyncio.to_thread(as_pictures, pdf, self._limits[2])

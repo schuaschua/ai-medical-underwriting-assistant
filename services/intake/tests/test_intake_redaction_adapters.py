@@ -76,6 +76,33 @@ def job_state(status: str, *locations: str, errors: bool = False) -> dict[str, A
     }
 
 
+def text_empty_state(inner_message: str) -> dict[str, Any]:
+    """A job that succeeded with no document and one error for it, as seen in Azure on 2026-10-10."""
+    state = job_state("succeeded")
+    results = state["tasks"]["items"][0]["results"]
+    results["documents"] = []
+    results["errors"] = [
+        {
+            "id": CASE_ID,
+            "error": {
+                "code": "InvalidRequest",
+                "message": "Invalid Document in request.",
+                "details": [
+                    {
+                        "code": "InvalidArgument",
+                        "message": "Invalid Document in request.",
+                        "innererror": {
+                            "code": "InvalidDocument",
+                            "message": inner_message,
+                        },
+                    }
+                ],
+            },
+        }
+    ]
+    return state
+
+
 OUTPUT = (
     f"{CASES_URL}/{CASE_ID}/{JOB_ID}/PiiEntityRecognition/0001/doc.pdf",
     f"{CASES_URL}/{CASE_ID}/{JOB_ID}/PiiEntityRecognition/0001/doc.result.json",
@@ -284,6 +311,16 @@ def test_story_1_7_a_job_that_does_not_end_with_usable_files_is_an_error() -> No
             ),
             "job_output_outside_case",
         ),
+        # A document without any text, as the real service answers it: told
+        # apart from every other document error, which stays a failure.
+        (
+            httpx.Response(200, json=text_empty_state("Document text is empty.")),
+            "job_document_text_empty",
+        ),
+        (
+            httpx.Response(200, json=text_empty_state("Document is corrupted.")),
+            "job_document_error",
+        ),
         # Another case's blob is never read, copied or removed as this
         # case's: output under another case's prefix, or under none, is refused.
         *(
@@ -322,11 +359,31 @@ def test_story_1_7_nothing_in_the_service_can_read_an_original() -> None:
         for path in source.rglob("*.py")
         if re.search(r"download_blob|readall", path.read_text())
     ]
-    # One place downloads a blob, and it is built for the `cases` container only.
     assert readers == ["blob.py"]
     blob = (source / "adapters" / "blob.py").read_text()
-    assert blob.count("download_blob") == 1
-    assert blob.index("class BlobCaseFiles") < blob.index("download_blob")
+    # Two places download a blob. One is built for the `cases` container
+    # only. The other is the one read of an original `intake` may make
+    # (owner's decision of 2026-10-10): of a document the redaction service
+    # found no text in, to draw its pages as pictures for the read model.
+    assert blob.count("download_blob") == 2
+    pages, case_files = (
+        blob.index("class BlobOriginalPages"),
+        blob.index("class BlobCaseFiles"),
+    )
+    assert pages < blob.index("download_blob") < case_files
+    # That reader is given to the redaction and to nothing else: the app
+    # factory names it once, and no route module does.
+    users = sorted(
+        path.name
+        for path in source.rglob("*.py")
+        if "BlobOriginalPages" in path.read_text()
+    )
+    assert users == ["app.py", "blob.py"]
+    assert (source / "adapters" / "http" / "app.py").read_text().count(
+        "BlobOriginalPages("
+    ) == 1
+    redaction = (source / "domain" / "redaction.py").read_text()
+    assert redaction.count("ports.originals.read(") == 1
 
 
 # --- The sheets of the redacted PDF (AD-14) --------------------------------------------

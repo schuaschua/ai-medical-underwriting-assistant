@@ -36,6 +36,8 @@ from intake.domain.entities import (
 )
 from intake.domain.ports import (
     CaseFiles,
+    DocumentTextEmpty,
+    OriginalPages,
     PageReader,
     PageSplitter,
     RedactionJobError,
@@ -62,6 +64,8 @@ _ENTITY_ID = re.compile(r"[0-9]{1,9}")
 # How often the removal of the service's own result file is tried.
 RESULT_REMOVAL_ATTEMPTS = 3
 _ENTITIES = "entities"
+# The result file of a document nothing was found in.
+NOTHING_FOUND = b'{"entities": []}'
 _CATEGORY = "category"
 _TYPE = "type"
 _MASK = "mask"
@@ -77,6 +81,8 @@ class RedactionPorts:
     files: CaseFiles
     splitter: PageSplitter
     reader: PageReader
+    # Read only for a document the redaction service found no text in.
+    originals: OriginalPages
 
 
 @dataclass(slots=True)
@@ -342,12 +348,27 @@ async def _redact_and_split(
         document.original_blob_name, case_id, categories
     )
     await ports.repository.note_job(case_id, run.job_id)
-    output = await ports.language.output(run.job_id, case_id)
+    try:
+        output = await ports.language.output(run.job_id, case_id)
+    except DocumentTextEmpty:
+        output = None
     run.job_id = None
 
-    # From here on only the redacted PDF is read (AD-21).
-    pdf = await ports.files.read(output.redacted_blob_name)
-    result_file = await ports.files.read(output.result_blob_name)
+    if output is None:
+        # The service found no text in the document, so it redacted nothing
+        # and wrote no file. "Check, then pass it through" (owner's decision
+        # of 2026-10-10): here, and nowhere else, `intake` reads the
+        # original itself, turns its pages into pictures in the shape of a
+        # redacted file, and has the read model look at them. That sends the
+        # original, as pictures, to the read model for this one check.
+        pdf = await ports.splitter.pictures(
+            await ports.originals.read(document.original_blob_name)
+        )
+        result_file = NOTHING_FOUND
+    else:
+        # From here on only the redacted PDF is read (AD-21).
+        pdf = await ports.files.read(output.redacted_blob_name)
+        result_file = await ports.files.read(output.result_blob_name)
     counts = count_categories(result_file)
     names = mask_names(result_file)
     sheets = await ports.splitter.split(pdf)
@@ -359,6 +380,20 @@ async def _redact_and_split(
     read = sorted(await ports.reader.read(pdf), key=lambda page: page.page_number)
     if [page.page_number for page in read] != list(range(1, len(sheets) + 1)):
         raise RedactionJobError("read_page_count")
+    if output is None:
+        if any(page.lines for page in read):
+            # Text in its pictures only (handwriting, a scan), which nobody
+            # checked for identifiers: the document does not go on. What
+            # was read is neither stored nor logged.
+            raise RedactionJobError("text_not_checked")
+        # A blank document: it goes on as redacted, with nothing found.
+        logger.warning(
+            "redaction passed through: case_id=%s document_id=%s "
+            "code=no_text_to_redact pages=%d",
+            case_id,
+            document.document_id,
+            len(sheets),
+        )
     readings = [
         page_reading(page, sheet, names)
         for page, sheet in zip(read, sheets, strict=True)
@@ -377,9 +412,9 @@ async def _redact_and_split(
     }
     for name, (content, content_type) in kept.items():
         await ports.files.put(name, content, content_type)
-    if output.result_blob_name not in kept:
+    if output is not None and output.result_blob_name not in kept:
         await _remove_found_values(run, output.result_blob_name, ports.files)
-    if output.redacted_blob_name not in kept:
+    if output is not None and output.redacted_blob_name not in kept:
         try:
             await ports.files.delete(output.redacted_blob_name)
         except Exception as error:  # noqa: BLE001 - a second copy of the redacted PDF under the case's prefix; the redaction is good

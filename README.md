@@ -122,7 +122,27 @@ number, at their place), and what the label means from the redaction's result fi
 `Person`); the read model's version of a mask (`PER 1`, `ADR2`, `PER®`) is replaced by the token and
 never trusted. Nothing after `intake` changes: the page text, the boxes and the mask tokens have the
 shapes they had. If the reading fails, the redaction fails (`redaction_failed`): no page is stored
-without its text. The job and the reading share the one deadline. If redaction fails or takes longer than
+without its text. The job and the reading share the one deadline.
+
+A document without any text is a case of its own (owner's decision of 2026-10-10: "check, then pass
+it through"). For a blank page uploaded alone, or a document whose text is only in its pictures (a
+scan, handwriting), Azure AI Language's job succeeds, names no document and reports "Document text is
+empty." It redacted nothing and wrote no file. `intake` then, and only then, reads the original
+itself: it draws the original's pages as pictures (one picture per page, no text layer, the shape of
+a redacted file) and sends that file to the read model. This is the one place where the original,
+as pictures, is sent to the read model; everywhere else only the redacted file is read.
+
+- The reading finds no word on any page: the document is blank. It goes on as a redacted document
+  with nothing found. The picture file is stored as the redacted file, the pages have empty text and
+  no boxes, the kept result file has no entities, and `intake` logs a warning with
+  `code=no_text_to_redact`.
+- The reading finds any word: the text is in pictures and was never checked for identifiers. The
+  redaction fails (`redaction_failed`, `reason=text_not_checked` in `intake`'s log), nothing of the
+  reading is stored or logged, and the case's files are removed as for any failed redaction.
+
+A page without text inside a document that has text elsewhere is not affected: the service leaves
+that page as it is. Every other document error of the service stays a failure. All of it runs under
+the one deadline. If redaction fails or takes longer than
 180 seconds the case is shown as failed, with a message asking for the document to be uploaded again.
 
 Once a case is redacted, every page is classified: `workflow` sends `classification` one command per
@@ -687,6 +707,11 @@ uv run python -m bakeoff.training_pages   # every page of data/classifier-traini
 ./tools/train-local.sh                    # that folder into the emulator's container, then the job
 ```
 
+One of the 46 pages is skipped (owner's decision of 2026-10-10, below under redaction of a document
+without text): the handwritten note is a picture, `intake` fails it with `text_not_checked`, and the
+tool leaves it out, names it in its log (`page skipped: file=... reason=text_not_checked`) and lists
+the other 45. The two blank pages pass. Every page type still has five pages or more.
+
 The first command uploads each of the 46 training pages as a case of an eval run, started with
 `stop_after` `gate` (so it is redacted as any case page, in neither of the underwriter's lists, and
 never extracted), fetches the redacted file `web` serves and writes it under its page type, with one
@@ -698,7 +723,7 @@ exactly the list and the listed pages, each once and with the listed content: a 
 not name, a listed page that is missing, or a page with other content (the unredacted sources have
 the same file names) refuses the training, as does a page type with fewer than five pages or a page
 outside its type's folder. It ends with `training done: classifier_id=... trained=yes
-pages=46 page_types=6`, or `training failed: code=... reason=...` and status 1. Run again it trains
+pages=45 page_types=6`, or `training failed: code=... reason=...` and status 1. Run again it trains
 nothing (`trained=no`). To start a case with the classifier:
 
 ```sh

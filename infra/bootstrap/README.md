@@ -937,6 +937,8 @@ Added by story 4.2. Not yet run: the environment was down while the story was bu
 
 **Step 1. Prepare the redacted training pages.** From the repository root, against the deployed `web`. Each of the 46 pages of `data/classifier-training/` is uploaded as a case of an eval run (so it is in neither of the underwriter's lists), redacted by Azure AI Language like any case page, classified by the chat model at the gate (five runs each) and stopped there. The redacted file `web` serves is written to `.work/classifier-training/`, with one list, `redacted-pages.json`.
 
+One of the 46 pages is not prepared (owner's decision of 2026-10-10): `attending_physician_statement/train-001-p09-handwritten_note.pdf` is a picture with no text layer. Azure AI Language finds no text in such a document and redacts nothing; `intake` then has the read model look at the page, finds words in the picture that nobody checked for identifiers, and fails the case (`redaction_failed`; `reason=text_not_checked` in `intake`'s log). The tool skips that page, says so (`page skipped: file=... reason=text_not_checked`, and `prepared=45 skipped=1 skipped_files=...` at the end) and lists the other 45. The two blank pages have no text either: `intake` passes them on as redacted with nothing found (`code=no_text_to_redact`), and they are prepared. Every page type keeps at least five pages (`attending_physician_statement` has six). If the tool reports any other count of skipped pages, stop and look: it skips a page when its case failed at redaction and its source has no text layer, which is all `web` lets it see of the reason.
+
 ```bash
 WEB="$(terraform -chdir=infra/demo/app output -raw web_url)"            # web's public address
 uv run python -m bakeoff.training_pages --web-address "$WEB"
@@ -987,7 +989,7 @@ remove_upload_role; trap - EXIT
 az role assignment list --assignee "$ME" --scope "$TRAINING_SCOPE" -o table   # no Storage Blob Data Contributor of yours
 ```
 
-The container must hold these 47 files and nothing else, each with the content the list names: anything the list does not name, a listed page that is missing, or a page with other content stops the job.
+The container must hold these 46 files (45 pages and the list) and nothing else, each with the content the list names: anything the list does not name, a listed page that is missing, or a page with other content stops the job.
 
 **Step 3. Start the training job and read its result.** The job is the Container Apps job `caj-aiuw-demo-wus3-train` (`terraform -chdir=infra/demo/app output -raw classification_train_job_name`). It never starts by itself, and no deploy starts it.
 
@@ -999,7 +1001,7 @@ az containerapp job execution show -g rg-aiuw-demo-wus3 -n "$JOB" --job-executio
 az containerapp job logs show -g rg-aiuw-demo-wus3 -n "$JOB" --execution "$EXECUTION" --container train
 ```
 
-A run that succeeds ends with `training done: classifier_id=page-types-v1 trained=yes pages=46 page_types=6`. Starting it again is safe: once the classifier of that id exists it ends with `trained=no` and asks for nothing to be built. A run that fails ends with `training failed: code=<error code> reason=<what exactly>` and status 1:
+A run that succeeds ends with `training done: classifier_id=page-types-v1 trained=yes pages=45 page_types=6`. Starting it again is safe: once the classifier of that id exists it ends with `trained=no` and asks for nothing to be built. A run that fails ends with `training failed: code=<error code> reason=<what exactly>` and status 1:
 
 | Reason | What it means |
 | --- | --- |

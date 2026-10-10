@@ -20,7 +20,7 @@ from intake.adapters.credential import azure_credential
 from intake.adapters.db import EntraToken
 from intake.adapters.telemetry import adapter_span
 from intake.domain.entities import JobOutput
-from intake.domain.ports import RedactionJobError
+from intake.domain.ports import DocumentTextEmpty, RedactionJobError
 from intake.settings import APP_ID, Settings
 
 logger = logging.getLogger(__name__)
@@ -264,6 +264,37 @@ def _try_again(response: httpx.Response) -> bool:
     )
 
 
+# What the service says of a document without any text (seen in the Azure
+# session of 2026-10-10): among the error's details, an inner error with this
+# code and the message "Document text is empty."
+_INVALID_DOCUMENT = "InvalidDocument"
+_TEXT_IS_EMPTY = "text is empty"
+
+
+def _says_text_is_empty(error: object) -> bool:
+    """Whether a document's error says its text is empty, and nothing else.
+
+    Both must hold of one inner error: the code, which the service also
+    gives a document it cannot open, and the message, which says why. The
+    message is compared, never logged or kept.
+    """
+    pending: list[object] = [error]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(node)
+        elif isinstance(node, dict):
+            message = node.get("message")
+            if (
+                node.get("code") == _INVALID_DOCUMENT
+                and isinstance(message, str)
+                and _TEXT_IS_EMPTY in message.casefold()
+            ):
+                return True
+            pending.extend(node.values())
+    return False
+
+
 def _target_locations(job: dict[str, Any]) -> list[str]:
     """Every target address the job's documents report, and nothing else of it."""
     try:
@@ -276,7 +307,13 @@ def _target_locations(job: dict[str, Any]) -> list[str]:
         ]
     except (KeyError, TypeError):
         raise RedactionJobError("job_output_missing") from None
-    if any(item.get("results", {}).get("errors") for item in items):
+    errors = [
+        error for item in items for error in item.get("results", {}).get("errors") or []
+    ]
+    if errors:
+        if not locations and all(_says_text_is_empty(error) for error in errors):
+            # Not a failure of the service: the document has no text to redact.
+            raise DocumentTextEmpty("job_document_text_empty")
         # The service could not process the document.
         raise RedactionJobError("job_document_error")
     if not all(isinstance(location, str) for location in locations):

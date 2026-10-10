@@ -180,9 +180,10 @@ def test_story_4_2_the_training_set_is_redacted_by_the_pipeline_a_classifier_is_
         )
         with web_service(tmp_path, behind_web) as web:
             try:
-                manifest = asyncio.run(
-                    training_pages.run(settings, RunningService(web))
-                )
+                with caplog.at_level(logging.INFO, logger="bakeoff"):
+                    manifest = asyncio.run(
+                        training_pages.run(settings, RunningService(web))
+                    )
             finally:
                 state = tmp_path / "state" / f"{eval_run_id}.json"
                 if state.is_file():
@@ -192,12 +193,30 @@ def test_story_4_2_the_training_set_is_redacted_by_the_pipeline_a_classifier_is_
             listed_cases = cases_listed(web)
 
     listed = json.loads(manifest.read_text())["pages"]
+    # One page is left out (owner's decision of 2026-10-10): the handwritten
+    # note is a picture with no text layer, the redaction service finds no
+    # text in it, the read model finds words in its picture, and `intake`
+    # fails it because nobody checked those words. The two blank pages have
+    # no text either and pass. The tool skips the note, names it, and
+    # prepares the others; every page type still has its five pages.
+    note = "attending_physician_statement/train-001-p09-handwritten_note.pdf"
     assert [(page["file"], page["page_type"]) for page in listed] == [
-        (page["file"], page["page_type"]) for page in source
+        (page["file"], page["page_type"]) for page in source if page["file"] != note
     ]
-    assert len(listed) == 46 and {page["case_id"] for page in listed} == set(
-        case_ids.values()
-    )
+    assert len(source) == 46 and len(listed) == 45
+    assert {page["case_id"] for page in listed} == set(case_ids.values()) - {
+        case_ids[note]
+    }
+    assert f"page skipped: file={note} reason=text_not_checked" in caplog.text
+    assert f"prepared=45 skipped=1 skipped_files={note}" in caplog.text
+    assert not (out / note).exists()
+    assert {"other/train-002-p09-blank.pdf", "other/train-005-p09-blank.pdf"} <= {
+        page["file"] for page in listed
+    }
+    per_type: dict[str, int] = {}
+    for page in listed:
+        per_type[page["page_type"]] = per_type.get(page["page_type"], 0) + 1
+    assert min(per_type.values()) >= 5 and len(per_type) == len(PageType)
     # Each has passed the same redaction as a case page: it is the file of
     # record `web` serves, one page, with the people on it masked.
     people = {
@@ -227,7 +246,7 @@ def test_story_4_2_the_training_set_is_redacted_by_the_pipeline_a_classifier_is_
     assert listed_cases == []
 
     # --- 2. An operator uploads the folder; the job trains the classifier once.
-    assert classification.upload_training_pages(out) == 47
+    assert classification.upload_training_pages(out) == 46
     assert stand_in.classifiers == {}
     # The job trains only on what the list vouches for. A PDF beside the
     # listed ones, and an unredacted page put over a prepared one (the
@@ -250,7 +269,7 @@ def test_story_4_2_the_training_set_is_redacted_by_the_pipeline_a_classifier_is_
         assert f"training failed: code=validation_failed {line}" in caplog.text
         assert stand_in.build_requests == [] and stand_in.classifiers == {}
         # The operator uploads the prepared folder anew.
-        assert classification.upload_training_pages(out) == 47
+        assert classification.upload_training_pages(out) == 46
     assert classification.train() == 0
     assert list(stand_in.classifiers) == [CLASSIFIER_ID]
     (build,) = stand_in.build_requests
