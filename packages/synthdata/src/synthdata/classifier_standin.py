@@ -16,10 +16,12 @@ It is not a classifier and it learns nothing. A build counts the PDFs under
 each document type's folder of the container and fails where a type has
 fewer than five, as the service refuses too little to learn from. A document
 is then told apart by the heading the generator prints on a page, exactly as
-the chat stand-in tells it, and given a fixed confidence. A page without a
-text layer (the handwritten note) has no heading and comes out as `other`:
-the real service reads the picture. What the real service answers is checked
-in Azure.
+the chat stand-in tells it, and given a fixed confidence. A redacted page is
+a picture: its words are the ones the Language stand-in kept for it in the
+file (`synthdata.language_standin.words_of_page`). A page with no words to
+find (the handwritten note) has no heading and comes out as `other`: the
+real service reads the picture. What the real service answers is checked in
+Azure.
 """
 
 import base64
@@ -40,6 +42,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from synthdata.foundry_standin import classify_text
+from synthdata.language_standin import words_of_page
 
 CLASSIFIERS_PATH = "/documentintelligence/documentClassifiers"
 OPERATIONS_PATH = "/documentintelligence/operations"
@@ -104,9 +107,13 @@ def _now() -> str:
 
 
 def page_type_of(pdf: bytes) -> str:
-    """The document type the stand-in gives a PDF: by the headings in its text."""
+    """The document type the stand-in gives a PDF: by the headings a reader sees on it."""
     with pymupdf.open(stream=pdf, filetype="pdf") as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
-        text = "\n".join(str(page.get_text()) for page in document)
+        text = "\n".join(
+            " ".join(word[0] for word in line)
+            for page in document
+            for line in words_of_page(document, page)["lines"]
+        )
     return classify_text(text).value
 
 

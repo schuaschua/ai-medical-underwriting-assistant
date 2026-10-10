@@ -27,6 +27,7 @@ from intake.adapters.language import (
 )
 from intake.adapters.migrations import bundled_head
 from intake.adapters.pdf import PdfPageSplitter
+from intake.adapters.read import DocumentRead, build_read_http, read_token_for
 from intake.adapters.redaction_db import SqlRedactionRepository
 from intake.adapters.telemetry import configure_telemetry, instrument_app
 from intake.domain.redaction import RedactionPorts
@@ -38,13 +39,14 @@ def create_app(
     *,
     dependencies: Dependencies | None = None,
     language: httpx.AsyncBaseTransport | None = None,
+    read: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build the app. The server uses the environment; unit tests pass fakes in.
 
     Without `dependencies` the real adapters are built: PostgreSQL, Blob
-    Storage and Azure AI Language as the settings describe them. Building
-    them opens no connection. `language` stands in for the Language endpoint
-    in tests.
+    Storage, Azure AI Language and Document Intelligence's read model as the
+    settings describe them. Building them opens no connection. `language`
+    and `read` stand in for those two endpoints in tests.
     """
     if settings is None:
         settings = get_settings()
@@ -52,6 +54,7 @@ def create_app(
 
     database = None
     redaction_service = None
+    reader = None
     if dependencies is None:
         database = build_database(settings)
         blobs = build_blob_service(settings)
@@ -63,6 +66,14 @@ def create_app(
             cases_url=container_url(blobs, settings.cases_container),
             poll_seconds=settings.language_poll_seconds,
             token=language_token_for(settings),
+        )
+        reader = DocumentRead(
+            build_read_http(settings, read),
+            api_version=settings.read_api_version,
+            model=settings.read_model,
+            poll_seconds=settings.read_poll_seconds,
+            max_retries=settings.read_max_retries,
+            token=read_token_for(settings),
         )
         redactions = SqlRedactionRepository(database)
         dependencies = Dependencies(
@@ -80,6 +91,7 @@ def create_app(
                     settings.thumbnail_max_height_px,
                     settings.max_pages,
                 ),
+                reader=reader,
             ),
             upload_deadline_seconds=settings.upload_deadline_seconds,
             redaction_categories=tuple(settings.redaction_categories),
@@ -94,6 +106,8 @@ def create_app(
         yield
         if redaction_service is not None:
             await redaction_service.aclose()
+        if reader is not None:
+            await reader.aclose()
         if database is not None:
             await database.dispose()
 

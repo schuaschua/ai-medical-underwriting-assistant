@@ -1,7 +1,9 @@
-"""Story 1.7: the Language REST adapter, the PDF reader and the settings.
+"""Story 1.7: the Language and read model REST adapters, the PDF adapter and the settings.
 
-Unit tests: no network, no Azure. Azure AI Language is a transport that
-answers in the service's REST shape.
+Unit tests: no network, no Azure. Azure AI Language and Document
+Intelligence are transports that answer in the services' REST shapes. One
+test feeds a trimmed copy of what the real services answered in the Azure
+session of 2026-10-10 (`fixtures/read-real-page-1.json`, synthetic data).
 """
 
 import asyncio
@@ -12,8 +14,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pymupdf
 import pytest
+from pydantic import ValidationError
 
+from contracts.text import MASK_TOKEN_PATTERN, find_quote
 from intake.adapters.blob import BlobOriginalStore
 from intake.adapters.db import EntraToken
 from intake.adapters.language import (
@@ -22,16 +27,23 @@ from intake.adapters.language import (
     language_token_for,
 )
 from intake.adapters.pdf import PdfPageSplitter
-from intake.domain.entities import JobOutput
+from intake.adapters.read import DocumentRead, pages_of, read_token_for
+from intake.domain.entities import JobOutput, LayerWord, PageSheet
 from intake.domain.ports import RedactionJobError
+from intake.domain.reading import page_reading
+from intake.domain.redaction import mask_names
 from intake.settings import Settings
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 CASES_DIR = REPOSITORY_ROOT / "data" / "cases"
+REAL_ANSWERS = Path(__file__).parent / "fixtures" / "read-real-page-1.json"
 ENDPOINT = "https://lang-aiuw-demo-wus3.cognitiveservices.azure.com"
+READ_ENDPOINT = "https://di-aiuw-demo-wus3.cognitiveservices.azure.com"
+RESULT_ID = "1b2c3d4e-0000-1111-2222-333333333333"
 ORIGINALS = "https://staiuwdemowus3.blob.core.windows.net/originals"
 CASES_URL = "https://staiuwdemowus3.blob.core.windows.net/cases"
 CASE_ID = "01999999-0000-7000-8000-000000000001"
+OTHER_CASE_ID = "01999999-0000-7000-8000-000000000002"
 JOB_ID = "c0ffee00-1111-2222-3333-444444444444"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -265,6 +277,20 @@ def test_story_1_7_a_job_that_does_not_end_with_usable_files_is_an_error() -> No
             ),
             "job_output_outside_case",
         ),
+        # Another case's blob is never read, copied or removed as this
+        # case's: output under another case's prefix, or under none, is refused.
+        *(
+            (
+                httpx.Response(200, json=job_state("succeeded", location, OUTPUT[1])),
+                "job_output_outside_case",
+            )
+            for location in (
+                f"{CASES_URL}/{OTHER_CASE_ID}/doc.pdf",
+                f"{CASES_URL}/doc.pdf",
+                f"{CASES_URL}/{CASE_ID}/../{OTHER_CASE_ID}/doc.pdf",
+                f"{CASES_URL}/{CASE_ID}/",
+            )
+        ),
     ]:
         service = FakeService(states=[state])
 
@@ -272,28 +298,6 @@ def test_story_1_7_a_job_that_does_not_end_with_usable_files_is_an_error() -> No
             asyncio.run(service.adapter().output(JOB_ID, CASE_ID))
 
         assert raised.value.reason == reason
-
-
-def test_story_1_7_output_under_another_cases_prefix_is_refused() -> None:
-    other = "01999999-0000-7000-8000-000000000002"
-    for location in (
-        f"{CASES_URL}/{other}/doc.pdf",
-        f"{CASES_URL}/doc.pdf",
-        f"{CASES_URL}/{CASE_ID}/../{other}/doc.pdf",
-        f"{CASES_URL}/{CASE_ID}/",
-    ):
-        service = FakeService(
-            states=[
-                httpx.Response(200, json=job_state("succeeded", location, OUTPUT[1]))
-            ]
-        )
-        with pytest.raises(RedactionJobError) as raised:
-            asyncio.run(service.adapter().output(JOB_ID, CASE_ID))
-        # Another case's blob is never read, copied or removed as this case's.
-        assert raised.value.reason == "job_output_outside_case", location
-
-
-# --- Settings ------------------------------------------------------------------------
 
 
 # --- No code reads an original ---------------------------------------------
@@ -318,10 +322,10 @@ def test_story_1_7_nothing_in_the_service_can_read_an_original() -> None:
     assert blob.index("class BlobCaseFiles") < blob.index("download_blob")
 
 
-# --- The one reading of each page (AD-14) ----------------------------------------------
+# --- The sheets of the redacted PDF (AD-14) --------------------------------------------
 
 
-def test_story_1_7_each_page_is_read_once_into_text_word_boxes_and_a_thumbnail() -> (
+def test_story_1_7_each_page_of_the_pdf_is_a_sheet_with_its_size_picture_and_layer_words() -> (
     None
 ):
     pdf = (CASES_DIR / "case-003.pdf").read_bytes()
@@ -330,23 +334,262 @@ def test_story_1_7_each_page_is_read_once_into_text_word_boxes_and_a_thumbnail()
 
     assert len(pages) == 4
     first, blank, rotated, _ = pages
-    # One text per page, with a box per word and offsets into that text.
-    assert "Life Insurance Application Form" in first.text
-    assert len(first.words) == len(first.text.split())
-    assert [first.text[w.char_start : w.char_end] for w in first.words] == (
-        first.text.split()
-    )
+    # What the file's own text layer holds, where it is on the page: of a
+    # redacted PDF that is the masks' labels. No page text is made of it.
+    assert not hasattr(first, "text")
+    assert [word.text for word in first.layer_words[:3]] == [
+        "Example",
+        "Mutual",
+        "Life",
+    ]
     for page in pages:
-        for word in page.words:
+        for word in page.layer_words:
             assert 0 <= word.x0 <= word.x1 <= page.width
             assert 0 <= word.y0 <= word.y1 <= page.height
         assert page.thumbnail.startswith(PNG_SIGNATURE)
         # PNG: the width is the first field of the header chunk.
         assert int.from_bytes(page.thumbnail[16:20]) == 200
-    # A blank page has no text and no boxes, and still a picture.
-    assert (blank.text, blank.words) == ("", ())
+    # A blank page has no words, and still a picture.
+    assert blank.layer_words == ()
     # A page turned on its side is given as it is shown: wider than high,
-    # with its boxes turned with it.
+    # with its words turned with it.
     assert (rotated.width, rotated.height) == (842.0, 595.0)
-    assert rotated.words
-    assert max(word.x1 for word in rotated.words) > 595.0
+    assert max(word.x1 for word in rotated.layer_words) > 595.0
+
+
+# --- The read model, over REST (AD-14) --------------------------------------------------
+
+
+def _read_adapter(
+    answers: list[httpx.Response],
+    requests: list[httpx.Request],
+    slept: list[float],
+    token: EntraToken | None = None,
+) -> DocumentRead:
+    """The adapter on a transport that answers each call from a script; the last answer repeats."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    return DocumentRead(
+        httpx.AsyncClient(
+            base_url=READ_ENDPOINT, transport=httpx.MockTransport(handle)
+        ),
+        api_version="2024-11-30",
+        model="prebuilt-read",
+        poll_seconds=0.5,
+        max_retries=2,
+        token=token,
+        sleep=sleep,
+    )
+
+
+def test_story_1_7_the_redacted_pdf_is_sent_to_the_read_model_with_the_identity_and_read_when_done(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    real = json.loads(REAL_ANSWERS.read_text())["read"]
+    accepted = httpx.Response(
+        202,
+        headers={
+            "operation-location": f"{READ_ENDPOINT}/documentintelligence/documentModels/"
+            f"prebuilt-read/analyzeResults/{RESULT_ID}?api-version=2024-11-30"
+        },
+    )
+    requests: list[httpx.Request] = []
+    slept: list[float] = []
+    credential = FakeCredential()
+    adapter = _read_adapter(
+        [
+            # Refused for now, with a wait named: the submit is sent again.
+            httpx.Response(429, headers={"retry-after": "2"}),
+            accepted,
+            httpx.Response(200, json={"status": "running"}),
+            httpx.Response(503),
+            httpx.Response(200, json=real),
+        ],
+        requests,
+        slept,
+        EntraToken(credential, scope=COGNITIVE_SERVICES_SCOPE),
+    )
+
+    with caplog.at_level("DEBUG"):
+        (page,) = asyncio.run(adapter.read(b"%PDF-1.7 the redacted file"))
+
+    submit = requests[1]
+    assert (submit.method, submit.url.path) == (
+        "POST",
+        "/documentintelligence/documentModels/prebuilt-read:analyze",
+    )
+    # The PDF itself is the body: the service is given no way into storage.
+    assert submit.headers["content-type"] == "application/pdf"
+    assert submit.content == b"%PDF-1.7 the redacted file"
+    assert {request.url.path for request in requests[2:]} == {
+        f"/documentintelligence/documentModels/prebuilt-read/analyzeResults/{RESULT_ID}"
+    }
+    assert credential.scopes == ["https://cognitiveservices.azure.com/.default"]
+    for request in requests:
+        assert request.url.params["api-version"] == "2024-11-30"
+        assert request.headers["authorization"] == "Bearer entra-token-value"
+        assert "ocp-apim-subscription-key" not in request.headers
+    # The waits: what the service asked for, then the setting between looks.
+    assert slept == [2.0, 0.5, 0.5]
+    # The real answer's page: inches, not turned, lines of words in reading order.
+    assert (page.page_number, page.angle, page.width) == (1, 0.0, 8.2639)
+    assert [word.content for word in page.lines[1]] == ["Full", "name"]
+    assert [[word.content for word in line] for line in page.lines[2:4]] == [
+        ["PER"],
+        ["1"],
+    ]
+    # Logs: an id and counts; nothing the page says.
+    assert f"redacted document read: result_id={RESULT_ID} pages=1" in caplog.text
+    assert "Applicant" not in caplog.text and "entra-token-value" not in caplog.text
+
+    # An analysis that fails, an answer that is not a result, and a service
+    # that stays away each end the reading with a code, never with no text.
+    for answers, reason, calls_made in (
+        (
+            [
+                accepted,
+                httpx.Response(
+                    200,
+                    json={
+                        "status": "failed",
+                        "error": {"code": "InvalidContent", "message": "secret"},
+                    },
+                ),
+            ],
+            "read_failed_InvalidContent",
+            2,
+        ),
+        (
+            [accepted, httpx.Response(200, json={"status": "succeeded"})],
+            "read_result_missing",
+            2,
+        ),
+        (
+            [
+                accepted,
+                httpx.Response(
+                    200,
+                    json={"status": "succeeded", "analyzeResult": {"pages": [{}]}},
+                ),
+            ],
+            "read_result_malformed",
+            2,
+        ),
+        ([httpx.Response(401)], "read_submit_status_401", 1),
+        # Sent again twice, as the setting says, and no more.
+        ([httpx.Response(503)], "read_submit_status_503", 3),
+        # Five looks in a row without an answer end it.
+        ([accepted, httpx.Response(500)], "read_poll_status_500", 6),
+    ):
+        calls: list[httpx.Request] = []
+        with pytest.raises(RedactionJobError) as raised:
+            asyncio.run(_read_adapter(answers, calls, []).read(b"%PDF"))
+        assert (raised.value.reason, len(calls)) == (reason, calls_made)
+
+    # The settings: the real account over TLS with the identity, or the
+    # stand-in on loopback, which is sent no token.
+    in_azure = Settings(read_endpoint=READ_ENDPOINT, read_entra_auth=True)
+    assert isinstance(read_token_for(in_azure), EntraToken)
+    assert (in_azure.read_model, in_azure.read_api_version) == (
+        "prebuilt-read",
+        "2024-11-30",
+    )
+    assert read_token_for(Settings(read_endpoint="http://127.0.0.1:5102")) is None
+    for refused in (
+        {"read_endpoint": READ_ENDPOINT},
+        {"read_endpoint": "http://di.example.com"},
+        {"read_endpoint": "http://127.0.0.1:5102", "read_entra_auth": True},
+        {"read_endpoint": READ_ENDPOINT, "read_entra_auth": True, "read_model": "a/b"},
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**refused)
+
+
+# --- From the read model's answer to the stored page (AD-14, AD-21) ---------------------
+
+
+def test_story_1_7_the_real_read_answer_becomes_page_text_with_mask_tokens_and_boxes_on_the_page() -> (
+    None
+):
+    real = json.loads(REAL_ANSWERS.read_text())
+    # The redacted page as the real service wrote it: one picture, and a
+    # text layer of nothing but each mask's label and number.
+    with pymupdf.open() as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        document.new_page(width=595, height=842)
+        (blank,) = asyncio.run(
+            PdfPageSplitter(thumbnail_width_px=100).split(document.tobytes())
+        )
+    sheet = PageSheet(
+        width=blank.width,
+        height=blank.height,
+        thumbnail=blank.thumbnail,
+        layer_words=tuple(LayerWord(*word) for word in real["layer_words"]),
+    )
+    names = mask_names(json.dumps(real["result_file"]).encode())
+    (read,) = pages_of(real["read"]["analyzeResult"])
+
+    page = page_reading(read, sheet, names)
+
+    # The read model gave the masks as `PER` and `1`, `ADR2`, `EML4` and `4`,
+    # `PHN5`, `PHHealth` (a mask drawn over the heading's number), `DrPER®`
+    # and `PHN1` with `.7`. Each is one token of the contracts' shape, named
+    # by the result file; the text beside a mask is kept.
+    assert page.text == (
+        "1. Applicant\nFull name\n[Person]\nDate of birth\n1974-03-18\n"
+        "Home address\n[Address]\nEmail\n[Email]\n"
+        "National identity number\n000-12-3456\nPolicy number\n[PhoneNumber]\n"
+        "[PhoneNumber] Health declaration\nCondition\n"
+        "Type 2 diabetes mellitus, diagnosed 2019-05-06\n"
+        "3. Attending physician\nPhysician\nDr [Person] Exampleby\nPractice\n"
+        "Practice telephone\nExampleton Family Practice\n[PhoneNumber]"
+    )
+    assert re.findall(MASK_TOKEN_PATTERN, page.text) == [
+        "[Person]",
+        "[Address]",
+        "[Email]",
+        "[PhoneNumber]",
+        "[PhoneNumber]",
+        "[Person]",
+        "[PhoneNumber]",
+    ]
+    # Seven masks have their token; the eighth (the telephone, whose line
+    # the fixture leaves out) was not read, and is not made up.
+    assert (page.masks, page.masks_unread) == (7, 1)
+    assert not re.search(r"PER|ADR|EML|PHN|®", page.text)
+    # A word per box, with offsets into the text, in PDF points on the page.
+    assert [page.text[word.char_start : word.char_end] for word in page.words] == (
+        page.text.split()
+    )
+    for word in page.words:
+        assert 0 <= word.x0 <= word.x1 <= sheet.width
+        assert 0 <= word.y0 <= word.y1 <= sheet.height
+    # A token's box is its mask's own: label and number together, as the
+    # redacted PDF places them.
+    person = next(
+        word
+        for word in page.words
+        if page.text[word.char_start : word.char_end] == "[Person]"
+    )
+    assert (person.x0, person.y0, person.x1, person.y1) == (
+        219.7,
+        141.09,
+        242.38,
+        155.0,
+    )
+    # A line of the form is found by the quote finder where it reads, and its
+    # words lie in the row it stands in (inches to points: 72 to the inch).
+    found = find_quote(page.text, "Type 2 diabetes mellitus, diagnosed 2019-05-06")
+    assert found is not None
+    quoted = [word for word in page.words if found.start <= word.char_start < found.end]
+    assert len(quoted) == 6
+    assert quoted[0].x0 == pytest.approx(219.6, abs=1.0)
+    assert all(424 <= word.y0 < word.y1 <= 438 for word in quoted)
+    # The result file's found text is never read: names only.
+    assert "text" not in real["result_file"]["entities"][0]
+    assert names.category_of_entity[("PER", "1")] == "Person"

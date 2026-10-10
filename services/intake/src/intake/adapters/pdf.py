@@ -1,8 +1,14 @@
-"""PDF adapter: the one reading of each page of a redacted PDF (AD-14).
+"""PDF adapter: each page of a redacted PDF as a sheet (AD-14).
 
-The page text, a box for every word of it and a thumbnail, all from the same
-file; and one page of that file as a PDF of its own (story 4.2). It is only
-ever given the redacted PDF (AD-21).
+The page's size, a thumbnail and the words of the file's own text layer; and
+one page of that file as a PDF of its own (story 4.2). It is only ever given
+the redacted PDF (AD-21).
+
+It does not give the page text. The redaction service writes every page as
+one picture, and the only text it leaves in the file is the label of each
+mask with its number (seen in the Azure session of 2026-10-10). The page
+text is read from the pictures by the read model (`adapters/read.py`); the
+layer's words say where the masks are and nothing else.
 """
 
 import asyncio
@@ -11,7 +17,7 @@ import pymupdf
 from opentelemetry import trace
 
 from intake.adapters.telemetry import adapter_span
-from intake.domain.entities import PageReading, Word
+from intake.domain.entities import LayerWord, PageSheet
 from intake.domain.ports import RedactionJobError
 from intake.settings import APP_ID
 
@@ -22,64 +28,39 @@ MAX_PAGES = 200
 THUMBNAIL_MAX_HEIGHT_PX = 1280
 
 # The fields of one entry of PyMuPDF's "words" extraction.
-_X0, _Y0, _X1, _Y1, _TEXT, _BLOCK, _LINE = range(7)
-
-
-def _clamp(value: float, limit: float) -> float:
-    return min(max(value, 0.0), limit)
+_X0, _Y0, _X1, _Y1, _TEXT = range(5)
 
 
 def read_page(
     page: pymupdf.Page,
     thumbnail_width_px: int,
     thumbnail_max_height_px: int = THUMBNAIL_MAX_HEIGHT_PX,
-) -> PageReading:
-    """Read one page: words in reading order, joined into the page's text.
+) -> PageSheet:
+    """One page as a sheet: its size as shown, its picture, its text layer's words.
 
-    Words of a line are joined by a space and lines by a line break, and each
-    word keeps the offsets of its characters in that text. Boxes are given
-    as the page is shown: for a rotated page they are turned with it.
+    The words are given in the order the file holds them, a mask's label
+    before its number, and where they are on the page as it is shown: for a
+    rotated page they are turned with it.
     """
     shown = page.rect
     # PyMuPDF reports text where it sits on the unrotated sheet.
     to_shown = page.rotation_matrix
-    parts: list[str] = []
-    words: list[Word] = []
-    length = 0
-    line: tuple[int, int] | None = None
-    for entry in page.get_text("words", sort=True):  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+    words: list[LayerWord] = []
+    for entry in page.get_text("words"):  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
         text = str(entry[_TEXT])
         if not text:
             continue
-        this_line = (int(entry[_BLOCK]), int(entry[_LINE]))
-        if parts:
-            separator = " " if this_line == line else "\n"
-            parts.append(separator)
-            length += len(separator)
-        line = this_line
         box = pymupdf.Rect(entry[_X0], entry[_Y0], entry[_X1], entry[_Y1]) * to_shown  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
         box.normalize()
-        words.append(
-            Word(
-                char_start=length,
-                char_end=length + len(text),
-                x0=_clamp(box.x0, shown.width),
-                y0=_clamp(box.y0, shown.height),
-                x1=_clamp(box.x1, shown.width),
-                y1=_clamp(box.y1, shown.height),
-            )
-        )
-        parts.append(text)
-        length += len(text)
+        words.append(LayerWord(text, box.x0, box.y0, box.x1, box.y1))
     # As wide as asked, unless that makes a very long page too high.
     zoom = min(thumbnail_width_px / shown.width, thumbnail_max_height_px / shown.height)
     picture = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
-    return PageReading(
-        text="".join(parts),
+    return PageSheet(
         width=shown.width,
         height=shown.height,
-        words=tuple(words),
         thumbnail=picture.tobytes("png"),  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        layer_words=tuple(words),
     )
 
 
@@ -88,8 +69,8 @@ def read_pages(
     thumbnail_width_px: int,
     thumbnail_max_height_px: int = THUMBNAIL_MAX_HEIGHT_PX,
     max_pages: int = MAX_PAGES,
-) -> list[PageReading]:
-    """Read every page of a PDF, in document order. A file that is not a PDF raises.
+) -> list[PageSheet]:
+    """Every page of a PDF as a sheet, in document order. A file that is not a PDF raises.
 
     A document of more than `max_pages` pages is refused before any page is
     rendered: the redaction then fails with that reason.
@@ -106,7 +87,7 @@ def read_pages(
 def cut_page(pdf: bytes, page_number: int) -> bytes | None:
     """One page of a PDF as a one-page PDF; None when the file has no such page.
 
-    The page is copied as it is: its text layer, its pictures and its
+    The page is copied as it is: its picture, its mask labels and its
     rotation. Nothing is drawn again, so what redaction masked stays masked
     and nothing it removed comes back.
     """
@@ -131,7 +112,7 @@ class PdfPageSplitter:
     ) -> None:
         self._limits = (thumbnail_width_px, thumbnail_max_height_px, max_pages)
 
-    async def split(self, pdf: bytes) -> list[PageReading]:
+    async def split(self, pdf: bytes) -> list[PageSheet]:
         with adapter_span(tracer, "intake.pdf.split_pages"):
             # Rendering is CPU work: off the event loop.
             return await asyncio.to_thread(read_pages, pdf, *self._limits)

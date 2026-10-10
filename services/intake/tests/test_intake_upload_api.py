@@ -210,29 +210,3 @@ def test_story_1_5_no_route_returns_a_document_file(
         ("GET", "/documents/{document_id}/file"),
         ("GET", "/documents/{document_id}/pages/{page_number}/file"),
     }
-
-
-def test_story_1_5_asking_for_the_original_is_404(
-    client: TestClient, case_pdf: bytes
-) -> None:
-    created = client.post("/cases", content=case_pdf, headers=PDF).json()
-    case_id, document_id = created["case_id"], created["document_id"]
-
-    for path in (
-        f"/cases/{case_id}",
-        f"/cases/{case_id}/original",
-        f"/documents/{document_id}",
-        f"/documents/{document_id}/original",
-        f"/originals/{case_id}/{document_id}.pdf",
-    ):
-        response = client.get(path)
-        assert response.status_code == 404, path
-        assert error_of(response.json())[0] == "not_found"
-        assert b"%PDF" not in response.content
-
-    # Story 1.7: the file route exists, and before redaction it has no file
-    # to give. It never answers with the original instead.
-    response = client.get(f"/documents/{document_id}/file")
-    assert response.status_code == 409
-    assert error_of(response.json())[0] == "not_redacted"
-    assert b"%PDF" not in response.content

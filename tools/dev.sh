@@ -54,7 +54,8 @@ npm --prefix "$spa" run build
 # embedding model) and for Document
 # Intelligence's layout model, on loopback. They are dev tools: no service
 # image holds them, and Azure uses the real services. Their ports are the ones
-# dapr.yaml gives intake (INTAKE_LANGUAGE_ENDPOINT), classification
+# dapr.yaml gives intake (INTAKE_LANGUAGE_ENDPOINT, and INTAKE_READ_ENDPOINT
+# for the read model, which the layout stand-in answers), classification
 # (CLASSIFICATION_MODEL_ENDPOINT), extraction (EXTRACTION_MODEL_ENDPOINT),
 # retrieval (RETRIEVAL_MODEL_ENDPOINT) and verdict (VERDICT_MODEL_ENDPOINT),
 # and the ones tools/ingest-local.sh gives the ingestion job. The stand-in for
@@ -104,7 +105,8 @@ language_standin=$!
 uv run python -m synthdata.foundry_standin --port "$model_port" \
   --mode "${FOUNDRY_STANDIN_MODE:-ok}" &
 model_standin=$!
-# The layout stand-in also answers for Document Intelligence's custom
+# The layout stand-in also answers for Document Intelligence's read model,
+# which intake has read every redacted PDF, and for its custom
 # classifier (story 4.2), which tools/train-local.sh trains once the
 # application runs. CLASSIFIER_STANDIN_MODE picks what it does with a page
 # (README, 'Run locally'): `unsure` sends every page of a case started with
@@ -118,8 +120,9 @@ uv run python -m synthdata.search_standin --port "$search_port" \
   --mode "${SEARCH_STANDIN_MODE:-ok}" &
 search_standin=$!
 
-# Without the Language stand-in every case would fail at redaction, and
-# without the model's at classification: wait until each listens, and stop
+# Without the Language stand-in, or the layout stand-in that reads the
+# redacted PDF, every case would fail at redaction, and without the model's
+# at classification: wait until each listens, and stop
 # here if one does not.
 wait_for_standin() {
   local name="$1" pid="$2" port="$3"

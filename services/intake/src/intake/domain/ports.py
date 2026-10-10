@@ -9,8 +9,9 @@ from intake.domain.entities import (
     Document,
     JobOutput,
     NewPage,
-    PageReading,
     PageRecord,
+    PageSheet,
+    ReadPage,
     Redaction,
     Word,
 )
@@ -114,12 +115,33 @@ class CaseFiles(Protocol):
 
 
 class PageSplitter(Protocol):
-    async def split(self, pdf: bytes) -> list[PageReading]:
-        """Read a PDF page by page, in document order (AD-14)."""
+    async def split(self, pdf: bytes) -> list[PageSheet]:
+        """A redacted PDF page by page, in document order: sizes, pictures, mask labels.
+
+        Not the page text: the redacted PDF holds none (see `PageReader`).
+        """
         ...
 
     async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
         """One page of a PDF as a PDF of its own; None when it has no such page."""
+        ...
+
+
+class PageReader(Protocol):
+    """Document Intelligence's read model: the text of a redacted PDF, by OCR (AD-14).
+
+    The redaction service writes each page as one picture, so the page text
+    and the word places come from this reading. It is only ever given the
+    redacted PDF (AD-21).
+    """
+
+    async def read(self, pdf: bytes) -> list[ReadPage]:
+        """Read a whole PDF once; its pages in document order.
+
+        Raises `RedactionJobError` if the service cannot be reached, the
+        analysis fails or its answer is not usable. It waits as long as the
+        analysis runs: the caller sets the deadline.
+        """
         ...
 
 

@@ -17,9 +17,12 @@ from intake.domain.entities import (
     Case,
     Document,
     JobOutput,
+    LayerWord,
     NewPage,
-    PageReading,
     PageRecord,
+    PageSheet,
+    ReadPage,
+    ReadWord,
     Redaction,
     Word,
 )
@@ -147,38 +150,66 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\n-synthetic-thumbnail"
 PDF_BYTES = b"%PDF-1.7 synthetic redacted file"
 
 
+# The label the service draws for each category.
+MASK_LABELS = {"Person": "PER", "PhoneNumber": "PHN", "Email": "EML", "Address": "ADR"}
+
+
 def result_file(*categories: str) -> bytes:
-    """A redaction result file as the service lays it out: one entity per item."""
+    """A redaction result file as the service lays it out: one entry per entity found."""
     return json.dumps(
         {
-            "results": {
-                "documents": [
-                    {
-                        "id": "1",
-                        "entities": [
-                            # `text` is what a real file might hold: it must never be copied.
-                            {"category": category, "text": "secret-found-value"}
-                            for category in categories
-                        ],
-                    }
-                ]
-            }
+            "id": "1",
+            "entities": [
+                {
+                    "type": category,
+                    "entityId": str(number),
+                    "mask": MASK_LABELS[category],
+                    # `text` is what a real file holds: it must never be copied.
+                    "text": "secret-found-value",
+                }
+                for number, category in enumerate(categories, start=1)
+            ],
+            "warnings": [],
         }
     ).encode()
 
 
-def reading(text: str = "Patient [Person]\nAge 52 years") -> PageReading:
-    """One page as the splitter reads it: every word of `text`, with a box."""
-    words: list[Word] = []
-    position = 0
-    for number, word in enumerate(text.split()):
-        start = text.index(word, position)
-        position = start + len(word)
-        words.append(
-            Word(start, position, 10.0 * number, 20.0, 10.0 * number + 8.0, 30.0)
-        )
-    return PageReading(
-        text=text, width=595.0, height=842.0, words=tuple(words), thumbnail=PNG_BYTES
+def sheet(*layer_words: LayerWord) -> PageSheet:
+    """One page of the redacted PDF as the splitter gives it: A4, a picture, its mask labels."""
+    return PageSheet(
+        width=595.0, height=842.0, thumbnail=PNG_BYTES, layer_words=layer_words
+    )
+
+
+# The mask of the first page: the label `PER` with its raised number, as the
+# redacted PDF's text layer holds them, in PDF points.
+MASK_ON_PAGE = (
+    LayerWord("PER", 144.0, 72.0, 165.0, 84.0),
+    LayerWord("1", 165.0, 69.0, 169.0, 76.0),
+)
+
+
+def read_page(page_number: int, *lines: tuple[ReadWord, ...]) -> ReadPage:
+    """One page as the read model reads it: A4 in inches, not turned."""
+    return ReadPage(
+        page_number=page_number, angle=0.0, width=8.2639, height=11.6944, lines=lines
+    )
+
+
+def first_page_read() -> ReadPage:
+    """`Patient` and the mask, then `Age 52 years`: the mask read as `PER` and `1`."""
+    return read_page(
+        1,
+        (
+            ReadWord("Patient", 1.0, 1.0, 1.8, 1.17),
+            ReadWord("PER", 2.0, 1.0, 2.29, 1.17),
+            ReadWord("1", 2.29, 0.96, 2.35, 1.06),
+        ),
+        (
+            ReadWord("Age", 1.0, 1.4, 1.4, 1.57),
+            ReadWord("52", 2.0, 1.4, 2.2, 1.57),
+            ReadWord("years", 2.25, 1.4, 2.7, 1.57),
+        ),
     )
 
 
@@ -281,13 +312,15 @@ class FakeLanguage:
 
 @dataclass
 class FakeSplitter:
-    """Stands in for the PDF reader; it notes every file it was given."""
+    """Stands in for the PDF adapter; it notes every file it was given."""
 
-    pages: list[PageReading] = field(default_factory=lambda: [reading(), reading("")])
+    pages: list[PageSheet] = field(
+        default_factory=lambda: [sheet(*MASK_ON_PAGE), sheet()]
+    )
     fail: bool = False
     given: list[bytes] = field(default_factory=list)
 
-    async def split(self, pdf: bytes) -> list[PageReading]:
+    async def split(self, pdf: bytes) -> list[PageSheet]:
         self.given.append(pdf)
         if self.fail:
             raise StoreDown
@@ -296,6 +329,26 @@ class FakeSplitter:
     async def one_page(self, pdf: bytes, page_number: int) -> bytes | None:
         # The real cut: a test that asks for a page gives the fake a real PDF.
         return cut_page(pdf, page_number)
+
+
+@dataclass
+class FakeReader:
+    """Stands in for Document Intelligence's read model; it notes every file it was given."""
+
+    pages: list[ReadPage] = field(
+        default_factory=lambda: [first_page_read(), read_page(2)]
+    )
+    # "fail": the analysis fails. "hang": it never ends.
+    behaviour: str = "ok"
+    given: list[bytes] = field(default_factory=list)
+
+    async def read(self, pdf: bytes) -> list[ReadPage]:
+        self.given.append(pdf)
+        if self.behaviour == "hang":
+            await _never()
+        if self.behaviour == "fail":
+            raise RedactionJobError("read_failed")
+        return self.pages
 
 
 @dataclass
@@ -396,6 +449,7 @@ def memory_redaction(cases: MemoryCaseRepository | None = None) -> dict[str, Any
             language=FakeLanguage(files),
             files=files,
             splitter=FakeSplitter(),
+            reader=FakeReader(),
         ),
         "pages": repository,
     }

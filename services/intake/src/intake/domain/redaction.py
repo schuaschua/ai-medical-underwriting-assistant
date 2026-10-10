@@ -1,8 +1,11 @@
-"""Redact a case's document, then split it into pages (AD-21, AD-14, AD-6).
+"""Redact a case's document, then read and split it into pages (AD-21, AD-14, AD-6).
 
 The first stage `workflow` commands. Azure AI Language reads the original and
-writes a redacted PDF; from then on only that redacted PDF is read. Nothing
-here, or anywhere else in the service, falls back to the original.
+writes a redacted PDF; from then on only that redacted PDF is read. The
+service writes each page of it as one picture, so the page text comes from a
+second reading: Document Intelligence's read model is sent the redacted PDF
+(owner's decision of 2026-10-10). Nothing here, or anywhere else in the
+service, falls back to the original.
 """
 
 import asyncio
@@ -23,6 +26,7 @@ from contracts.models.intake import RedactionCommand, RedactionResult
 from contracts.operations import JSON, PDF, PNG
 from intake.domain.entities import (
     Document,
+    MaskNames,
     NewPage,
     PageRecord,
     case_prefix,
@@ -32,11 +36,13 @@ from intake.domain.entities import (
 )
 from intake.domain.ports import (
     CaseFiles,
+    PageReader,
     PageSplitter,
     RedactionJobError,
     RedactionRepository,
     RedactionService,
 )
+from intake.domain.reading import page_reading
 from intake.domain.upload import utc_now
 
 logger = logging.getLogger(__name__)
@@ -50,9 +56,14 @@ NOT_RECORDED_MESSAGE = "The redaction could not be recorded. Please try again."
 
 # What a category is called in the service's result: a name, never a found value.
 _CATEGORY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.]{0,63}")
+# A mask's label (`PER`) and an entity's number: short names, never found values.
+_MASK_LABEL = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}")
+_ENTITY_ID = re.compile(r"[0-9]{1,9}")
 _ENTITIES = "entities"
 _CATEGORY = "category"
 _TYPE = "type"
+_MASK = "mask"
+_ENTITY_ID_KEY = "entityId"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +74,7 @@ class RedactionPorts:
     language: RedactionService
     files: CaseFiles
     splitter: PageSplitter
+    reader: PageReader
 
 
 @dataclass(slots=True)
@@ -83,19 +95,15 @@ class _Run:
         return self.document.case_id
 
 
-def count_categories(result_file: bytes) -> dict[str, int]:
-    """Count the redacted items per category in the service's result file.
-
-    Only category names are read (AD-8): never the text that was found, its
-    place or its score. A file that is not the expected JSON is an error.
-    """
+def _entities(result_file: bytes) -> list[object]:
+    """Every entry of every `entities` list in the service's result file."""
     try:
         parsed = json.loads(result_file)
     except ValueError:
         raise RedactionJobError("result_not_json") from None
     if not isinstance(parsed, dict):
         raise RedactionJobError("result_not_an_object")
-    counts: Counter[str] = Counter()
+    entities: list[object] = []
     pending: list[object] = [parsed]
     while pending:
         node = pending.pop()
@@ -104,11 +112,50 @@ def count_categories(result_file: bytes) -> dict[str, int]:
         elif isinstance(node, dict):
             for key, value in node.items():
                 if key == _ENTITIES and isinstance(value, list):
-                    for entity in value:
-                        counts[_category_of(entity)] += 1
+                    entities.extend(value)
                 else:
                     pending.append(value)
+    return entities
+
+
+def count_categories(result_file: bytes) -> dict[str, int]:
+    """Count the redacted items per category in the service's result file.
+
+    Only category names are read (AD-8): never the text that was found, its
+    place or its score. A file that is not the expected JSON is an error.
+    """
+    counts = Counter(_category_of(entity) for entity in _entities(result_file))
     return dict(sorted(counts.items()))
+
+
+def mask_names(result_file: bytes) -> MaskNames:
+    """What the result file says of the masks drawn on the pages: names only.
+
+    Each entity has the label its mask shows (`PER`), the number the mask
+    carries and its category (`Person`). An entity without a usable label is
+    passed over: its masks are then not told from the page. Never the text
+    that was found.
+    """
+    by_entity: dict[tuple[str, str], str] = {}
+    by_label: dict[str, set[str]] = {}
+    for entity in _entities(result_file):
+        label = entity.get(_MASK) if isinstance(entity, dict) else None
+        if not isinstance(label, str) or _MASK_LABEL.fullmatch(label) is None:
+            continue
+        category = _category_of(entity)
+        by_label.setdefault(label, set()).add(category)
+        number = entity.get(_ENTITY_ID_KEY) if isinstance(entity, dict) else None
+        if isinstance(number, str) and _ENTITY_ID.fullmatch(number) is not None:
+            by_entity[(label, number)] = category
+    return MaskNames(
+        category_of_entity=by_entity,
+        category_of_label={
+            label: next(iter(categories))
+            for label, categories in by_label.items()
+            if len(categories) == 1
+        },
+        labels=frozenset(by_label),
+    )
 
 
 def _category_of(entity: object) -> str:
@@ -187,7 +234,7 @@ async def redact_document(
     trace_id: str | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> RedactionResult:
-    """Redact the case's document and split it into pages; idempotent on `case_id`.
+    """Redact the case's document, read it and split it into pages; idempotent on `case_id`.
 
     The key row is inserted as running before any work. A repeat while it
     runs is `in_progress`; a repeat after the end is answered with the stored
@@ -224,8 +271,8 @@ async def redact_document(
             _fail(run, ErrorCode.STAGE_TIMEOUT, "stale", ports, now)
         )
 
-    # One deadline for everything: the job, the page split and the storing
-    # of the result.
+    # One deadline for everything: the job, the reading of the redacted
+    # PDF, the page split and the storing of the result.
     deadline = asyncio.timeout(deadline_seconds)
     try:
         async with deadline:
@@ -278,9 +325,20 @@ async def _redact_and_split(
     pdf = await ports.files.read(output.redacted_blob_name)
     result_file = await ports.files.read(output.result_blob_name)
     counts = count_categories(result_file)
-    readings = await ports.splitter.split(pdf)
-    if not readings:
+    names = mask_names(result_file)
+    sheets = await ports.splitter.split(pdf)
+    if not sheets:
         raise RedactionJobError("no_pages")
+    # The redacted PDF's pages are pictures: its text is read from them by
+    # the read model, once for the whole document. A reading that fails
+    # fails the redaction: no page is ever stored without its text.
+    read = sorted(await ports.reader.read(pdf), key=lambda page: page.page_number)
+    if [page.page_number for page in read] != list(range(1, len(sheets) + 1)):
+        raise RedactionJobError("read_page_count")
+    readings = [
+        page_reading(page, sheet, names)
+        for page, sheet in zip(read, sheets, strict=True)
+    ]
 
     # The files of record get names of our own under `<case_id>/`, wherever
     # in the container the service put them.
@@ -303,10 +361,12 @@ async def _redact_and_split(
             )
 
     pages: list[NewPage] = []
-    for number, reading in enumerate(readings, start=1):
+    for number, (sheet, reading) in enumerate(
+        zip(sheets, readings, strict=True), start=1
+    ):
         page_id = new_id()
         thumbnail_name = thumbnail_blob_name(case_id, page_id)
-        await ports.files.put(thumbnail_name, reading.thumbnail, PNG)
+        await ports.files.put(thumbnail_name, sheet.thumbnail, PNG)
         pages.append(
             NewPage(
                 record=PageRecord(
@@ -314,8 +374,8 @@ async def _redact_and_split(
                     case_id=case_id,
                     document_id=document.document_id,
                     page_number=number,
-                    width=reading.width,
-                    height=reading.height,
+                    width=sheet.width,
+                    height=sheet.height,
                     thumbnail_blob_name=thumbnail_name,
                 ),
                 text=reading.text,
@@ -338,18 +398,23 @@ async def _redact_and_split(
     for code, odd in (
         ("no_items_redacted", not counts),
         ("no_page_text", not any(page.text.strip() for page in pages)),
+        # A mask the read model saw nothing of has no token in the page text.
+        ("masks_unread", any(reading.masks_unread for reading in readings)),
     ):
         if odd:
             # Done all the same; a document like that deserves a look.
             logger.warning("redaction unusual: case_id=%s code=%s", case_id, code)
     logger.info(
         "document redacted: case_id=%s document_id=%s pages=%d items=%d "
-        "categories=%d duration_ms=%d",
+        "categories=%d words=%d masks=%d masks_unread=%d duration_ms=%d",
         case_id,
         document.document_id,
         len(pages),
         sum(counts.values()),
         len(counts),
+        sum(len(reading.words) for reading in readings),
+        sum(reading.masks for reading in readings),
+        sum(reading.masks_unread for reading in readings),
         int((time.monotonic() - run.started) * 1000),
     )
     return stored

@@ -65,7 +65,10 @@ model_deployments = {
     name          = "Cohere-rerank-v4.0-fast"
     model_name    = "Cohere-rerank-v4.0-fast"
     model_version = "1"
-    capacity      = 1
-    model_format  = "Cohere"
+    # Seen in the Azure session of 2026-10-10: one unit is 1 request and
+    # 1,000 tokens a minute, and a search with r4 sends about 20 chunks.
+    # 20 is the subscription's whole quota for this model.
+    capacity     = 20
+    model_format = "Cohere"
   }
 }

@@ -15,6 +15,7 @@ from azure.storage.blob import BlobServiceClient, ContainerClient
 from fastapi.testclient import TestClient
 from intake_fakes import (
     FakeLanguage,
+    FakeReader,
     FakeSplitter,
     MemoryCaseFiles,
     MemoryCaseRepository,
@@ -36,8 +37,10 @@ CASES_DIR = Path(__file__).resolve().parents[3] / "data" / "cases"
 FIXED_NOW = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
 # The emulator's built-in account; the SDK knows its address and key.
 EMULATOR = "UseDevelopmentStorage=true"
-# Where the Language stand-in is said to be; loopback, as the settings demand.
+# Where the Language stand-in and the read model's stand-in are said to be;
+# loopback, as the settings demand.
 LANGUAGE_ENDPOINT = "http://127.0.0.1:5100"
+READ_ENDPOINT = "http://127.0.0.1:5102"
 
 
 @pytest.fixture
@@ -87,6 +90,11 @@ def splitter() -> FakeSplitter:
 
 
 @pytest.fixture
+def reader() -> FakeReader:
+    return FakeReader()
+
+
+@pytest.fixture
 def redactions(repository: MemoryCaseRepository) -> MemoryRedactionRepository:
     return MemoryRedactionRepository(repository)
 
@@ -97,9 +105,14 @@ def ports(
     language: FakeLanguage,
     case_files: MemoryCaseFiles,
     splitter: FakeSplitter,
+    reader: FakeReader,
 ) -> RedactionPorts:
     return RedactionPorts(
-        repository=redactions, language=language, files=case_files, splitter=splitter
+        repository=redactions,
+        language=language,
+        files=case_files,
+        splitter=splitter,
+        reader=reader,
     )
 
 
@@ -157,6 +170,8 @@ def local_stack() -> Iterator[Settings]:
         # app a transport that leads to the stand-in.
         language_endpoint=LANGUAGE_ENDPOINT,
         language_poll_seconds=0.02,
+        read_endpoint=READ_ENDPOINT,
+        read_poll_seconds=0.01,
     )
     if not _listening(settings.database_host, settings.database_port) or not _listening(
         "127.0.0.1", 10000

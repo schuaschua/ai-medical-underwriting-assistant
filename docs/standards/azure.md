@@ -137,7 +137,7 @@ Placeholder until the `app` stack assigns them (story 1.3); the source is the ar
 | Monitoring Metrics Publisher | Application Insights | all seven runtime identities |
 | Storage Blob Data Contributor | One blob container | `intake` (`originals`, `cases`), Azure AI Language's own identity (`cases`) |
 | Storage Blob Data Reader | One blob container | `retrieval` (`manual`), `classification` (`classifier-training`), Azure AI Language's own identity (`originals`), Document Intelligence's own identity (`classifier-training`) |
-| Cognitive Services User | Azure AI Language, Document Intelligence or the Foundry account | `intake` (Language), `classification` and `retrieval` (Document Intelligence), Azure AI Search's own identity (Foundry account) |
+| Cognitive Services User | Azure AI Language, Document Intelligence or the Foundry account | `intake` (Language, and Document Intelligence for the read model that reads each redacted PDF), `classification` and `retrieval` (Document Intelligence), Azure AI Search's own identity (Foundry account) |
 | Foundry User | Foundry account (the services call the account's endpoint; a role on the project is refused there, seen 2026-10-10) | `classification`, `extraction`, `retrieval`, `verdict` |
 | Search Index Data Contributor, Search Service Contributor | Azure AI Search | `retrieval` |
 | Durable Task Data Contributor | Task hub | `workflow` |

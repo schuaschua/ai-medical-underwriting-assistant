@@ -99,6 +99,10 @@ def local_stack() -> Iterator[IntakeSettings]:
         # hand the app a transport to it and never use the network.
         language_endpoint=f"http://127.0.0.1:{DEFAULT_PORT}",
         language_poll_seconds=0.02,
+        # The read model of Document Intelligence, which reads the redacted
+        # PDF: the same stand-in as the layout model's, on its port.
+        read_endpoint=f"http://127.0.0.1:{LAYOUT_PORT}",
+        read_poll_seconds=0.01,
     )
     if not _listening(settings.database_host, settings.database_port) or not _listening(
         "127.0.0.1", 10000

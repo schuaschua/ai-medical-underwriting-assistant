@@ -1,6 +1,7 @@
 """Read what redaction stored: pages, their text and words, thumbnails and the file (AD-14).
 
-Every read here is of the redacted PDF or of something made from it. No
+Every read here is of the redacted PDF or of something made from it: the
+page text and the words are what the read model read from that PDF. No
 function reads an original (AD-21).
 """
 
@@ -73,7 +74,7 @@ async def list_pages(case_id: str, *, repository: PageRepository) -> PageList:
 
 
 async def read_page_text(page_id: str, *, repository: PageRepository) -> PageText:
-    """The one stored text of a page, read from the redacted PDF."""
+    """The one stored text of a page, as the read model read it from the redacted PDF."""
     page = await _known_page(page_id, repository)
     text = await repository.page_text(page_id)
     if text is None:

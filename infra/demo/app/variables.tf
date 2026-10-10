@@ -580,6 +580,11 @@ variable "language_api_version" {
   type        = string
 }
 
+variable "read_api_version" {
+  description = "API version of Document Intelligence's read model, which reads the page text from each redacted PDF for intake (spine AD-14): the redaction service writes every page as a picture."
+  type        = string
+}
+
 variable "redaction_categories" {
   description = "The PII categories redaction removes, by Azure AI Language's category names (spine AD-21). Dates, ages and medical terms are kept by not being listed."
   type        = list(string)

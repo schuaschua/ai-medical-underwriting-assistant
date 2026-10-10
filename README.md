@@ -103,10 +103,26 @@ the screen reads again every few seconds. If the case cannot be started, it is l
 not started, with a button to try again; the document is not sent a second time.
 
 A started case is redacted first: `workflow` commands `intake`, which has Azure AI Language mask
-person names, addresses, phone numbers, email addresses, and identity and policy numbers with tokens
-such as `[Person]` (dates, ages and medical terms are kept), stores the redacted PDF as the document
-of record and splits it into pages, each with its text, a box per word and a thumbnail. From then on
-only the redacted PDF is read; no route serves the original. If redaction fails or takes longer than
+person names, addresses, phone numbers, email addresses, and identity and policy numbers (dates, ages
+and medical terms are kept), stores the redacted PDF as the document of record and splits it into
+pages, each with its text, a box per word and a thumbnail. From then on only the redacted PDF is
+read; no route serves the original.
+
+The redacted PDF that Azure AI Language writes has no text layer: every page is one picture, each
+mask is drawn on it as a short label with a small raised number (`PER` and `1` for the first person
+found), and the only text left in the file is those labels and numbers (seen in the Azure session of
+2026-10-10). So the page text is read from the pictures (owner's decision of 2026-10-10): after the
+redaction job `intake` sends the redacted PDF, never the original, once to Document Intelligence's
+read model (`prebuilt-read`) and stores what it reads. The lines are kept in the order the model
+gives them, which is reading order also on a page that lies on its side; each word's box is the
+bounds of the corners the model gives, turned from inches into PDF points of the page as it is
+shown. A mask becomes one token in square brackets, such as `[Person]`, with one box. Where the mask
+is and which entity it stands for is taken from the redacted PDF's own text layer (the label and its
+number, at their place), and what the label means from the redaction's result file (`PER` is
+`Person`); the read model's version of a mask (`PER 1`, `ADR2`, `PER®`) is replaced by the token and
+never trusted. Nothing after `intake` changes: the page text, the boxes and the mask tokens have the
+shapes they had. If the reading fails, the redaction fails (`redaction_failed`): no page is stored
+without its text. The job and the reading share the one deadline. If redaction fails or takes longer than
 180 seconds the case is shown as failed, with a message asking for the document to be uploaded again.
 
 Once a case is redacted, every page is classified: `workflow` sends `classification` one command per
@@ -487,7 +503,14 @@ so Compare on a real case is a check of the final Azure session
 The Azure environment is down while the stories are built, so locally Azure AI Language is a stand-in:
 `uv run python -m synthdata.language_standin` (started by `./tools/dev.sh` on port 5100). It speaks
 the service's REST job routes, reads the original from the blob emulator and writes the redacted PDF
-and a result file back. It finds email addresses, phone numbers, identity numbers and policy numbers
+and a result file back, in the shapes of the real service: a PDF with one picture per page, the masks
+drawn as a label and a number, and no text but those. The read model is a stand-in as well, on the
+Document Intelligence stand-in's port 5102 (`INTAKE_READ_ENDPOINT` in `dapr.yaml`). It cannot read a
+picture, so the Language stand-in keeps the words of each masked page, with their places, inside the
+redacted PDF: as a stream of JSON that the page's picture object points to (key `StandInWords`),
+which no PDF reader shows and which stays with the page when `intake` cuts one out. The read
+stand-in answers with those words, a mask as a reader sees it (`PER5`). A service that read the
+redacted PDF's text layer would find no word of the page, locally as in Azure. It finds email addresses, phone numbers, identity numbers and policy numbers
 by their shape, and the names and addresses of the synthetic cases; it is not a recogniser. It is part
 of the dev-only `synthdata` package, so no service image holds it, and `intake` refuses a plain-HTTP
 Language endpoint that is not on this machine. Start it with `--mode fail` or `--mode hang` to see a
@@ -631,7 +654,8 @@ chunk.
 
 Locally Document Intelligence is a stand-in, `uv run python -m synthdata.layout_standin` (port 5102):
 it reads the PDF it is sent with PyMuPDF and answers in the shape of the service's layout result
-(pages, lines, words, and paragraphs with a page and a role). It is not a layout model; start it with
+(pages, lines, words, and paragraphs with a page and a role). It answers for the read model too
+(`prebuilt-read`), which `intake` sends each redacted PDF to. It is not a layout model; start it with
 `--no-roles` to leave the roles out, or with `--mode fail`, `reject`, `throttled` or `hang` to see a
 failed job. The model stand-in (port 5101) answers the job as well: a context line built from the
 headings it is shown, and on `POST /openai/v1/embeddings` vectors that count words, so that the same
@@ -1021,7 +1045,7 @@ more.
 | `retrieval` (`/health`, `/ready`, `POST /searches`, `GET /rules/<rule_id>`), and its Dapr sidecar | `http://localhost:8004`, `http://localhost:3504` |
 | `extraction` (`/health`, `/ready`, `POST /fact-sets`, `GET /cases/<case_id>/facts`), and its Dapr sidecar | `http://localhost:8005`, `http://localhost:3505` |
 | `verdict` (`/health`, `/ready`, `POST /verdict-runs`, `GET /cases/<case_id>/verdict-runs`, `GET /verdict-runs/<verdict_run_id>/steps?tool=&rule_id=&after_step_no=`, `GET /cases/<case_id>/agent-steps?tool=&rule_id=&after_verdict_run_id=&after_step_no=`), and its Dapr sidecar | `http://localhost:8006`, `http://localhost:3506` |
-| Stand-in for Document Intelligence's layout model (this machine only) | `http://localhost:5102` |
+| Stand-in for Document Intelligence's layout model, read model and custom classifier (this machine only) | `http://localhost:5102` |
 | Stand-in for Azure AI Search (this machine only; its index is kept in memory) | `http://localhost:5103` |
 | PostgreSQL (database and user `aiuw`, and the roles `workflow` and `verdict`; no password, this machine only) | `localhost:5432` |
 | Azurite blob emulator (its built-in account `devstoreaccount1`, this machine only) | `localhost:10000` |
@@ -1034,7 +1058,11 @@ Locally `intake` reaches the emulator with `INTAKE_BLOB_CONNECTION_STRING=UseDev
 variable is never set: the service signs in to Blob Storage and PostgreSQL with its managed identity,
 and to Azure AI Language as well (`INTAKE_LANGUAGE_ENDPOINT` is the account's endpoint there, with
 `INTAKE_LANGUAGE_ENTRA_AUTH=true`; there is no key). Language reads the original and writes the
-redacted PDF with its own identity. `workflow` commands `intake` through its own Dapr sidecar
+redacted PDF with its own identity. The read model is reached the same way (`INTAKE_READ_ENDPOINT` is
+the Document Intelligence account's endpoint, with `INTAKE_READ_ENTRA_AUTH=true`;
+`INTAKE_READ_API_VERSION`, `INTAKE_READ_MODEL`, `INTAKE_READ_TIMEOUT_SECONDS`,
+`INTAKE_READ_POLL_SECONDS` and `INTAKE_READ_MAX_RETRIES` have defaults); `intake` sends it the
+redacted PDF's bytes, so Document Intelligence needs no way into the `cases` container. `workflow` commands `intake` through its own Dapr sidecar
 (`WORKFLOW_DAPR_HTTP_PORT`).
 `classification` reads pages from `intake` through its own sidecar (`CLASSIFICATION_DAPR_HTTP_PORT`);
 in Azure it signs in to PostgreSQL and to the chat deployment with its managed identity
@@ -1182,7 +1210,8 @@ The demo environment is two Terraform stacks, applied in order: `infra/demo/foun
 only one reachable from the internet, and `intake`, `workflow` and `classification`, with internal
 ingress only. `workflow` is held at one replica and holds Durable Task Data Contributor on the task
 hub. For redaction `intake` holds Cognitive Services User on Azure AI Language, and Language's own
-identity may read the `originals` container and write the `cases` container. `classification` is held
+identity may read the `originals` container and write the `cases` container. For the reading of the
+redacted PDF `intake` holds Cognitive Services User on the Document Intelligence account as well. `classification` is held
 at one replica and holds Foundry User on the Foundry project, for the chat deployment.
 
 Story 2.2 adds a fifth Container App, `retrieval` (internal ingress, one replica), and a Container

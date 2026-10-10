@@ -20,8 +20,10 @@ QUOTE_OFFSET_UNIT = "unicode_code_point"
 # brackets, such as `[Person]`, `[PhoneNumber]`, `[US_SSN]` or `[PERSON_1]`.
 # A token is a name of two or more characters that begins with a letter, in
 # either case, and goes on in letters, digits, underscores and hyphens. A
-# one-letter flag such as `[H]` in a table of results is not one. The shape
-# the real service writes is still to be checked in Azure.
+# one-letter flag such as `[H]` in a table of results is not one. The real
+# service draws a label and a number on a picture of the page (`PER` and `1`,
+# seen in Azure on 2026-10-10); `intake` writes the token for it into the page
+# text it stores, named by the category: `[Person]`.
 MASK_TOKEN_PATTERN = r"\[[A-Za-z][A-Za-z0-9_-]+\]"  # noqa: S105 - the shape of a mask token, not a credential
 _MASK_TOKEN = re.compile(MASK_TOKEN_PATTERN)
 

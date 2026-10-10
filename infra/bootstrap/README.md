@@ -260,6 +260,8 @@ az postgres flexible-server firewall-rule list -g rg-aiuw-demo-wus3 -n "$SERVER"
 
 Then the `intake` app's latest revision becomes ready within a minute or so, and the deploy workflow's last step says so on its next run.
 
+Its access to the two AI services it calls needs no operator step: the `app` stack gives the `intake` identity Cognitive Services User on the Azure AI Language account, for the redaction job, and on the Document Intelligence account, for the read model that reads the page text from each redacted PDF (its pages are pictures; owner's decision of 2026-10-10), and sets `INTAKE_READ_ENDPOINT`, `INTAKE_READ_ENTRA_AUTH` and `INTAKE_READ_API_VERSION`. In an environment that was up before that change, the next `terraform apply` of `infra/demo/app` adds the role assignment and a new `intake` revision; the image must be the one built with the reading.
+
 **Upgrading an environment that is already set up.** Also not yet run. When `intake` ships a new migration and the database was bootstrapped before (the role exists, the schema is migrated and owned by the pipeline's role), do not repeat the whole section. Run step 0, then step 2 alone: the migrations bring the schema to the new head, and the default privileges of step 3 already cover tables and sequences that the pipeline's role creates. Run step 3 again only when a migration added objects while you, not the pipeline's role, ran it: the step hands every table and sequence in the schema over and repeats the grants, and is safe to run again. Finish with step 4. Until the migration step has run, `intake` reports "not ready", because its image carries a newer head than the database.
 
 ## 5. Database role for `workflow`

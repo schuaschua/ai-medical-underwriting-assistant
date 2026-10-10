@@ -217,15 +217,23 @@ class RunningService(httpx.AsyncBaseTransport):
 
 @dataclass
 class LocalIntake:
-    """`intake` on a test's database and blob containers, with the Language stand-in behind it."""
+    """`intake` on a test's database and blob containers, with its two stand-ins behind it.
+
+    The Language stand-in where Azure AI Language would be, and the
+    Document Intelligence stand-in where the read model would be: `reader`
+    notes every PDF it was sent to read.
+    """
 
     settings: IntakeSettings
     language: LanguageStandIn
+    reader: LayoutStandIn = field(default_factory=LayoutStandIn)
 
     def app(self) -> Any:
         """A new instance of the service; each has its own database connections."""
         return create_intake(
-            self.settings, language=httpx.ASGITransport(app=self.language.app())
+            self.settings,
+            language=httpx.ASGITransport(app=self.language.app()),
+            read=httpx.ASGITransport(app=self.reader.app()),
         )
 
     def upload(self, name: str) -> tuple[str, str]:

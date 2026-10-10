@@ -1,4 +1,4 @@
-"""A local stand-in for Document Intelligence's layout model (story 2.2).
+"""A local stand-in for Document Intelligence's layout model (story 2.2) and its read model.
 
 The Azure environment is down while the stories are built, so `retrieval`'s
 ingestion job is proven against this: an HTTP app with the two routes the job
@@ -27,6 +27,16 @@ full stop, the rest coming as the next paragraph. Which pages and paragraphs
 is a matter of counting, not of what they say (`_as_the_service`). Start it
 with `--tidy` for the PDF's own paragraphs, every footer with its role.
 
+It answers for the read model too (`prebuilt-read`), which `intake` sends
+each redacted PDF to: that file's pages are pictures, and the page text is
+read from them. The stand-in cannot read a picture. For a page the Language
+stand-in redacted it answers with the words that stand-in kept for it in the
+file (`synthdata.language_standin.words_of_page`); for any other page with
+its text layer, as the real model reads a PDF that has one. A mask comes back
+as a reader sees it, such as `PER5`, never as a token: making the token is
+`intake`'s work. The read model takes the PDF as the request's body, or as
+`base64Source` like the layout model.
+
 As a process it also serves the routes of the classifier stand-in
 (`synthdata.classifier_standin`, story 4.2): in Azure one Document
 Intelligence account answers both, so locally one port does. A build reads
@@ -38,6 +48,7 @@ Run it: `uv run python -m synthdata.layout_standin` (see README, 'Run locally').
 import argparse
 import base64
 import binascii
+import json
 import re
 import threading
 import uuid
@@ -50,14 +61,18 @@ import pymupdf
 import uvicorn
 from azure.storage.blob import BlobServiceClient
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
 
 from synthdata.classifier_standin import ClassifierStandIn, blob_container_reader
 from synthdata.classifier_standin import Mode as ClassifierMode
-from synthdata.language_standin import EMULATOR
+from synthdata.language_standin import EMULATOR, words_of_page
 
 MODELS_PATH = "/documentintelligence/documentModels"
 LAYOUT_MODEL = "prebuilt-layout"
+READ_MODEL = "prebuilt-read"
+_MODELS = frozenset({LAYOUT_MODEL, READ_MODEL})
+PDF_CONTENT = "application/pdf"
 API_VERSION = "2024-11-30"
 DEFAULT_PORT = 5102
 
@@ -341,6 +356,86 @@ def analyze_pdf(pdf: bytes, roles: bool = True, tidy: bool = False) -> dict[str,
     }
 
 
+def read_pdf(pdf: bytes) -> dict[str, Any]:
+    """The `analyzeResult` of the read model for a PDF, as the stand-in reads it.
+
+    Each page with its turn, its words and its lines in reading order, in
+    inches; the document's content is its lines, one after the other. Words
+    of a line are a space apart and lines a line break, as the service
+    writes them.
+    """
+    content: list[str] = []
+    offset = 0
+    pages: list[dict[str, Any]] = []
+    paragraphs: list[dict[str, Any]] = []
+    with pymupdf.open(stream=pdf, filetype="pdf") as document:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        for page_number, page in enumerate(document, start=1):
+            seen = words_of_page(document, page)
+            page_start = offset
+            lines_out: list[dict[str, Any]] = []
+            words_out: list[dict[str, Any]] = []
+            for line in seen["lines"]:
+                line_start = offset
+                for text, *box in line:
+                    words_out.append(
+                        {
+                            "content": text,
+                            "polygon": _polygon((box[0], box[1], box[2], box[3])),
+                            "confidence": 1.0,
+                            "span": {"offset": offset, "length": len(text)},
+                        }
+                    )
+                    offset += len(text) + 1
+                text = " ".join(word[0] for word in line)
+                whole = (
+                    min(word[1] for word in line),
+                    min(word[2] for word in line),
+                    max(word[3] for word in line),
+                    max(word[4] for word in line),
+                )
+                span = {"offset": line_start, "length": len(text)}
+                lines_out.append(
+                    {"content": text, "polygon": _polygon(whole), "spans": [span]}
+                )
+                paragraphs.append(
+                    {
+                        "spans": [span],
+                        "boundingRegions": [
+                            {"pageNumber": page_number, "polygon": _polygon(whole)}
+                        ],
+                        "content": text,
+                    }
+                )
+                content.append(text)
+            pages.append(
+                {
+                    "pageNumber": page_number,
+                    "angle": seen["turn"],
+                    "width": round(page.rect.width / _POINTS_PER_INCH, 4),
+                    "height": round(page.rect.height / _POINTS_PER_INCH, 4),
+                    "unit": "inch",
+                    "words": words_out,
+                    "lines": lines_out,
+                    "spans": [
+                        {
+                            "offset": page_start,
+                            "length": max(offset - page_start - 1, 0),
+                        }
+                    ],
+                }
+            )
+    return {
+        "apiVersion": API_VERSION,
+        "modelId": READ_MODEL,
+        "stringIndexType": "textElements",
+        "contentFormat": "text",
+        "content": "\n".join(content),
+        "pages": pages,
+        "paragraphs": paragraphs,
+        "styles": [],
+    }
+
+
 def _words(line: _Line, offset: int) -> list[dict[str, Any]]:
     """The words of a line, each with a share of the line's box by its place in the text."""
     x0, y0, x1, y1 = line.box
@@ -380,6 +475,17 @@ def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _document(body: bytes, content_type: str) -> bytes | None:
+    """The PDF a submit carries: its body, or the `base64Source` of a JSON body."""
+    if content_type.split(";")[0].strip().lower() == PDF_CONTENT:
+        return body or None
+    try:
+        source = json.loads(body).get("base64Source")
+        return base64.b64decode(source, validate=True) or None
+    except (AttributeError, TypeError, ValueError, binascii.Error):
+        return None
+
+
 @dataclass
 class LayoutStandIn:
     """The stand-in's state and its HTTP app. Tests look at what it was asked."""
@@ -398,27 +504,29 @@ class LayoutStandIn:
     # at a result there were.
     submits: int = 0
     looks: int = 0
+    # Every PDF the read model was sent, for tests: it is only ever to be a
+    # redacted one.
+    read: list[bytes] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def submit(self, body: dict[str, Any]) -> Analysis | None:
-        """Take an analysis; None if the body does not carry a document's bytes."""
-        source = body.get("base64Source")
-        if not isinstance(source, str) or not source:
-            return None
-        try:
-            pdf = base64.b64decode(source, validate=True)
-        except (binascii.Error, ValueError):
-            return None
+    def submit(self, pdf: bytes, model: str = LAYOUT_MODEL) -> Analysis:
+        """Take a document for one of the two models and analyse it."""
         analysis = Analysis(uuid.uuid4().hex, "running", _now())
         if self.mode is Mode.FAIL:
             analysis.status = "failed"
         elif self.mode is not Mode.HANG:
             try:
-                analysis.result = analyze_pdf(pdf, self.roles, self.tidy)
+                analysis.result = (
+                    read_pdf(pdf)
+                    if model == READ_MODEL
+                    else analyze_pdf(pdf, self.roles, self.tidy)
+                )
                 analysis.status = "succeeded"
             except Exception:  # noqa: BLE001 - whatever went wrong, the analysis is reported as failed
                 analysis.status = "failed"
         with self._lock:
+            if model == READ_MODEL:
+                self.read.append(pdf)
             self.analyses[analysis.result_id] = analysis
         return analysis
 
@@ -439,14 +547,13 @@ class LayoutStandIn:
         return state
 
     def app(self) -> FastAPI:
-        """The HTTP app: the service's two routes for one analysis."""
+        """The HTTP app: the service's two routes for one analysis, by either model."""
         app = FastAPI(
             title="layout-stand-in", docs_url=None, redoc_url=None, openapi_url=None
         )
 
-        # Plain `def` routes: reading the PDF blocks, so it runs on a worker thread.
         @app.post(f"{MODELS_PATH}/{{model}}:analyze")
-        def submit(model: str, request: Request, body: dict[str, Any]) -> Response:
+        async def submit(model: str, request: Request) -> Response:
             with self._lock:
                 self.submits += 1
             if self.mode is Mode.THROTTLED:
@@ -457,25 +564,32 @@ class LayoutStandIn:
                 )
             if self.mode is Mode.REJECT:
                 return _error(400, "InvalidRequest", "The analysis was refused.")
-            if model != LAYOUT_MODEL:
+            if model not in _MODELS:
                 return _error(404, "ModelNotFound", "No such model.")
-            analysis = self.submit(body)
-            if analysis is None:
+            pdf = _document(
+                await request.body(), request.headers.get("content-type", "")
+            )
+            if pdf is None:
                 return _error(
-                    400, "InvalidRequest", "Send the document as base64Source."
+                    400,
+                    "InvalidRequest",
+                    "Send the document as the body or as base64Source.",
                 )
+            # Reading the PDF blocks, so it runs on a worker thread.
+            analysis = await run_in_threadpool(self.submit, pdf, model)
             location = (
                 f"{str(request.base_url).rstrip('/')}{MODELS_PATH}/{model}"
                 f"/analyzeResults/{analysis.result_id}?{request.url.query}"
             )
             return Response(status_code=202, headers={"operation-location": location})
 
+        # A plain `def` route: it runs on a worker thread.
         @app.get(f"{MODELS_PATH}/{{model}}/analyzeResults/{{result_id}}")
         def look_up(model: str, result_id: str) -> Response:
             with self._lock:
                 self.looks += 1
             analysis = self.analyses.get(result_id)
-            if analysis is None or model != LAYOUT_MODEL:
+            if analysis is None or model not in _MODELS:
                 return _error(404, "NotFound", "No such analysis.")
             return JSONResponse(self.state(analysis))
 

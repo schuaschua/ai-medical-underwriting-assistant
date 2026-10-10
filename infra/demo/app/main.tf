@@ -66,6 +66,17 @@ resource "azurerm_role_assignment" "intake_language_user" {
   principal_type       = "ServicePrincipal"
 }
 
+# Page text (spine AD-14): the redacted PDF's pages are pictures, so intake
+# has Document Intelligence's read model read that PDF, with its own identity.
+# There is no key. intake sends the PDF's bytes: Document Intelligence gets no
+# role on the `cases` container.
+resource "azurerm_role_assignment" "intake_document_intelligence_user" {
+  scope                = local.foundation.document_intelligence_id
+  role_definition_name = "Cognitive Services User"
+  principal_id         = local.intake_identity.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # Azure AI Language reads the original and writes the redacted PDF and its
 # result file itself, with its own identity: it may read `originals` and write
 # `cases`, each scoped to the one container (azure.md rule 9). It is the only
@@ -86,8 +97,8 @@ resource "azurerm_role_assignment" "language_cases_contributor" {
 
 # As for web: a new role assignment is not honoured at once. intake waits for
 # all of its own and for Language's two, so its first revision can pull its
-# image, write blobs, send telemetry and have a document redacted. The wait
-# runs again only when one of them is made again.
+# image, write blobs, send telemetry and have a document redacted and read.
+# The wait runs again only when one of them is made again.
 resource "time_sleep" "intake_role_propagation" {
   create_duration = var.role_propagation_wait
 
@@ -96,6 +107,7 @@ resource "time_sleep" "intake_role_propagation" {
     metrics_publisher_id          = azurerm_role_assignment.intake_metrics_publisher.id
     blob_contributor_ids          = join(",", [for name in sort(tolist(local.intake_blob_containers)) : azurerm_role_assignment.intake_blob_contributor[name].id])
     language_user_id              = azurerm_role_assignment.intake_language_user.id
+    document_intelligence_user_id = azurerm_role_assignment.intake_document_intelligence_user.id
     language_originals_reader_id  = azurerm_role_assignment.language_originals_reader.id
     language_cases_contributor_id = azurerm_role_assignment.language_cases_contributor.id
   }
@@ -600,10 +612,11 @@ module "intake" {
       cpu    = local.container_cpu
       memory = local.container_memory
 
-      # No password, no storage key and no Language key: the database, Blob
-      # Storage and Azure AI Language are reached with the service identity
-      # (azure.md rule 7). The Language endpoint is the real account's; the
-      # local stand-in exists only on a developer machine.
+      # No password, no storage key and no AI service key: the database, Blob
+      # Storage, Azure AI Language and Document Intelligence are reached with
+      # the service identity (azure.md rule 7). The Language and read
+      # endpoints are the real accounts'; the local stand-ins exist only on a
+      # developer machine.
       env = [
         { name = "INTAKE_HOST", value = "0.0.0.0" },
         { name = "INTAKE_PORT", value = tostring(var.intake_port) },
@@ -618,6 +631,9 @@ module "intake" {
         { name = "INTAKE_LANGUAGE_ENDPOINT", value = local.foundation.language_endpoint },
         { name = "INTAKE_LANGUAGE_ENTRA_AUTH", value = "true" },
         { name = "INTAKE_LANGUAGE_API_VERSION", value = var.language_api_version },
+        { name = "INTAKE_READ_ENDPOINT", value = local.foundation.document_intelligence_endpoint },
+        { name = "INTAKE_READ_ENTRA_AUTH", value = "true" },
+        { name = "INTAKE_READ_API_VERSION", value = var.read_api_version },
         { name = "INTAKE_REDACTION_CATEGORIES", value = jsonencode(var.redaction_categories) },
       ]
 

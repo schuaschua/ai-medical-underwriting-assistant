@@ -186,12 +186,14 @@ jobs:
 
       - name: Run intake
         # No database is given to it. The first value names the blob
-        # emulator's built-in account and the second the place of the Language
-        # stand-in; nothing is listening at either and nothing is called.
+        # emulator's built-in account, the second the place of the Language
+        # stand-in and the third that of the read model's stand-in; nothing
+        # is listening at any of them and nothing is called.
         run: |
           docker run --detach --publish 127.0.0.1:18081:8001 \
             --env INTAKE_BLOB_CONNECTION_STRING=UseDevelopmentStorage=true \
             --env INTAKE_LANGUAGE_ENDPOINT=http://127.0.0.1:5100 \
+            --env INTAKE_READ_ENDPOINT=http://127.0.0.1:5102 \
             --name "$INTAKE_CONTAINER" "$INTAKE_IMAGE"
 
       - name: Run workflow

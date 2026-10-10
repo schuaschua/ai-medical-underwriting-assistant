@@ -1,9 +1,16 @@
-"""Story 1.7: `intake` as it really runs, with the Language stand-in where Azure AI Language would be.
+"""Story 1.7: `intake` as it really runs, with stand-ins where its two Azure AI services would be.
+
+The Language stand-in where Azure AI Language would be, and the Document
+Intelligence stand-in where the read model would be. The Language stand-in
+writes what the real service writes: a redacted PDF whose every page is one
+picture, with no text in it but the masks' labels. So the page text these
+tests see can only have come from the read model's reading of that PDF: a
+service that read the PDF's text layer instead would find no word of the page.
 
 Against a real PostgreSQL and the blob emulator: run
 `docker compose up --detach --wait` first. No test here calls Azure. The
-stand-in speaks the service's REST shape and reads and writes the blob
-emulator. Each test has a database and blob containers of its own.
+stand-ins speak the services' REST shapes; the Language one reads and writes
+the blob emulator. Each test has a database and blob containers of its own.
 
 These tests are here and not in `services/intake/tests` because they name the
 stand-in's package and read the answer key, which nothing under `services/`
@@ -11,13 +18,14 @@ may do (spine AD-17).
 """
 
 import json
-import socket
+import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 import psycopg
+import pymupdf
 import pytest
 from azure.storage.blob import ContainerClient
 from fastapi.testclient import TestClient
@@ -28,12 +36,12 @@ from contracts.models.intake import (
     PageText,
     RedactionResult,
 )
-from contracts.text import normalise
+from contracts.text import MASK_TOKEN_PATTERN, find_quote, normalise
 from intake.adapters.http.app import create_app
-from intake.adapters.pdf import read_pages
 from intake.settings import Settings
 from synthdata.cases import CASES
-from synthdata.language_standin import LanguageStandIn
+from synthdata.language_standin import MASK_LABEL_OF, LanguageStandIn
+from synthdata.layout_standin import LayoutStandIn
 
 pytestmark = pytest.mark.integration
 
@@ -62,17 +70,25 @@ def row_counts(settings: Settings) -> dict[str, int]:
     }
 
 
-def service(settings: Settings, stand_in: LanguageStandIn) -> TestClient:
-    """The service as it really runs, with the stand-in where Language would be."""
-    app = create_app(settings, language=httpx.ASGITransport(app=stand_in.app()))
+def service(
+    settings: Settings, stand_in: LanguageStandIn, reader: LayoutStandIn
+) -> TestClient:
+    """The service as it really runs, with the stand-ins where Language and the read model would be."""
+    app = create_app(
+        settings,
+        language=httpx.ASGITransport(app=stand_in.app()),
+        read=httpx.ASGITransport(app=reader.app()),
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture
 def client(
-    migrated_database: Settings, stand_in: LanguageStandIn
+    migrated_database: Settings,
+    stand_in: LanguageStandIn,
+    layout_stand_in: LayoutStandIn,
 ) -> Iterator[TestClient]:
-    with service(migrated_database, stand_in) as test_client:
+    with service(migrated_database, stand_in, layout_stand_in) as test_client:
         yield test_client
 
 
@@ -91,9 +107,14 @@ def redact(client: TestClient, case_id: str) -> RedactionResult:
     return RedactionResult.model_validate(response.json())
 
 
+def answer_key(case_key: str) -> dict[str, Any]:
+    key: dict[str, Any] = json.loads((ANSWER_KEY_DIR / f"{case_key}.json").read_text())
+    return key
+
+
 def planted(case_key: str) -> list[str]:
     """Every planted identifier of a case, and every part of a planted name."""
-    key = json.loads((ANSWER_KEY_DIR / f"{case_key}.json").read_text())
+    key = answer_key(case_key)
     values: list[str] = []
     for identifier in key["identifiers"]:
         values.append(identifier["value"])
@@ -112,6 +133,7 @@ def test_story_1_7_a_synthetic_case_is_redacted_and_no_planted_identifier_is_in_
     cases_container: ContainerClient,
     originals: ContainerClient,
     stand_in: LanguageStandIn,
+    layout_stand_in: LayoutStandIn,
     case: Any,
 ) -> None:
     original = (CASES_DIR / case.file_name).read_bytes()
@@ -148,7 +170,13 @@ def test_story_1_7_a_synthetic_case_is_redacted_and_no_planted_identifier_is_in_
     stored = normalise("\n".join(texts))
     for value in planted(case.case_id):
         assert normalise(value) not in stored, value
+    # Each mask is one token of the contracts' shape, named by its category:
+    # no label of the picture (`PER5`) is left in the text.
     assert "[person]" in stored
+    tokens = set(re.findall(MASK_TOKEN_PATTERN, "\n".join(texts)))
+    assert tokens and tokens <= {f"[{name}]" for name in result.redaction_counts}
+    labels = "|".join(MASK_LABEL_OF.values())
+    assert not re.search(rf"\b(?:{labels})\d", "\n".join(texts))
     # Dates (the date of birth too), ages and medical terms are still there.
     assert case.applicant.date_of_birth.isoformat() in stored
     assert f"{case.applicant_age} years" in stored
@@ -165,15 +193,48 @@ def test_story_1_7_a_synthetic_case_is_redacted_and_no_planted_identifier_is_in_
         assert thumbnail.headers["content-type"] == "image/png"
         assert thumbnail.content.startswith(PNG_SIGNATURE)
 
-    # The file route serves the redacted PDF: the document of record.
+    # Every quote of the answer key is found in the stored text of its
+    # page, and the boxes of its words lie on that page.
+    places = [
+        place
+        for fact in answer_key(case.case_id)["expected_facts"]
+        for place in fact["places"]
+    ]
+    assert places
+    for place in places:
+        page_id = result.page_ids[place["page_number"] - 1]
+        found = find_quote(texts[place["page_number"] - 1], place["quote"])
+        assert found is not None, place
+        quoted = PageBoxes.model_validate(
+            client.get(
+                f"/pages/{page_id}/boxes",
+                params={"quote_start": found.start, "quote_end": found.end},
+            ).json()
+        )
+        assert len(quoted.boxes) == len(place["quote"].split())
+        for box in quoted.boxes:
+            assert 0 <= box.x0 < box.x1 <= quoted.page_width
+            assert 0 <= box.y0 < box.y1 <= quoted.page_height
+
+    # The file route serves the redacted PDF: the document of record. As the
+    # real service writes it, every page is one picture and the file's text
+    # layer holds nothing but the masks' labels with their numbers.
     file = client.get(f"/documents/{document_id}/file")
     assert file.headers["content-type"] == "application/pdf"
     assert file.content != original
-    served = normalise("\n".join(page.text for page in read_pages(file.content, 100)))
-    assert served == stored
+    with pymupdf.open(stream=file.content, filetype="pdf") as redacted:  # type: ignore[no-untyped-call]  # PyMuPDF does not annotate this call
+        assert redacted.page_count == len(case.pages)
+        layer = [str(page.get_text()).split() for page in redacted]
+        assert all(len(page.get_images()) == 1 for page in redacted)
+    assert any(layer)
+    for word in (word for page in layer for word in page):
+        assert re.fullmatch(rf"(?:{labels})\d+", word), word
+    # So the page text was read from the pictures: the read model was sent
+    # that redacted PDF, once, and never the original.
+    assert layout_stand_in.read == [file.content]
     # What sits in `cases`: the files of record and nothing else. The result
     # file's text is searched for the planted values; the PDF is checked
-    # through its extracted text above, not byte by byte.
+    # through its text layer above and its read text, not byte by byte.
     blobs = {
         name: cases_container.download_blob(name).readall()
         for name in cases_container.list_blob_names()
@@ -202,12 +263,3 @@ def test_story_1_7_a_synthetic_case_is_redacted_and_no_planted_identifier_is_in_
     counts = row_counts(migrated_database)
     assert (counts["page"], counts["page_text"]) == (len(case.pages), len(case.pages))
     assert counts["word_box"] == sum(len(text.split()) for text in texts)
-
-
-# --- The stand-in as a process -----------------------------------------------------------
-
-
-def _free_port() -> int:
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        return int(listener.getsockname()[1])

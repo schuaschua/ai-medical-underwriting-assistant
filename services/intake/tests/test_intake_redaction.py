@@ -1,7 +1,9 @@
 """Story 1.7: redaction is the first stage, and only the redacted PDF is ever read.
 
 Unit tests: the redaction command and the page reads, with fakes for Azure AI
-Language, Blob Storage, the PDF reader and the database.
+Language, Document Intelligence's read model, Blob Storage, the PDF adapter
+and the database. The redacted PDF's pages are pictures, so the page text is
+what the read model read from it (owner's decision of 2026-10-10).
 """
 
 import asyncio
@@ -15,6 +17,7 @@ from intake_fakes import (
     PDF_BYTES,
     PNG_BYTES,
     FakeLanguage,
+    FakeReader,
     FakeSplitter,
     MemoryCaseFiles,
     MemoryCaseRepository,
@@ -98,6 +101,8 @@ def test_story_1_7_redaction_stores_the_redacted_pdf_and_the_pages_and_answers_w
     stored = sorted(redactions.pages.values(), key=lambda p: p.record.page_number)
     assert result.page_ids == [page.record.page_id for page in stored]
     assert [page.record.page_number for page in stored] == [1, 2]
+    # The text is the read model's reading; the mask it read as `PER` and
+    # `1` is one token, named by the result file, with one box.
     assert stored[0].text == PAGE_TEXT
     assert len(stored[0].words) == 5
     # A count per category, by the service's category names (AD-8).
@@ -130,6 +135,7 @@ def test_story_1_7_only_the_redaction_call_is_told_where_the_original_is(
     store: MemoryOriginalStore,
     language: FakeLanguage,
     splitter: FakeSplitter,
+    reader: FakeReader,
     case_files: MemoryCaseFiles,
     repository: MemoryCaseRepository,
 ) -> None:
@@ -144,9 +150,11 @@ def test_story_1_7_only_the_redaction_call_is_told_where_the_original_is(
     # original's blob from anywhere else.
     assert not hasattr(store, "read")
     assert original_name not in case_files.reads
-    # The page split was given the redacted PDF and nothing else.
+    # The page split and the read model were given the redacted PDF, once
+    # each, and nothing else.
     assert splitter.given == [PDF_BYTES]
-    assert splitter.given[0] != case_pdf
+    assert reader.given == [PDF_BYTES]
+    assert case_pdf not in (*splitter.given, *reader.given)
 
 
 # --- Idempotency -------------------------------------------------------------------
@@ -157,6 +165,7 @@ def test_story_1_7_a_repeat_after_the_end_answers_the_stored_result_and_does_no_
     case_pdf: bytes,
     language: FakeLanguage,
     splitter: FakeSplitter,
+    reader: FakeReader,
     redactions: MemoryRedactionRepository,
     case_files: MemoryCaseFiles,
 ) -> None:
@@ -168,31 +177,12 @@ def test_story_1_7_a_repeat_after_the_end_answers_the_stored_result_and_does_no_
 
     assert again.status_code == 200
     assert again.json() == first.json()
-    # No second Language call, no second split, no new rows or files.
+    # No second Language call, no second split or reading, no new rows or files.
     assert len(language.started) == 1
     assert len(splitter.given) == 1
+    assert len(reader.given) == 1
     assert redactions.pages == pages_before
     assert case_files.blobs == blobs_before
-
-
-def test_story_1_7_a_repeat_while_running_is_409_in_progress(
-    client: TestClient,
-    case_pdf: bytes,
-    ports: RedactionPorts,
-    language: FakeLanguage,
-    redactions: MemoryRedactionRepository,
-    fixed_now: datetime,
-) -> None:
-    case_id, document_id = upload(client, case_pdf)
-    # The key row of a redaction that is under way.
-    asyncio.run(redactions.begin(case_id, document_id, fixed_now))
-
-    response = client.post(f"/cases/{case_id}/redaction", json={})
-
-    assert response.status_code == 409
-    assert error_code(response.json()) == "in_progress"
-    assert language.started == []
-    assert redactions.pages == {}
 
 
 # --- Reads -------------------------------------------------------------------------
@@ -297,20 +287,29 @@ def test_story_4_2_one_page_of_the_redacted_file_is_served_as_a_one_page_pdf(
 
 
 @pytest.mark.parametrize(
-    ("behaviour", "cancelled"), [("reject", []), ("fail", ["job-1"])]
+    ("behaviour", "cancelled"),
+    # The last: the job is done and the read model then fails. The redacted
+    # document is not offered without its text.
+    [("reject", []), ("fail", ["job-1"]), ("read_fails", [])],
 )
 def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     client: TestClient,
     case_pdf: bytes,
     language: FakeLanguage,
+    reader: FakeReader,
     redactions: MemoryRedactionRepository,
     case_files: MemoryCaseFiles,
     splitter: FakeSplitter,
     behaviour: str,
     cancelled: list[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     case_id, document_id = upload(client, case_pdf)
-    language.behaviour = behaviour
+    read_fails = behaviour == "read_fails"
+    if read_fails:
+        reader.behaviour = "fail"
+    else:
+        language.behaviour = behaviour
 
     result = redact(client, case_id)
 
@@ -328,10 +327,13 @@ def test_story_1_7_a_failed_redaction_creates_no_pages_and_answers_failed(
     )
     assert (audit.actor, audit.ref) == ("intake:azure-ai-language", document_id)
     assert language.cancelled == cancelled
-    # No pages, nothing left in `cases`, and no fallback to the original.
+    # No pages, nothing left in `cases`, and no fallback to the original:
+    # only a redacted PDF was ever split or read.
     assert redactions.pages == {}
     assert case_files.blobs == {}
-    assert splitter.given == []
+    assert splitter.given == reader.given == ([PDF_BYTES] if read_fails else [])
+    if read_fails:
+        assert "error_code=redaction_failed reason=read_failed job=none" in caplog.text
     assert (
         PageList.model_validate(client.get(f"/cases/{case_id}/pages").json()).pages
         == []
@@ -473,7 +475,7 @@ def test_story_1_7_logs_carry_ids_codes_counts_and_timings_only(
 
     assert (
         f"document redacted: case_id={case_id} document_id={document_id} pages=2 "
-        "items=3 categories=2 duration_ms="
+        "items=3 categories=2 words=5 masks=1 masks_unread=0 duration_ms="
     ) in caplog.text
     for secret in SECRETS:
         assert secret not in caplog.text

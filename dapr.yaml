@@ -46,6 +46,10 @@ apps:
       # (packages/synthdata): the Azure environment is down while coding. It
       # takes no credential, and it exists only on a developer machine.
       INTAKE_LANGUAGE_ENDPOINT: "http://127.0.0.1:5100"
+      # Document Intelligence's read model, which reads the page text from
+      # each redacted PDF (its pages are pictures), is the local stand-in on
+      # the layout stand-in's port, which tools/dev.sh starts as well.
+      INTAKE_READ_ENDPOINT: "http://127.0.0.1:5102"
   - appID: workflow
     appDirPath: ./services/workflow
     appProtocol: http

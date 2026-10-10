@@ -48,6 +48,10 @@ redaction_categories = [
   "Email",
   "USSocialSecurityNumber",
 ]
+# Page text (spine AD-14). Seen in the same session: the redacted PDF the
+# service writes has a picture per page and no text layer, so intake has
+# Document Intelligence's read model read it (owner's decision of 2026-10-10).
+read_api_version = "2024-11-30"
 
 # The gate (spine AD-7): medical at this confidence or more goes to
 # extraction, non-medical at it or more back to the customer, anything under

@@ -31,7 +31,7 @@ DEFAULT_REDACTION_CATEGORIES = (
     "USSocialSecurityNumber",
     "PolicyNumber",
 )
-# The hosts a plain-HTTP Language endpoint may have: the local stand-in only.
+# The hosts a plain-HTTP Language or read endpoint may have: a local stand-in only.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
@@ -89,6 +89,25 @@ class Settings(BaseSettings):
     redaction_categories: Annotated[list[str], Field(min_length=1)] = list(
         DEFAULT_REDACTION_CATEGORIES
     )
+    # AD-14: Document Intelligence's read model, reached over REST. The
+    # redaction service writes each page of the redacted PDF as one picture,
+    # so the page text and the word places are read from that PDF by OCR
+    # (owner's decision of 2026-10-10). No default: in Azure the `app` stack
+    # sets the account's endpoint, and dapr.yaml names the local stand-in.
+    read_endpoint: str | None = None
+    # In Azure: sign in with the service identity. There is no key.
+    read_entra_auth: bool = False
+    read_api_version: str = "2024-11-30"
+    # The model's id is part of the request path.
+    read_model: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$")] = (
+        "prebuilt-read"
+    )
+    # How long one HTTP call may take (the submit carries the whole PDF), the
+    # wait between two looks at a running analysis, and how often a submit
+    # that got no answer is sent again. The redaction's deadline bounds it all.
+    read_timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
+    read_poll_seconds: Annotated[float, Field(gt=0)] = 1.0
+    read_max_retries: Annotated[int, Field(ge=0, le=10)] = 3
     # AD-6: the stage ends its own work after this long, as failed
     # (`stage_timeout`). `workflow` waits 200 s (WORKFLOW_STAGE_TIMEOUT_SECONDS).
     redaction_deadline_seconds: Annotated[float, Field(gt=0)] = 180.0
@@ -119,6 +138,7 @@ class Settings(BaseSettings):
         "blob_account_url",
         "blob_connection_string",
         "language_endpoint",
+        "read_endpoint",
         mode="before",
     )
     @classmethod
@@ -156,29 +176,34 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
-    def _language_is_reached_safely(self) -> Self:
-        if self.language_endpoint is None:
-            return self
-        endpoint = urlsplit(self.language_endpoint)
-        if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
-            raise ValueError(
-                "INTAKE_LANGUAGE_ENDPOINT must start with http:// or https://"
-            )
-        if endpoint.scheme == "http":
-            # Plain HTTP is the local stand-in. It never stands in for the
-            # service in Azure, and a token is never sent to it.
-            if endpoint.hostname not in _LOOPBACK_HOSTS or self.language_entra_auth:
-                raise ValueError(
-                    "A plain-HTTP INTAKE_LANGUAGE_ENDPOINT is the local stand-in: "
-                    "it must be on loopback, without INTAKE_LANGUAGE_ENTRA_AUTH"
-                )
-        elif not self.language_entra_auth:
-            # Security rule 9: the real service is reached with the identity.
-            raise ValueError(
-                "An https:// INTAKE_LANGUAGE_ENDPOINT needs "
-                "INTAKE_LANGUAGE_ENTRA_AUTH=true"
-            )
+    def _ai_services_are_reached_safely(self) -> Self:
+        for name, address, entra_auth in (
+            ("LANGUAGE", self.language_endpoint, self.language_entra_auth),
+            ("READ", self.read_endpoint, self.read_entra_auth),
+        ):
+            if address is not None:
+                _reached_safely(name, address, entra_auth)
         return self
+
+
+def _reached_safely(name: str, address: str, entra_auth: bool) -> None:
+    """Refuse an AI service endpoint that is neither the real account nor a local stand-in."""
+    endpoint = urlsplit(address)
+    if endpoint.scheme not in ("http", "https") or not endpoint.hostname:
+        raise ValueError(f"INTAKE_{name}_ENDPOINT must start with http:// or https://")
+    if endpoint.scheme == "http":
+        # Plain HTTP is the local stand-in. It never stands in for the
+        # service in Azure, and a token is never sent to it.
+        if endpoint.hostname not in _LOOPBACK_HOSTS or entra_auth:
+            raise ValueError(
+                f"A plain-HTTP INTAKE_{name}_ENDPOINT is the local stand-in: "
+                f"it must be on loopback, without INTAKE_{name}_ENTRA_AUTH"
+            )
+    elif not entra_auth:
+        # Security rule 9: the real service is reached with the identity.
+        raise ValueError(
+            f"An https:// INTAKE_{name}_ENDPOINT needs INTAKE_{name}_ENTRA_AUTH=true"
+        )
 
 
 @lru_cache(maxsize=1)

@@ -104,15 +104,78 @@ class Word:
 
 
 @dataclass(frozen=True, slots=True)
-class PageReading:
-    """One page as read from the redacted PDF: its text, its words and its picture."""
+class LayerWord:
+    """One word of the redacted PDF's own text layer, where it sits on the page.
+
+    The redaction service writes every page as one picture; the only text it
+    leaves in the file is the label of each mask and the number of what was
+    masked there. PDF points, as the page is shown.
+    """
 
     text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+@dataclass(frozen=True, slots=True)
+class PageSheet:
+    """One page of the redacted PDF as a sheet: its size, its picture, its mask labels."""
+
     width: float
     height: float
-    words: tuple[Word, ...]
     # PNG.
     thumbnail: bytes
+    # In the order the file holds them: a label, then its number.
+    layer_words: tuple[LayerWord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ReadWord:
+    """One word as the read model gives it, in the read's own unit and page size."""
+
+    content: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
+@dataclass(frozen=True, slots=True)
+class ReadPage:
+    """One page as the read model read it from the redacted PDF (OCR)."""
+
+    # 1-based, in document order.
+    page_number: int
+    # How the page's content is turned, clockwise, in degrees.
+    angle: float
+    width: float
+    height: float
+    # In reading order, whatever the angle; each line's words in reading order.
+    lines: tuple[tuple[ReadWord, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MaskNames:
+    """What the redaction's result file says of its masks: names, never found values."""
+
+    # The category of each entity, by its mask's label and the number it carries.
+    category_of_entity: dict[tuple[str, str], str]
+    # The category a label stands for, where every entity with it has the same one.
+    category_of_label: dict[str, str]
+    labels: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class PageReading:
+    """One page's text and words, built from the read model's answer (AD-14)."""
+
+    text: str
+    words: tuple[Word, ...]
+    # Counts for the log: mask tokens written, and masks no read word lay on.
+    masks: int = 0
+    masks_unread: int = 0
 
 
 @dataclass(frozen=True, slots=True)
