@@ -180,11 +180,11 @@ def _retry_after_seconds(response: httpx2.Response) -> float | None:
 def _error_code(operation: dict[str, Any]) -> str:
     """The service's own codes for a failure, as an identifier; empty if it names none.
 
-    The outer code is often only `InvalidRequest`: the codes nested under
-    it (`innererror`, a few levels at most) say what was wrong, and are
-    joined to it. Only letters, digits and underscores are kept, and not
-    many of them: the code goes into a log line, and the service's message
-    never does.
+    The outer code is often only `InvalidRequest`: the codes under it (the
+    first of its `details`, or its `innererror`, a few levels at most) say
+    what was wrong, and are joined to it. Only letters, digits and
+    underscores are kept, and not many of them: the code goes into a log
+    line, and the service's message never does.
     """
     codes: list[str] = []
     error = operation.get("error")
@@ -192,7 +192,12 @@ def _error_code(operation: dict[str, Any]) -> str:
         code = error.get("code")
         if isinstance(code, str) and (kept := _NOT_IN_A_CODE.sub("", code)):
             codes.append(kept[:_CODE_MAX_CHARS])
-        error = error.get("innererror")
+        details = error.get("details")
+        error = (
+            details[0]
+            if isinstance(details, list) and details
+            else error.get("innererror")
+        )
     return "_".join(codes)
 
 

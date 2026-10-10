@@ -384,7 +384,7 @@ class DocumentIntelligence:
                     "error": {
                         "code": "Training-Failed!",
                         "message": "SECRET",
-                        "innererror": {"code": "ContentMissing", "message": "SECRET"},
+                        "details": [{"code": "ContentMissing", "message": "SECRET"}],
                     },
                 },
             )
