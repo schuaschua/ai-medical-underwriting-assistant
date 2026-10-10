@@ -381,7 +381,11 @@ class DocumentIntelligence:
                 200,
                 json={
                     "status": self.build_ends,
-                    "error": {"code": "Training-Failed!", "message": "SECRET"},
+                    "error": {
+                        "code": "Training-Failed!",
+                        "message": "SECRET",
+                        "innererror": {"code": "ContentMissing", "message": "SECRET"},
+                    },
                 },
             )
         return httpx2.Response(
@@ -658,7 +662,7 @@ def test_story_4_2_the_job_trains_the_classifier_once_and_refuses_pages_it_may_n
     with caplog.at_level(logging.INFO, logger="classification"):
         failed = DocumentIntelligence(build_ends="failed")
         assert train.main(settings, httpx2.MockTransport(failed.handle)) == train.FAILED
-    assert "reason=classifier_build_failed_TrainingFailed" in caplog.text
+    assert "reason=classifier_build_failed_TrainingFailed_ContentMissing" in caplog.text
     assert "SECRET" not in caplog.text
     # Without its settings the job says which are missing and builds nothing.
     assert train.main(Settings(applicationinsights_connection_string=None)) == 1

@@ -69,6 +69,7 @@ _NOT_READY = frozenset({401, 403, 404})
 _CONFLICT = 409
 _NOT_IN_A_CODE = re.compile(r"[^A-Za-z0-9_]")
 _CODE_MAX_CHARS = 64
+_CODE_MAX_LEVELS = 3
 
 
 def classifier_id(settings: Settings) -> str:
@@ -177,16 +178,22 @@ def _retry_after_seconds(response: httpx2.Response) -> float | None:
 
 
 def _error_code(operation: dict[str, Any]) -> str:
-    """The service's own code for a failure, as an identifier; empty if it names none.
+    """The service's own codes for a failure, as an identifier; empty if it names none.
 
-    Only letters, digits and underscores are kept, and not many of them:
-    the code goes into a log line, and the service's message never does.
+    The outer code is often only `InvalidRequest`: the codes nested under
+    it (`innererror`, a few levels at most) say what was wrong, and are
+    joined to it. Only letters, digits and underscores are kept, and not
+    many of them: the code goes into a log line, and the service's message
+    never does.
     """
+    codes: list[str] = []
     error = operation.get("error")
-    code = error.get("code") if isinstance(error, dict) else None
-    if not isinstance(code, str):
-        return ""
-    return _NOT_IN_A_CODE.sub("", code)[:_CODE_MAX_CHARS]
+    while isinstance(error, dict) and len(codes) < _CODE_MAX_LEVELS:
+        code = error.get("code")
+        if isinstance(code, str) and (kept := _NOT_IN_A_CODE.sub("", code)):
+            codes.append(kept[:_CODE_MAX_CHARS])
+        error = error.get("innererror")
+    return "_".join(codes)
 
 
 def _operation_id(response: httpx2.Response) -> str | None:
