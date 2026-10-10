@@ -1,0 +1,189 @@
+"""The audit action catalogue and the audit record (AD-8)."""
+
+from enum import StrEnum
+from typing import Literal, Self
+
+from pydantic import model_validator
+
+from contracts.base import (
+    Confidence,
+    ContractModel,
+    Count,
+    NonEmptyStr,
+    TraceId,
+    UtcDatetime,
+)
+from contracts.enums import ActorKind, DemoRole, PageStatus, RetrieverConfig, Service
+from contracts.errors import ErrorCode
+from contracts.ids import CaseId, EvalRunId, PageId, Uuid7Str
+
+
+class AuditAction(StrEnum):
+    # A demo role asked for the case to be started. Added with `case.completed`
+    # on the owner's decision of 2026-10-07, so that a trail says who began
+    # the case and when it ended.
+    CASE_STARTED = "case.started"
+    DOCUMENT_REDACTED = "document.redacted"
+    PAGE_CLASSIFIED = "page.classified"
+    # AD-7: the gate sent a classified page on. Added in story 1.9, so that the
+    # status change out of `classified` has its event (AD-8).
+    PAGE_ROUTED = "page.routed"
+    PAGE_KEPT = "page.kept"
+    PAGE_DISCARDED = "page.discarded"
+    PAGE_ACCEPTED = "page.accepted"
+    PAGE_DENIED = "page.denied"
+    FACTS_EXTRACTED = "facts.extracted"
+    VERDICT_SUGGESTED = "verdict.suggested"
+    STAGE_FAILED = "stage.failed"
+    # The case reached `completed`. A failed case has `stage.failed` instead.
+    CASE_COMPLETED = "case.completed"
+
+
+# AD-10: the four decisions about a page, which only a human role may make.
+DECISION_ACTIONS: frozenset[AuditAction] = frozenset(
+    {
+        AuditAction.PAGE_KEPT,
+        AuditAction.PAGE_DISCARDED,
+        AuditAction.PAGE_ACCEPTED,
+        AuditAction.PAGE_DENIED,
+    }
+)
+
+# Every action whose actor is a person: the decisions, and the start of a
+# case, which either demo role may ask for.
+ACTIONS_BY_A_HUMAN: frozenset[AuditAction] = DECISION_ACTIONS | {
+    AuditAction.CASE_STARTED
+}
+
+# The actions about the case as a whole: no page, and the case is its own reference.
+CASE_ACTIONS: frozenset[AuditAction] = frozenset(
+    {AuditAction.CASE_STARTED, AuditAction.CASE_COMPLETED}
+)
+
+_PAGE_ACTION_PREFIX = "page."
+_AI_ACTOR_SEPARATOR = ":"
+_DEMO_ROLES = frozenset(role.value for role in DemoRole)
+_SERVICES = frozenset(service.value for service in Service)
+
+
+def _is_deployment_name(deployment: str) -> bool:
+    return bool(deployment) and deployment == deployment.strip()
+
+
+def ai_actor(service: Service, deployment: str) -> str:
+    """Build the `actor` of an AI action: service app id plus model deployment name."""
+    if not _is_deployment_name(deployment):
+        raise ValueError("a deployment name must not be blank or padded")
+    return f"{service.value}{_AI_ACTOR_SEPARATOR}{deployment}"
+
+
+class RouteDetail(ContractModel):
+    """Detail of `page.routed`: the status the gate gave the page, and the threshold it used."""
+
+    # The three statuses the gate may give a page (AD-7), and no other.
+    route: Literal[
+        PageStatus.EXTRACTING,
+        PageStatus.AWAITING_CUSTOMER,
+        PageStatus.AWAITING_TRIAGE,
+    ]
+    threshold: Confidence
+
+
+class VerdictDetail(ContractModel):
+    """Detail of `verdict.suggested`: the retriever configuration the run was made with (AD-15).
+
+    A case gets one run per configuration it was started with, and each is
+    an event of its own: the detail says which.
+    """
+
+    retriever_config: RetrieverConfig
+
+
+class AuditRecord(ContractModel):
+    """One row of the audit trail; `workflow` is the only writer."""
+
+    actor_kind: ActorKind
+    # A demo role for a human; `<app id>:<model deployment>` for AI
+    # (for redaction, `intake:azure-ai-language`).
+    actor: NonEmptyStr
+    action: AuditAction
+    occurred_at: UtcDatetime
+    case_id: CaseId
+    page_id: PageId | None
+    # Id of the owning record: classification, fact set, verdict run, human
+    # decision; for `case.started` and `case.completed`, the case itself.
+    ref: Uuid7Str
+    # For `document.redacted`, category to count, never the values; for
+    # `page.routed`, the route and the threshold; for `verdict.suggested`,
+    # the retriever configuration of the run; otherwise null.
+    detail: dict[NonEmptyStr, Count] | RouteDetail | VerdictDetail | None
+    trace_id: TraceId
+    eval_run_id: EvalRunId | None
+    # For `stage.failed`: the code of the failure, from the error catalogue.
+    # `workflow` sets it on the trail it answers, from what it stored with
+    # the event; a stage's own record may leave it out. Null for any other action.
+    error_code: ErrorCode | None = None
+
+    @model_validator(mode="after")
+    def _actor_matches_kind(self) -> Self:
+        if self.actor_kind is ActorKind.HUMAN:
+            if self.actor not in _DEMO_ROLES:
+                raise ValueError("a human actor must be a demo role")
+            return self
+        service, separator, deployment = self.actor.partition(_AI_ACTOR_SEPARATOR)
+        if (
+            service not in _SERVICES
+            or not separator
+            or not _is_deployment_name(deployment)
+        ):
+            raise ValueError("an AI actor must be '<app id>:<model deployment>'")
+        return self
+
+    @model_validator(mode="after")
+    def _detail_fits_the_action(self) -> Self:
+        if self.action is AuditAction.DOCUMENT_REDACTED:
+            fits = isinstance(self.detail, dict)
+        elif self.action is AuditAction.PAGE_ROUTED:
+            fits = isinstance(self.detail, RouteDetail)
+        elif self.action is AuditAction.VERDICT_SUGGESTED:
+            fits = isinstance(self.detail, VerdictDetail)
+        else:
+            fits = self.detail is None
+        if not fits:
+            raise ValueError(
+                "detail is the redaction counts for document.redacted, "
+                "the route for page.routed, the retriever configuration for "
+                "verdict.suggested, else null"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _only_a_failed_stage_has_an_error_code(self) -> Self:
+        if self.error_code is not None and self.action is not AuditAction.STAGE_FAILED:
+            raise ValueError("error_code is set for stage.failed only")
+        return self
+
+    @model_validator(mode="after")
+    def _human_actions_come_from_humans(self) -> Self:
+        if (self.action in ACTIONS_BY_A_HUMAN) != (self.actor_kind is ActorKind.HUMAN):
+            raise ValueError(
+                "keep, discard, accept, deny and the start of a case come from "
+                "a human, and nothing else does"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _case_actions_are_about_the_case(self) -> Self:
+        if self.action in CASE_ACTIONS and (
+            self.page_id is not None or self.ref != self.case_id
+        ):
+            raise ValueError(
+                "case.started and case.completed name no page, and their ref is the case"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _page_actions_name_a_page(self) -> Self:
+        if self.action.value.startswith(_PAGE_ACTION_PREFIX) and self.page_id is None:
+            raise ValueError("a page action needs a page_id")
+        return self

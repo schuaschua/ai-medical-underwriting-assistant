@@ -1,0 +1,202 @@
+name: infra-pr
+
+# Format check, validate and plan for every Terraform stack, with the plan
+# posted on the pull request (docs/standards/terraform.md rule 32).
+# This workflow never applies.
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-pr.yml"
+
+permissions:
+  contents: read
+  id-token: write # OIDC sign-in to Azure
+  pull-requests: write # the plan comment
+
+concurrency:
+  group: infra-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  # OIDC workload identity federation: no stored Azure secret. The ids are
+  # non-secret repository variables set by infra/bootstrap/state-backend.sh.
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  TF_VAR_deploy_principal_id: ${{ vars.AZURE_DEPLOY_PRINCIPAL_ID }}
+
+jobs:
+  # The app stack is checked but not planned: it reads the foundation stack's
+  # state, which holds no outputs whenever the environment is torn down. It
+  # needs no Azure sign-in, so it also runs for forks.
+  validate-app:
+    name: Validate demo/app
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra/demo/app
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          # Same version as required_version in each stack's versions.tf.
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+
+      - name: Format check
+        run: terraform fmt -check -recursive -diff -no-color
+
+      - name: Init
+        # No backend: nothing is read from or written to the state account.
+        # readonly: fail if the committed lock file would have to change.
+        run: terraform init -no-color -backend=false -lockfile=readonly
+
+      - name: Validate
+        run: terraform validate -no-color
+
+  plan:
+    name: Plan ${{ matrix.stack }}
+    # Fork and Dependabot pull requests get no OIDC token and no repository
+    # variables, so the job is skipped for them instead of failing halfway.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        stack:
+          - demo/foundation
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra/${{ matrix.stack }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          # Same version as required_version in each stack's versions.tf.
+          terraform_version: "1.16.5"
+          terraform_wrapper: false
+
+      # Each step keeps its output in $RUNNER_TEMP so the comment step can show
+      # the output of whichever step failed.
+      - name: Shell check
+        id: shellcheck
+        working-directory: infra/bootstrap
+        run: shellcheck ./*.sh 2>&1 | tee "$RUNNER_TEMP/shellcheck.txt"
+
+      - name: Format check
+        id: fmt
+        working-directory: infra
+        run: terraform fmt -check -recursive -diff -no-color 2>&1 | tee "$RUNNER_TEMP/fmt.txt"
+
+      - name: Init
+        id: init
+        # readonly: fail if the committed lock file would have to change.
+        run: terraform init -no-color -lockfile=readonly 2>&1 | tee "$RUNNER_TEMP/init.txt"
+
+      - name: Validate
+        id: validate
+        run: terraform validate -no-color 2>&1 | tee "$RUNNER_TEMP/validate.txt"
+
+      - name: Plan
+        id: plan
+        # No state lock: a plan only reads, and a cancelled run must not leave
+        # the state locked.
+        run: terraform plan -no-color -lock=false -out="$RUNNER_TEMP/tfplan" 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+
+      - name: Post or update the comment on the pull request
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK: ${{ matrix.stack }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
+          FMT_OUTCOME: ${{ steps.fmt.outcome }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        run: |
+          # One comment per pull request and stack, found again by this marker.
+          marker="<!-- infra-pr:${STACK} -->"
+          limit=60000 # a comment holds at most 65,536 characters
+
+          # Show the plan if it ran, otherwise the first step that failed.
+          shown=""
+          for step in shellcheck fmt init validate plan; do
+            outcome_var="$(echo "${step}_OUTCOME" | tr '[:lower:]' '[:upper:]')"
+            if [[ "${!outcome_var}" == "failure" ]]; then
+              shown="$step"
+              break
+            fi
+          done
+          if [[ -z "$shown" ]]; then
+            if [[ "$PLAN_OUTCOME" == "success" ]]; then
+              shown="plan"
+            else
+              echo "No step ran to completion; nothing to post."
+              exit 0
+            fi
+          fi
+          outcome_var="$(echo "${shown}_OUTCOME" | tr '[:lower:]' '[:upper:]')"
+
+          # Refresh lines are noise.
+          grep -v -E 'Refreshing state\.\.\.|Reading\.\.\.|Read complete after' \
+            "$RUNNER_TEMP/${shown}.txt" > "$RUNNER_TEMP/body.txt" || true
+          truncated=""
+          if [[ "$(wc -c < "$RUNNER_TEMP/body.txt")" -gt "$limit" ]]; then
+            # Keep the end, where the summary is, and drop the cut first line.
+            tail -c "$limit" "$RUNNER_TEMP/body.txt" | sed '1d' > "$RUNNER_TEMP/body-cut.txt"
+            mv "$RUNNER_TEMP/body-cut.txt" "$RUNNER_TEMP/body.txt"
+            truncated="yes"
+          fi
+
+          {
+            echo "$marker"
+            echo "### Terraform \`${STACK}\`: ${shown} ${!outcome_var}"
+            echo
+            echo "| Shell check | Format | Init | Validate | Plan |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "| ${SHELLCHECK_OUTCOME:-not run} | ${FMT_OUTCOME:-not run} | ${INIT_OUTCOME:-not run} | ${VALIDATE_OUTCOME:-not run} | ${PLAN_OUTCOME:-not run} |"
+            echo
+            if [[ -n "$truncated" ]]; then
+              echo "The output was too long for a comment: only its last part is shown. The full text is in the [workflow run](${RUN_URL})."
+              echo
+            fi
+            echo "Output of \`${shown}\`:"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/body.txt"
+            echo '```'
+            echo
+            echo "[Workflow run](${RUN_URL})"
+          } > "$RUNNER_TEMP/comment.md"
+
+          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"${marker}\")) | .id" | head -n 1)"
+          if [[ -n "$comment_id" ]]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+              -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -F "body=@$RUNNER_TEMP/comment.md" > /dev/null
+          fi

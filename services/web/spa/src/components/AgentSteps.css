@@ -1,0 +1,13 @@
+/* The agent's steps (story 2.8). No design system exists: the browser's
+   default styling, and only what keeps a long value inside its cell. */
+
+.agent-steps td {
+  /* A query or an id without a space still wraps. */
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.agent-steps ul {
+  margin: 0;
+  padding-left: 1em;
+}

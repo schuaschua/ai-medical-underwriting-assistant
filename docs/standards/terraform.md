@@ -136,3 +136,6 @@ Projects record their own deviations from this baseline here, each with who appr
 
 | Rule | Exception | Approved by (role) and date | Close by |
 | --- | --- | --- | --- |
+| 30 | Each teardown runs `terraform state rm` on the adopted resource group, so the destroy leaves the group in place; no pull-request note per run. | Project owner (Darrel), 2026-10-06 (follows from the teardown instruction) | The demo is over |
+| Apply order (destroy), 29 | The demo environment stays torn down while the stories are coded and tested locally; it is brought up only once all the coding is done, for testing in as few sessions as possible, and torn down again afterwards (owner's rule of 2026-10-07, which tightens the one of 2026-10-06; see `CLAUDE.md`). The coding agent applies and destroys the stacks locally, instead of through the pipeline's destroy workflow. The resource group, state container and deployment identity are kept. | Project owner (Darrel), 2026-10-06 | The demo is over, or a destroy workflow exists |
+| 26, 33 | For the first build of the demo environment, the coding agent may apply plans and start deploys without a human reviewing each plan. | Project owner (Darrel), 2026-10-06 | The demo environment is up |

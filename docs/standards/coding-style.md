@@ -74,3 +74,4 @@ Projects record their own deviations from this baseline here, each with who appr
 
 | Rule | Exception | Approved by (role) and date | Close by |
 |---|---|---|---|
+| 23 | The bake-off eval runner writes cases to the one deployed environment (architecture spine AD-17). | Project owner (Darrel), 2026-10-06 | A second environment exists |

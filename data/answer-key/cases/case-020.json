@@ -1,0 +1,341 @@
+{
+  "case_id": "case-020",
+  "file_name": "case-020.pdf",
+  "summary": "Multiple sclerosis, a condition the manual has no rule for: a person must decide; a handwritten note and a recipe.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "handwritten_note",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": false
+    },
+    {
+      "page_number": 5,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "recipe",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Reese Dummywick",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "29 Template Rise, Samplemere, ZZ 00240",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0120",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "reese.dummywick@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-40-8580",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0007260",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Noel Testbrook",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "5 Fixture Parade, Samplemere, ZZ 00243",
+      "pages": [
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0120",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "29 Template Rise",
+    "5 Fixture Parade",
+    "Dr Noel Testbrook",
+    "Dummywick",
+    "Example Mutual Life Assurance",
+    "Noel",
+    "Reese",
+    "SP-2026-000120",
+    "Samplemere",
+    "Samplemere Medical Practice",
+    "Specimen Diagnostics Laboratory",
+    "Testbrook",
+    "Translated from a made-up cookery book",
+    "Translator",
+    "ZZ 00240",
+    "ZZ 00243"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Multiple sclerosis, diagnosed 2019-10-07",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Multiple sclerosis, diagnosed 2019-10-07"
+        },
+        {
+          "page_number": 2,
+          "quote": "Multiple sclerosis 2019-10-07 Dimethyl fumarate twice daily"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 21.5 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 21.5 kg/m2"
+        },
+        {
+          "page_number": 2,
+          "quote": "Body mass index (BMI) 21.5 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 116 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-24 116 72"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 72 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-24 116 72"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.1 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Latest HbA1c 5.1 % on 2026-09-24"
+        },
+        {
+          "page_number": 3,
+          "quote": "HbA1c 5.1 %"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 98 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "LDL cholesterol 98 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 106 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "eGFR 106 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [],
+  "expected_verdict": {
+    "verdict": "refer",
+    "loading_pct": null,
+    "system_reasons": [
+      "no_matching_rule"
+    ]
+  }
+}

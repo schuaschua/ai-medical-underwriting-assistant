@@ -1,0 +1,272 @@
+{
+  "type": "c4-containers",
+  "title": "AI Medical Underwriting Assistant POC: containers, their stores and external services",
+  "spine": "_bmad-output/planning-artifacts/architecture/architecture-ai-medical-underwriting-assistant-2026-10-06/ARCHITECTURE-SPINE.md",
+  "sources": [
+    "_bmad-output/specs/spec-underwriting-poc/SPEC.md",
+    "_bmad-output/specs/spec-underwriting-poc/flows.md"
+  ],
+  "groups": [
+    {
+      "id": "poc",
+      "label": "AI Medical Underwriting Assistant",
+      "kind": "boundary",
+      "cite": "AD-1"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "intake",
+      "label": "intake",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Upload, PII redaction, page split, page text and boxes",
+      "cite": [
+        "AD-1",
+        "AD-21"
+      ]
+    },
+    {
+      "id": "classification",
+      "label": "classification",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Page classification, two contenders",
+      "cite": [
+        "AD-1",
+        "AD-13"
+      ]
+    },
+    {
+      "id": "extraction",
+      "label": "extraction",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "Facts with quote check",
+      "cite": [
+        "AD-1",
+        "AD-14"
+      ]
+    },
+    {
+      "id": "retrieval",
+      "label": "retrieval",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, FastAPI",
+      "description": "One search operation, six configurations",
+      "cite": [
+        "AD-1",
+        "AD-11"
+      ]
+    },
+    {
+      "id": "verdict",
+      "label": "verdict",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, Microsoft Agent Framework",
+      "description": "Agent that suggests a verdict",
+      "cite": [
+        "AD-1",
+        "AD-15"
+      ]
+    },
+    {
+      "id": "workflow",
+      "label": "workflow",
+      "kind": "container",
+      "group": "poc",
+      "tech": "Python, Durable Task SDK",
+      "description": "Case lifecycle, gate, human decisions, audit trail",
+      "cite": [
+        "AD-1",
+        "AD-5"
+      ]
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "database",
+      "group": "poc",
+      "tech": "Flexible Server, vector extension",
+      "description": "One schema per service",
+      "cite": "AD-4"
+    },
+    {
+      "id": "blob",
+      "label": "Blob Storage",
+      "kind": "database",
+      "group": "poc",
+      "description": "originals, cases, manual, classifier-training",
+      "cite": [
+        "AD-4",
+        "AD-21"
+      ]
+    },
+    {
+      "id": "lang",
+      "label": "Azure AI Language",
+      "kind": "system_ext",
+      "description": "Document PII redaction",
+      "cite": "AD-21"
+    },
+    {
+      "id": "foundry",
+      "label": "Microsoft Foundry models",
+      "kind": "system_ext",
+      "cite": "AD-16"
+    },
+    {
+      "id": "search",
+      "label": "Azure AI Search",
+      "kind": "system_ext",
+      "cite": "AD-11"
+    },
+    {
+      "id": "di",
+      "label": "Document Intelligence",
+      "kind": "system_ext",
+      "cite": [
+        "AD-13",
+        "AD-12"
+      ]
+    },
+    {
+      "id": "dts",
+      "label": "Durable Task Scheduler",
+      "kind": "system_ext",
+      "cite": "AD-5"
+    }
+  ],
+  "edges": [
+    {
+      "from": "intake",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "classification",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "extraction",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "retrieval",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "verdict",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "workflow",
+      "to": "pg",
+      "label": "own schema",
+      "cite": "AD-4"
+    },
+    {
+      "from": "intake",
+      "to": "blob",
+      "label": "original and redacted PDFs, thumbnails",
+      "cite": [
+        "AD-4",
+        "AD-21"
+      ]
+    },
+    {
+      "from": "retrieval",
+      "to": "blob",
+      "label": "manual PDF",
+      "cite": "AD-4"
+    },
+    {
+      "from": "classification",
+      "to": "blob",
+      "label": "training files",
+      "cite": "AD-4"
+    },
+    {
+      "from": "intake",
+      "to": "lang",
+      "label": "redact document",
+      "cite": "AD-21"
+    },
+    {
+      "from": "workflow",
+      "to": "dts",
+      "label": "orchestrations, external events",
+      "cite": "AD-5"
+    },
+    {
+      "from": "classification",
+      "to": "foundry",
+      "label": "LLM classifier",
+      "cite": [
+        "AD-13",
+        "AD-16"
+      ]
+    },
+    {
+      "from": "classification",
+      "to": "di",
+      "label": "custom classifier",
+      "cite": "AD-13"
+    },
+    {
+      "from": "extraction",
+      "to": "foundry",
+      "label": "fact extraction",
+      "cite": "AD-16"
+    },
+    {
+      "from": "verdict",
+      "to": "foundry",
+      "label": "verdict agent",
+      "cite": [
+        "AD-15",
+        "AD-16"
+      ]
+    },
+    {
+      "from": "retrieval",
+      "to": "foundry",
+      "label": "embeddings, context lines",
+      "cite": [
+        "AD-12",
+        "AD-16"
+      ]
+    },
+    {
+      "from": "retrieval",
+      "to": "search",
+      "label": "rows r5, r6",
+      "cite": "AD-11"
+    },
+    {
+      "from": "retrieval",
+      "to": "di",
+      "label": "manual layout parsing",
+      "cite": "AD-12"
+    }
+  ],
+  "gaps": [
+    "Calls between the services, the people and the web entry are on the companion diagram c4-containers-calls.",
+    "The protocol between each service and PostgreSQL, Blob Storage and the Azure AI services is not stated beyond 'managed identity only' (AD-18).",
+    "The two one-off jobs (manual ingestion, classifier training) run the retrieval and classification images (AD-2) and are not drawn as separate containers."
+  ]
+}

@@ -1,0 +1,251 @@
+# Dapr multi-app run file for local development: `./tools/dev.sh` starts it.
+# Each service is added here by the story that builds it.
+version: 1
+common:
+  # Service invocation only (spine AD-3): this folder is empty on purpose, so
+  # the sidecars load no state store or pub/sub component.
+  resourcesPath: ./dapr/resources
+apps:
+  - appID: web
+    appDirPath: ./services/web
+    appProtocol: http
+    appPort: 8000
+    daprHTTPPort: 3500
+    # AD-3: uploads are up to 10 MB; Dapr's default limit is 4 MB.
+    maxBodySize: 16Mi
+    enableAppHealthCheck: true
+    appHealthCheckPath: /api/health
+    command: ["uv", "run", "python", "-m", "web"]
+    env:
+      WEB_HOST: "127.0.0.1"
+      WEB_PORT: "8000"
+      # AD-17: the Scoreboard screen shows what a local run of the bake-off
+      # runner wrote (`uv run python -m bakeoff`, stand-in figures), not the
+      # published files in data/scoreboards. Relative to appDirPath.
+      WEB_SCOREBOARDS_DIR: "../../.work/scoreboards"
+  - appID: intake
+    appDirPath: ./services/intake
+    appProtocol: http
+    appPort: 8001
+    daprHTTPPort: 3501
+    # AD-3: uploads are up to 10 MB; Dapr's default limit is 4 MB.
+    maxBodySize: 16Mi
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "intake"]
+    env:
+      INTAKE_HOST: "127.0.0.1"
+      INTAKE_PORT: "8001"
+      # The containers of compose.yaml. PostgreSQL there has no password, and
+      # this value names the blob emulator's built-in account: it is no secret.
+      INTAKE_DATABASE_HOST: "127.0.0.1"
+      INTAKE_DATABASE_NAME: "aiuw"
+      INTAKE_DATABASE_USER: "aiuw"
+      INTAKE_BLOB_CONNECTION_STRING: "UseDevelopmentStorage=true"
+      # Azure AI Language is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata): the Azure environment is down while coding. It
+      # takes no credential, and it exists only on a developer machine.
+      INTAKE_LANGUAGE_ENDPOINT: "http://127.0.0.1:5100"
+      # Document Intelligence's read model, which reads the page text from
+      # each redacted PDF (its pages are pictures), is the local stand-in on
+      # the layout stand-in's port, which tools/dev.sh starts as well.
+      INTAKE_READ_ENDPOINT: "http://127.0.0.1:5102"
+  - appID: workflow
+    appDirPath: ./services/workflow
+    appProtocol: http
+    appPort: 8002
+    daprHTTPPort: 3502
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "workflow"]
+    env:
+      WORKFLOW_HOST: "127.0.0.1"
+      WORKFLOW_PORT: "8002"
+      # The containers of compose.yaml. The service signs in as its own
+      # database role, which tools/migrate-local.sh creates and the migrations
+      # grant: it can add to the audit trail and never change it (AD-8).
+      WORKFLOW_DATABASE_HOST: "127.0.0.1"
+      WORKFLOW_DATABASE_NAME: "aiuw"
+      WORKFLOW_DATABASE_USER: "workflow"
+      # The Durable Task Scheduler emulator: no credential, plain HTTP on loopback.
+      WORKFLOW_SCHEDULER_ENDPOINT: "http://127.0.0.1:8080"
+      WORKFLOW_SCHEDULER_TASK_HUB: "default"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it commands the stage services.
+      WORKFLOW_DAPR_HTTP_PORT: "3502"
+      # AD-7: the gate's threshold, which only this service is given. A page
+      # classified at it or above is routed by its label, one under it goes
+      # to triage. A case keeps the value in force when its lifecycle
+      # confirmed it: a change applies to cases started after it.
+      WORKFLOW_GATE_THRESHOLD: "0.90"
+      # AD-11: the ladder rows a case may run with here: all six. Row r4 is
+      # among them because retrieval below is given the reranker
+      # deployment, row r5 because it is given a search service, and row
+      # r6 because it is given that service and the chat deployment (local
+      # stand-ins); verdict names the same rows.
+      WORKFLOW_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5", "r6"]'
+  - appID: classification
+    appDirPath: ./services/classification
+    appProtocol: http
+    appPort: 8003
+    daprHTTPPort: 3503
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "classification"]
+    env:
+      CLASSIFICATION_HOST: "127.0.0.1"
+      CLASSIFICATION_PORT: "8003"
+      # The PostgreSQL of compose.yaml, which has no password.
+      CLASSIFICATION_DATABASE_HOST: "127.0.0.1"
+      CLASSIFICATION_DATABASE_NAME: "aiuw"
+      CLASSIFICATION_DATABASE_USER: "aiuw"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it reads each page from intake.
+      CLASSIFICATION_DAPR_HTTP_PORT: "3503"
+      # The chat deployment is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata): the Azure environment is down while coding. It
+      # takes no credential, and it exists only on a developer machine. The
+      # deployment name is what the audit trail then names as the model.
+      CLASSIFICATION_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      CLASSIFICATION_CHAT_DEPLOYMENT: "local-stand-in"
+      # AD-13, story 4.2: the second contender, `doc-intelligence`. Document
+      # Intelligence's custom classifier is the stand-in that tools/dev.sh
+      # starts with the layout stand-in (packages/synthdata), on the one
+      # port both share. It keeps its classifier in memory: train it with
+      # tools/train-local.sh after every start; until then a command with
+      # `doc-intelligence` answers `upstream_unavailable` and stores nothing. Cases start with `llm`
+      # unless told otherwise. Without these two variables the contender is
+      # refused as not available.
+      CLASSIFICATION_DOC_INTELLIGENCE_ENDPOINT: "http://127.0.0.1:5102"
+      CLASSIFICATION_DOC_INTELLIGENCE_CLASSIFIER_ID: "page-types-local"
+  - appID: extraction
+    appDirPath: ./services/extraction
+    appProtocol: http
+    appPort: 8005
+    daprHTTPPort: 3505
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "extraction"]
+    env:
+      EXTRACTION_HOST: "127.0.0.1"
+      EXTRACTION_PORT: "8005"
+      # The PostgreSQL of compose.yaml, which has no password.
+      EXTRACTION_DATABASE_HOST: "127.0.0.1"
+      EXTRACTION_DATABASE_NAME: "aiuw"
+      EXTRACTION_DATABASE_USER: "aiuw"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it reads each page's text from intake.
+      EXTRACTION_DAPR_HTTP_PORT: "3505"
+      # The chat deployment is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata), the one classification uses: the Azure
+      # environment is down while coding. It takes no credential, and it
+      # exists only on a developer machine. The deployment name is what the
+      # audit trail then names as the model.
+      EXTRACTION_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      EXTRACTION_CHAT_DEPLOYMENT: "local-stand-in"
+  - appID: retrieval
+    appDirPath: ./services/retrieval
+    appProtocol: http
+    appPort: 8004
+    daprHTTPPort: 3504
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "retrieval"]
+    env:
+      RETRIEVAL_HOST: "127.0.0.1"
+      RETRIEVAL_PORT: "8004"
+      # The PostgreSQL of compose.yaml, which has no password. The manual is
+      # ingested by a job on the same package, not by the service:
+      # tools/ingest-local.sh runs it against the stand-ins for Document
+      # Intelligence and the Foundry deployments (packages/synthdata).
+      RETRIEVAL_DATABASE_HOST: "127.0.0.1"
+      RETRIEVAL_DATABASE_NAME: "aiuw"
+      RETRIEVAL_DATABASE_USER: "aiuw"
+      # A search embeds its query on the embedding deployment the chunks
+      # were embedded with: locally the stand-in that tools/dev.sh starts,
+      # under the name tools/ingest-local.sh ingests with. It takes no
+      # credential, and it exists only on a developer machine.
+      RETRIEVAL_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      RETRIEVAL_EMBEDDING_DEPLOYMENT: "local-stand-in-embedding"
+      # Row r3: how many chunks the vector search and the full-text search
+      # each hand to the rank fusion.
+      RETRIEVAL_SEARCH_CANDIDATE_DEPTH: "50"
+      # A search's own short budget: the query's embedding call, how often
+      # it is sent again, and the deadline over the whole search.
+      RETRIEVAL_SEARCH_EMBEDDING_TIMEOUT_SECONDS: "3"
+      RETRIEVAL_SEARCH_EMBEDDING_MAX_RETRIES: "1"
+      RETRIEVAL_SEARCH_DEADLINE_SECONDS: "8"
+      # The chat deployment, under the name the ingestion wrote the
+      # context lines with: the knowledge base of row r6 plans with it.
+      # Without it r6 is refused as not available; then take it out of the
+      # two lists of rows in this file as well.
+      RETRIEVAL_CHAT_DEPLOYMENT: "local-stand-in"
+      # Row r4: the reranker is a deployment of its own, in Azure Cohere
+      # Rerank on the Foundry account and locally the stand-in that
+      # tools/dev.sh starts, which answers Cohere's rerank route. The 20
+      # best fused candidates are scored in one call of up to 15 s, and a
+      # search with r4 has 20 s in all. The call goes to Cohere's route on
+      # the model endpoint above (/providers/cohere/v2/rerank) unless
+      # RETRIEVAL_RERANK_URL names a whole address; in Azure its token has
+      # the scope RETRIEVAL_RERANK_TOKEN_SCOPE, and here there is none.
+      # Without the deployment r4 is refused as not available; then take
+      # it out of the two lists of rows in this file as well.
+      RETRIEVAL_RERANK_DEPLOYMENT: "local-stand-in-rerank"
+      RETRIEVAL_SEARCH_RERANK_DEPTH: "20"
+      RETRIEVAL_SEARCH_RERANK_TIMEOUT_SECONDS: "15"
+      RETRIEVAL_SEARCH_RERANK_DEADLINE_SECONDS: "20"
+      # Row r5: Azure AI Search is the local stand-in that tools/dev.sh
+      # starts (packages/synthdata) and tools/ingest-local.sh loads from
+      # the stored chunks. It takes no credential, keeps its index in
+      # memory, and exists only on a developer machine. Without this
+      # variable r5 and r6 are refused as not available; then take both
+      # out of the two lists of rows in this file as well.
+      RETRIEVAL_SEARCH_SERVICE_ENDPOINT: "http://127.0.0.1:5103"
+      RETRIEVAL_SEARCH_SERVICE_INDEX_NAME: "manual-smart"
+      # Row r6: agentic retrieval. The knowledge source and the knowledge
+      # base that tools/ingest-local.sh has the search stand-in hold over
+      # that index, asked on the preview REST version. The stand-in plans
+      # its own queries from the query it is sent; the real service does
+      # that with the chat deployment named above. One retrieve call of up
+      # to 15 s, and a search with r6 has 20 s in all.
+      RETRIEVAL_SEARCH_AGENTIC_API_VERSION: "2026-08-01-preview"
+      RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_SOURCE_NAME: "manual-smart-source"
+      RETRIEVAL_SEARCH_AGENTIC_KNOWLEDGE_BASE_NAME: "manual-smart-base"
+      RETRIEVAL_SEARCH_AGENTIC_TIMEOUT_SECONDS: "15"
+      RETRIEVAL_SEARCH_AGENTIC_DEADLINE_SECONDS: "20"
+  - appID: verdict
+    appDirPath: ./services/verdict
+    appProtocol: http
+    appPort: 8006
+    daprHTTPPort: 3506
+    enableAppHealthCheck: true
+    appHealthCheckPath: /health
+    command: ["uv", "run", "python", "-m", "verdict"]
+    env:
+      VERDICT_HOST: "127.0.0.1"
+      VERDICT_PORT: "8006"
+      # The PostgreSQL of compose.yaml. The service signs in as its own
+      # database role, which tools/migrate-local.sh creates and the migrations
+      # grant: it can add to the agent's step log and never change it (AD-15).
+      VERDICT_DATABASE_HOST: "127.0.0.1"
+      VERDICT_DATABASE_NAME: "aiuw"
+      VERDICT_DATABASE_USER: "verdict"
+      # AD-3: this service's own sidecar (daprHTTPPort above), through which
+      # it reads the case's facts from extraction, and searches and reads the
+      # manual's rules at retrieval.
+      VERDICT_DAPR_HTTP_PORT: "3506"
+      # The chat deployment is the local stand-in that tools/dev.sh starts
+      # (packages/synthdata), the one classification and extraction use: the
+      # Azure environment is down while coding. It takes no credential, and
+      # it exists only on a developer machine. The deployment name is what
+      # the audit trail then names as the model.
+      VERDICT_MODEL_ENDPOINT: "http://127.0.0.1:5101"
+      VERDICT_CHAT_DEPLOYMENT: "local-stand-in"
+      # AD-11: the ladder rows a verdict may be commanded with here: the
+      # rows retrieval answers, r4 among them because it is given the
+      # reranker deployment above, r5 because it is given a search service
+      # and r6 because it is given that service and the chat deployment.
+      # workflow names the same rows. On r6 the
+      # agent's own search loop is off: one search per fact, then one call
+      # of the model to compose the proposal (AD-15).
+      VERDICT_AVAILABLE_RETRIEVER_CONFIGS: '["r1", "r2", "r3", "r4", "r5", "r6"]'

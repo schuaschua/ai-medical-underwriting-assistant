@@ -1,0 +1,406 @@
+{
+  "case_id": "case-012",
+  "file_name": "case-012.pdf",
+  "summary": "A heart attack thirty months ago, called that on the form, with LDL cholesterol reported in mmol/L and still raised; a passport.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "id_document",
+      "is_medical": false,
+      "layout": "passport",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Ellis Dummybrook",
+      "pages": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 2
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "11 Specimen Court, Examplecombe, ZZ 00184",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0112",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "ellis.dummybrook@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-32-5548",
+      "pages": [
+        1,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0006356",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Frankie Testholme",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "27 Mock Street, Examplecombe, ZZ 00187",
+      "pages": [
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0112",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "11 Specimen Court",
+    "27 Mock Street",
+    "Accounts manager",
+    "Dr Frankie Testholme",
+    "Dummybrook",
+    "Ellis",
+    "Example Mutual Life Assurance",
+    "Examplecombe",
+    "Examplecombe Practice",
+    "Exampleland Passport Office",
+    "Examplelander",
+    "Frankie",
+    "P-SYN-0001277",
+    "Republic of Exampleland",
+    "SP-2026-000112",
+    "Specimen Diagnostics Laboratory",
+    "Testholme",
+    "ZZ 00184",
+    "ZZ 00187"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Myocardial infarction, diagnosed 2024-03-11",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Heart attack, diagnosed 2024-03-11"
+        },
+        {
+          "page_number": 2,
+          "quote": "Myocardial infarction 2024-03-11 Aspirin 75 mg, atorvastatin 80 mg"
+        }
+      ]
+    },
+    {
+      "kind": "derived",
+      "statement": "Myocardial infarction: time since the heart attack 30 months",
+      "measure": "months_since_myocardial_infarction",
+      "rule_ids": [
+        "UW-MI-002"
+      ],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Heart attack, diagnosed 2024-03-11"
+        },
+        {
+          "page_number": 2,
+          "quote": "Myocardial infarction 2024-03-11 Aspirin 75 mg, atorvastatin 80 mg"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 26.8 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 26.8 kg/m2"
+        },
+        {
+          "page_number": 2,
+          "quote": "Body mass index (BMI) 26.8 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 122 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-06-15 122 74"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 74 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-06-15 122 74"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 124 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-15 124 76"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 76 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-09-15 124 76"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.5 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Latest HbA1c 5.5 % on 2026-09-15"
+        },
+        {
+          "page_number": 3,
+          "quote": "HbA1c 5.5 %"
+        }
+      ]
+    },
+    {
+      "kind": "derived",
+      "statement": "systolic blood pressure 123 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-06-15 122 74"
+        },
+        {
+          "page_number": 2,
+          "quote": "2026-09-15 124 76"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 166 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [
+        "UW-LDL-001"
+      ],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "LDL cholesterol 4.3 mmol/L"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 76 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "eGFR 76 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-LDL-001",
+    "UW-MI-002"
+  ],
+  "expected_verdict": {
+    "verdict": "loaded",
+    "loading_pct": 125,
+    "system_reasons": []
+  }
+}

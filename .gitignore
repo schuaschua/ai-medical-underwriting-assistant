@@ -4,3 +4,37 @@ docs/costing/token_usage/
 # Personal BMad and Claude Code settings
 _bmad/custom/config.user.toml
 .claude/settings.local.json
+
+# Scratch and temporary files
+.work/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Terraform (state lives in the Azure Storage backend, never in git)
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan
+
+# Node (the SPA)
+node_modules/
+services/web/spa/coverage/
+
+# Dapr CLI run logs
+.dapr/
+tfdestroy
+
+# Local values an operator supplies at bring-up (alert address, own object id); never committed
+*.auto.tfvars

@@ -105,6 +105,45 @@ Most names follow `<abbr>-<project>-<env>-<rgn>[-<role>]`. Names that can't cont
 30. Apply stacks in the order the architecture defines, and a human approves every plan. Any manual step (such as a database principal bootstrap) is recorded in `infra/README`. (WAF p. 865)
 31. A bootstrap script, run once by an operator who holds Owner, creates `rg-<project>-<env>-<rgn>` with the six required tags, registers the resource providers the stacks use, and creates the deployment identity `id-<project>-<env>-<rgn>-deploy` in the state resource group with federated credentials for the repository's `pull_request` and `environment:<env>` subjects, using the repo's GitHub OIDC subject prefix read from GitHub's API (the immutable `repo:<owner>@<id>/<repo>@<id>` form), never built from the repo name. That identity holds exactly **Contributor** on the project resource group; **Role Based Access Control Administrator** on that resource group, with a condition that it can assign or remove only the runtime roles in rule 9, and only for service principals; and **Storage Blob Data Contributor** on the project's state container. It has nothing at subscription scope, no Owner and no directory rights. The first stack adopts the resource group with an `import` block, and the `azurerm` provider sets `resource_provider_registrations = "none"`.
 
+## Project additions (aiuw)
+
+Project values: `<project>` is `aiuw`, `<env>` is `demo`, `<region>` is `westus3`, `<rgn>` is `wus3`. The central state account `stdjtfstatesea` in `rg-tfstate-sea` keeps its own region code.
+
+### Project resource names (rule 2)
+
+Resource types this project adds to the baseline table. Abbreviations are from the CAF list.
+
+| Resource | Abbr | Name pattern |
+| --- | --- | --- |
+| Storage account (application data) | `st` | `st<project><env><rgn>` |
+| Azure AI Search service | `srch` | `srch-<project>-<env>-<rgn>` |
+| Document Intelligence account | `di` | `di-<project>-<env>-<rgn>` (also its custom subdomain) |
+| Azure AI Language account | `lang` | `lang-<project>-<env>-<rgn>` (also its custom subdomain) |
+| Durable Task Scheduler | `dts` | `dts-<project>-<env>-<rgn>` |
+| Durable Task Scheduler task hub (child of the scheduler) | none in CAF | `<project>-<env>` |
+| Diagnostic setting (child of the resource it reads) | `diag` | `diag-<project>-<env>-<rgn>` |
+| PostgreSQL database (child of the server) | none | `<project>` |
+| Container Apps job | `caj` | `caj-<project>-<env>-<rgn>-<role>` |
+
+Three things belonging to the environment are not `westus3` resources in `rg-aiuw-demo-wus3`: the action group `ag-aiuw-demo-wus3` (Azure Monitor action groups are global, location `global`); the budget `budget-aiuw-demo` (a budget has no region); and the deployment identity `id-aiuw-demo-wus3-deploy`, which has location `westus3` but sits in the central state resource group `rg-tfstate-sea` (rule 31).
+
+### Runtime roles (rule 9)
+
+Placeholder until the `app` stack assigns them (story 1.3); the source is the architecture spine, section "Deployment". The `foundation` stack creates the identities and assigns no role. The deployment identity's condition in `infra/bootstrap/state-backend.sh` allows exactly these roles, for service principals only; change both lists together.
+
+| Role | Scope | Held by |
+| --- | --- | --- |
+| AcrPull | Container registry | all seven runtime identities |
+| Monitoring Metrics Publisher | Application Insights | all seven runtime identities |
+| Storage Blob Data Contributor | One blob container | `intake` (`originals`, `cases`), Azure AI Language's own identity (`cases`) |
+| Storage Blob Data Reader | One blob container | `retrieval` (`manual`), `classification` (`classifier-training`), Azure AI Language's own identity (`originals`), Document Intelligence's own identity (`classifier-training`) |
+| Cognitive Services User | Azure AI Language, Document Intelligence or the Foundry account | `intake` (Language, and Document Intelligence for the read model that reads each redacted PDF), `classification` and `retrieval` (Document Intelligence), Azure AI Search's own identity (Foundry account) |
+| Foundry User | Foundry account (the services call the account's endpoint; a role on the project is refused there, seen 2026-10-10) | `classification`, `extraction`, `retrieval`, `verdict` |
+| Search Index Data Contributor, Search Service Contributor | Azure AI Search | `retrieval` |
+| Durable Task Data Contributor | Task hub | `workflow` |
+
+PostgreSQL access is not an Azure role: each service identity except `web` gets its own database role (spine AD-4).
+
 ## Commonly deferred (revisit triggers)
 
 Projects that defer any of these list them in their copy with their own trigger.
@@ -124,6 +163,7 @@ Projects record their own deviations from this baseline here, each with who appr
 
 | Rule | Exception | Approved by (role) and date | Close by |
 | --- | --- | --- | --- |
+| 12 | No sign-in at the edge or in the application: the demo is open, with a two-role switcher (architecture spine AD-9). | Project owner (Darrel), 2026-10-06 | Before real data, or any audience beyond the demo |
 
 ## Where to look deeper
 

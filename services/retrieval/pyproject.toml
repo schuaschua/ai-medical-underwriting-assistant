@@ -1,0 +1,37 @@
+[project]
+name = "retrieval"
+version = "0.1.0"
+description = "The retrieval service: owns the manual's chunks and their vectors, and the job that ingests the manual (spine AD-12, AD-16)"
+requires-python = "==3.13.*"
+dependencies = [
+    "contracts",
+    # Migrations run from the pipeline; the service reads the bundled head at readiness.
+    "alembic==1.20.0",
+    # Entra sign-in for PostgreSQL, Blob Storage, Document Intelligence, the
+    # Foundry model deployments and telemetry.
+    "azure-identity==1.26.0",
+    "azure-monitor-opentelemetry==1.8.10",
+    # The manual PDF is read from the `manual` container.
+    "azure-storage-blob==12.31.0",
+    "fastapi==0.142.2",
+    # The HTTP library of the model client and of the Document Intelligence
+    # client: both are built with it, so that no redirect is followed and no
+    # proxy setting applies.
+    "httpx2==2.13.1",
+    # AD-16: the chat and embedding deployments, called from the one gateway module.
+    "openai==3.24.0",
+    # AD-12: the vector column type of the chunk table.
+    "pgvector==0.5.0",
+    "psycopg[binary]==3.3.6",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "sqlalchemy[asyncio]==2.1.3",
+    "uvicorn==0.54.0",
+]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+[build-system]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"

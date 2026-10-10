@@ -1,0 +1,31 @@
+[project]
+name = "evals"
+version = "0.1.0"
+description = "The bake-off runner: scores the retrieval rows and the classifier contenders through web's API and writes the scoreboard files (spine AD-17)"
+requires-python = "==3.13.*"
+# A dev tool, not a service: it is in no image, and no service depends on it
+# or imports it. It talks to `web` only and is the one reader of the answer key.
+dependencies = [
+    "contracts",
+    "httpx==0.28.1",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    # training_pages: whether a training page has any text layer, to tell a
+    # page that failed redaction because its text is only in its picture.
+    "pymupdf==1.28.2",
+    # static-metrics.yaml: the stated cost and effort of each row.
+    "pyyaml==6.0.3",
+]
+
+[tool.uv.sources]
+contracts = { workspace = true }
+
+# The package is imported as `bakeoff`, not by the folder's name: pytest names
+# the test modules of this folder `evals.tests...`, and a package called
+# `evals` would be hidden behind that name while the tests run.
+[tool.uv.build-backend]
+module-name = "bakeoff"
+
+[build-system]
+requires = ["uv_build==0.11.8"]
+build-backend = "uv_build"

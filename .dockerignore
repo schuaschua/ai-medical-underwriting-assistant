@@ -1,0 +1,28 @@
+# The build context is the repository root; images need only source and lock files.
+.git
+.github
+.claude
+.work
+.venv
+.dapr
+.coverage
+.mypy_cache
+.pytest_cache
+.ruff_cache
+_bmad
+_bmad-output
+# Of `data`, only the published scoreboards reach an image, and only the
+# `web` image copies them (spine AD-17). The cases, the manual and the answer
+# key are in no image.
+data/*
+!data/scoreboards
+docs
+# The bake-off runner is a dev tool: it is in no image (spine AD-17).
+evals
+infra
+**/__pycache__
+**/node_modules
+**/dist
+**/coverage
+**/tests
+**/.terraform

@@ -1,0 +1,71 @@
+# Local stand-ins for the stateful Azure services (spine, Deployment).
+# All listen on this machine only. `./tools/dev.sh` starts them.
+name: aiuw
+
+services:
+  postgres:
+    # PostgreSQL 17 with the vector extension 0.8.2, as in the demo environment.
+    image: pgvector/pgvector:0.8.2-pg17
+    environment:
+      POSTGRES_DB: aiuw
+      POSTGRES_USER: aiuw
+      # No password exists to leak: the port is bound to loopback and the
+      # database holds synthetic data only. Azure uses Entra sign-in instead.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username aiuw --dbname aiuw"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  scheduler:
+    # Durable Task Scheduler emulator: state is in memory and is lost on stop.
+    # Pinned by digest: the newest version tag (v0.0.10, June 2025) stops at
+    # start-up, and newer builds are published only as `latest`. This is the
+    # `latest` of 2026-08-18.
+    image: mcr.microsoft.com/dts/dts-emulator@sha256:361323065a608d605f9d3ae56b854eb11f1c47fcc16845a37f948f03ca9c5fac
+    environment:
+      # The task hubs the emulator holds: `default` for the local run of
+      # `workflow`, and one that only its integration tests use, so a test
+      # never hands a case to the service you are running, or the other way round.
+      DTS_TASK_HUB_NAMES: default,aiuw-test
+    ports:
+      - "127.0.0.1:8080:8080" # the scheduler endpoint (gRPC)
+      - "127.0.0.1:8082:8082" # its dashboard
+    healthcheck:
+      # The image has no curl or wget; bash can open the scheduler's port.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  azurite:
+    # Blob Storage emulator. Only the blob endpoint is started and published.
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
+    command:
+      - azurite-blob
+      - --blobHost
+      - 0.0.0.0
+      - --location
+      - /data
+      # The SDK may speak a newer API version than this emulator release knows.
+      - --skipApiVersionCheck
+      - --disableProductStyleUrl
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - azurite-data:/data
+    healthcheck:
+      # The image has no curl; nc can open the blob port.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  postgres-data:
+  azurite-data:

@@ -1,0 +1,604 @@
+"""The ingestion job: `python -m retrieval.ingest` (spine AD-12).
+
+A one-off job on the `retrieval` image and identity, started by hand or by
+the pipeline. It calls no other service of ours: it reads the manual from
+the `manual` container, has Document Intelligence parse it, has the chat
+model write a context line per chunk and the embedding model a vector, and
+stores the chunks in schema `retrieval`. Run again over the same manual it
+changes nothing and calls no model.
+
+It writes the chunk sets the settings name (`smart` and `fixed` unless told
+otherwise), each as a run of its own over the one parsed manual: the
+`fixed` set gets no context line, only vectors from the same embedding
+deployment.
+
+It ends with status 0 when every chunk set is as the manual has it, and with
+1 otherwise, after one log line per chunk set that names its counts, or the
+error code and the reason. A failed run leaves its chunk set as it was, and
+the other set as its own run left it. When the stored sets then stand on
+different manuals the job says so in a line of its own and ends with 1 as
+well: the rows of the ladder are compared with each other.
+
+Where the settings name a search service (row `r5`, spine AD-11), the job's
+last step loads that service's index from the `smart` chunk records pgvector
+now holds, and checks that both stores hold the same chunks. It asks no
+model. A failure of that step has a log line of its own and ends the job
+with 1; pgvector stays as the runs before it left it.
+
+When the index is loaded the job has the search service hold the knowledge
+source and the knowledge base of row `r6` over that index, creating each
+where it is missing. A failure there has a log line of its own as well and
+ends the job with 1; pgvector and the index stay as they are.
+
+Before the process ends its telemetry is sent.
+"""
+
+import asyncio
+import logging
+import sys
+import time
+from dataclasses import dataclass
+
+import httpx2
+from opentelemetry import trace
+
+from contracts.enums import ChunkSet
+from contracts.errors import ErrorCode
+from retrieval.adapters.blob import BlobManualStore, build_blob_service
+from retrieval.adapters.db import (
+    SqlChunkRepository,
+    SqlSchemaRevision,
+    build_database,
+)
+from retrieval.adapters.knowledge_base import (
+    KnowledgeBase,
+    planning_model,
+    query_vectorizer,
+)
+from retrieval.adapters.layout import (
+    DocumentLayout,
+    build_layout_http,
+    layout_token_for,
+)
+from retrieval.adapters.migrations import bundled_head
+from retrieval.adapters.model import (
+    ModelGateway,
+    build_model_client,
+    chat_deployment,
+    embedding_deployment,
+    model_token_for,
+)
+from retrieval.adapters.search_index import (
+    SearchIndex,
+    build_search_http,
+    search_token_for,
+)
+from retrieval.adapters.telemetry import (
+    adapter_span,
+    code_locations,
+    configure_logging,
+    configure_telemetry,
+    shutdown_telemetry,
+)
+from retrieval.domain.entities import (
+    IndexLoadReport,
+    IngestReport,
+    KnowledgeBaseReport,
+)
+from retrieval.domain.index_load import (
+    IndexLoadOptions,
+    ensure_knowledge_base,
+    load_search_index,
+)
+from retrieval.domain.ingest import (
+    IngestError,
+    IngestOptions,
+    IngestPorts,
+    built_from_different_manuals,
+    ingest_chunk_sets,
+)
+from retrieval.prompts import CHUNK_CONTEXT, prompt_digest
+from retrieval.settings import APP_ID, Settings, get_settings
+
+logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(APP_ID)
+
+SCHEMA_MESSAGE = "The database is not at the migration this build ships with."
+# The reason of a job after which the stored chunk sets stand on different manuals.
+DIFFERENT_MANUALS = "chunk_sets_built_from_different_manuals"
+OK, FAILED = 0, 1
+
+
+@dataclass(frozen=True, slots=True)
+class Transports:
+    """Where a test puts its stand-ins for Document Intelligence and the models."""
+
+    layout: httpx2.AsyncBaseTransport | None = None
+    model: httpx2.AsyncBaseTransport | None = None
+    search: httpx2.AsyncBaseTransport | None = None
+
+
+def missing_settings(settings: Settings) -> list[str]:
+    """The variables the job cannot run without and was not given."""
+    needed = {
+        "RETRIEVAL_LAYOUT_ENDPOINT": settings.layout_endpoint,
+        "RETRIEVAL_MODEL_ENDPOINT": settings.model_endpoint,
+        "RETRIEVAL_CHAT_DEPLOYMENT": settings.chat_deployment,
+        "RETRIEVAL_EMBEDDING_DEPLOYMENT": settings.embedding_deployment,
+        "RETRIEVAL_BLOB_ACCOUNT_URL": settings.blob_account_url
+        or settings.blob_connection_string,
+    }
+    return [name for name, value in needed.items() if value is None]
+
+
+def ingest_options(settings: Settings) -> IngestOptions:
+    """What a run works with, as the settings say."""
+    return IngestOptions(
+        chat_deployment=chat_deployment(settings),
+        embedding_deployment=embedding_deployment(settings),
+        prompt_digest=prompt_digest(CHUNK_CONTEXT),
+        context_line_max_chars=settings.context_line_max_chars,
+        embedding_batch_size=settings.embedding_batch_size,
+        max_removed_share=settings.ingest_max_removed_share,
+        deadline_seconds=settings.ingest_deadline_seconds,
+        fixed_chunk_words=settings.fixed_chunk_words,
+        fixed_overlap_words=settings.fixed_chunk_overlap_words,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class JobResult:
+    """How a job ended."""
+
+    # Each chunk set's report, or the error its run ended with.
+    chunk_sets: dict[ChunkSet, IngestReport | Exception]
+    # The manual each stored set was last built from, when they differ; else empty.
+    different_manuals: dict[ChunkSet, str]
+    # The load of the search service's index: its report, or the error it
+    # ended with; None when the settings name no search service.
+    index_load: IndexLoadReport | Exception | None = None
+    # How long that load took, by itself.
+    index_load_seconds: float = 0.0
+    # Row `r6`'s knowledge source and knowledge base: what was found or
+    # created, or the error; None when the index was not loaded.
+    knowledge_base: KnowledgeBaseReport | Exception | None = None
+    knowledge_base_seconds: float = 0.0
+
+
+def index_load_options(settings: Settings) -> IndexLoadOptions:
+    """What a load of the search index works with, as the settings say."""
+    return IndexLoadOptions(
+        upload_batch_size=settings.search_service_upload_batch_size,
+        deadline_seconds=settings.search_service_load_deadline_seconds,
+        check_attempts=settings.search_service_check_attempts,
+        check_wait_seconds=settings.search_service_check_wait_seconds,
+    )
+
+
+def build_search_index(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> SearchIndex:
+    """The search service's index as the job loads it, with the job's own patience."""
+    return SearchIndex(
+        build_search_http(settings, transport),
+        index_name=settings.search_service_index_name,
+        api_version=settings.search_service_api_version,
+        max_retries=settings.search_service_max_retries,
+        retry_seconds=settings.search_service_retry_seconds,
+        token=search_token_for(settings),
+        # Row `r6`: the search service embeds the queries it plans with
+        # the deployment the chunks were embedded with.
+        vectorizer=query_vectorizer(settings),
+    )
+
+
+def build_knowledge_base(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> KnowledgeBase:
+    """Row `r6`'s knowledge base as the job makes it, with the job's own patience."""
+    return KnowledgeBase(
+        build_search_http(settings, transport),
+        index_name=settings.search_service_index_name,
+        source_name=settings.search_agentic_knowledge_source_name,
+        base_name=settings.search_agentic_knowledge_base_name,
+        # The preview version, for these calls alone.
+        api_version=settings.search_agentic_api_version,
+        reasoning_effort=settings.search_agentic_reasoning_effort,
+        model=planning_model(settings),
+        max_retries=settings.search_service_max_retries,
+        retry_seconds=settings.search_service_retry_seconds,
+        token=search_token_for(settings),
+    )
+
+
+async def make_knowledge_base(
+    settings: Settings, transport: httpx2.AsyncBaseTransport | None = None
+) -> KnowledgeBaseReport | Exception:
+    """Have the search service hold row `r6`'s knowledge base; the report, or the error.
+
+    Answered, not raised, as the index load's outcome is: the job still
+    reports everything before it.
+    """
+    with adapter_span(tracer, "retrieval.knowledge_base") as span:
+        span.set_attribute(
+            "retrieval.search_service.knowledge_base",
+            settings.search_agentic_knowledge_base_name,
+        )
+        knowledge_base: KnowledgeBase | None = None
+        try:
+            knowledge_base = build_knowledge_base(settings, transport)
+            report = await ensure_knowledge_base(
+                knowledge_base, settings.search_agentic_ensure_deadline_seconds
+            )
+        except Exception as error:  # noqa: BLE001 - whatever it raised, the job reports it beside the runs and the load
+            span.set_attribute("retrieval.knowledge_base.outcome", "failed")
+            span.set_attribute("error.type", _code_of(error).value)
+            span.set_attribute("retrieval.knowledge_base.reason", _reason_of(error))
+            return error
+        finally:
+            if knowledge_base is not None:
+                await knowledge_base.aclose()
+        span.set_attribute("retrieval.knowledge_base.outcome", "done")
+        return report
+
+
+async def load_index(
+    settings: Settings,
+    repository: SqlChunkRepository,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> IndexLoadReport | Exception:
+    """Load the search service's index from the stored chunks; the report, or the error.
+
+    Whatever goes wrong here is answered, not raised: pgvector is written
+    by then, and the job still reports every chunk set's run.
+    """
+    with adapter_span(tracer, "retrieval.index_load") as span:
+        span.set_attribute(
+            "retrieval.search_service.index", settings.search_service_index_name
+        )
+        index: SearchIndex | None = None
+        try:
+            # Building the client is part of the load: a credential that
+            # cannot be made is answered like any other failure of it.
+            index = build_search_index(settings, transport)
+            report = await load_search_index(
+                repository, index, index_load_options(settings)
+            )
+        except Exception as error:  # noqa: BLE001 - whatever the load raised, the job reports it beside the runs
+            span.set_attribute("retrieval.index_load.outcome", "failed")
+            span.set_attribute("error.type", _code_of(error).value)
+            span.set_attribute("retrieval.index_load.reason", _reason_of(error))
+            return error
+        finally:
+            if index is not None:
+                await index.aclose()
+        span.set_attribute("retrieval.index_load.outcome", "done")
+        span.set_attribute("retrieval.index_load.documents", report.documents)
+        span.set_attribute("retrieval.index_load.uploaded", report.uploaded)
+        span.set_attribute("retrieval.index_load.removed", report.removed)
+        return report
+
+
+async def run(settings: Settings, transports: Transports | None = None) -> JobResult:
+    """One run per chunk set with the real adapters, as the settings describe them.
+
+    Answers each set's report, or the error its run ended with; that set is
+    then as it was. Raises `IngestError` when no run could begin: the
+    schema is not the one this build ships with.
+    """
+    transports = transports or Transports()
+    options = ingest_options(settings)
+    database = build_database(settings)
+    layout = DocumentLayout(
+        build_layout_http(settings, transports.layout),
+        api_version=settings.layout_api_version,
+        model=settings.layout_model,
+        poll_seconds=settings.layout_poll_seconds,
+        deadline_seconds=settings.layout_deadline_seconds,
+        max_retries=settings.layout_max_retries,
+        token=layout_token_for(settings),
+    )
+    gateway = ModelGateway(
+        build_model_client(settings, transports.model, model_token_for(settings)),
+        chat_deployment=options.chat_deployment,
+        embedding_deployment=options.embedding_deployment,
+        max_retries=settings.model_max_retries,
+        retry_seconds=settings.model_retry_seconds,
+        max_retry_seconds=settings.model_max_retry_seconds,
+        max_completion_tokens=settings.model_max_completion_tokens,
+        max_concurrent_calls=settings.model_max_concurrent_calls,
+    )
+    repository = SqlChunkRepository(database)
+    ports = IngestPorts(
+        manual=BlobManualStore(
+            build_blob_service(settings),
+            settings.manual_container,
+            settings.manual_blob_name,
+        ),
+        layout=layout,
+        model=gateway,
+        repository=repository,
+    )
+    try:
+        with adapter_span(tracer, "retrieval.ingest") as span:
+            try:
+                # Before anything is spent: a schema that is behind this
+                # build would fail the run at its very end.
+                current = await SqlSchemaRevision(database).current()
+                if current != bundled_head():
+                    raise IngestError(
+                        ErrorCode.UPSTREAM_UNAVAILABLE,
+                        SCHEMA_MESSAGE,
+                        "schema_not_at_head",
+                        str(current),
+                    )
+            except IngestError as error:
+                _note_failure(span, error)
+                raise
+            outcomes = await ingest_chunk_sets(
+                ports,
+                options,
+                settings.ingest_chunk_sets,
+                allow_large_removal=settings.ingest_allow_large_removal,
+            )
+            different = await built_from_different_manuals(ports.repository)
+            failed = {
+                chunk_set: outcome
+                for chunk_set, outcome in outcomes.items()
+                if isinstance(outcome, Exception)
+            }
+            reports = [o for o in outcomes.values() if isinstance(o, IngestReport)]
+            if failed:
+                first = next(iter(failed.values()))
+                span.set_attribute("retrieval.ingest.outcome", "failed")
+                span.set_attribute("error.type", _code_of(first).value)
+                span.set_attribute("retrieval.ingest.reason", _reason_of(first))
+                span.set_attribute(
+                    "retrieval.ingest.failed_chunk_sets",
+                    [chunk_set.value for chunk_set in failed],
+                )
+            elif different:
+                span.set_attribute("retrieval.ingest.outcome", "failed")
+                span.set_attribute("error.type", ErrorCode.STAGE_FAILED.value)
+                span.set_attribute("retrieval.ingest.reason", DIFFERENT_MANUALS)
+            else:
+                span.set_attribute(
+                    "retrieval.ingest.outcome",
+                    "unchanged" if all(r.skipped for r in reports) else "done",
+                )
+            span.set_attribute(
+                "retrieval.ingest.chunk_sets",
+                [chunk_set.value for chunk_set in outcomes],
+            )
+            # Over the chunk sets whose run was done.
+            span.set_attribute("retrieval.chunks.count", sum(r.chunks for r in reports))
+            span.set_attribute(
+                "retrieval.chunks.written", sum(r.written for r in reports)
+            )
+            span.set_attribute("retrieval.chunks.moved", sum(r.moved for r in reports))
+            span.set_attribute(
+                "retrieval.chunks.removed", sum(r.removed for r in reports)
+            )
+            span.set_attribute(
+                "retrieval.chunks.unchanged", sum(r.unchanged for r in reports)
+            )
+            loaded, load_seconds = None, 0.0
+            if settings.search_service_endpoint is not None:
+                # After pgvector is written, and whatever the runs said:
+                # the index is brought to what pgvector holds now.
+                load_started = time.monotonic()
+                loaded = await load_index(settings, repository, transports.search)
+                load_seconds = time.monotonic() - load_started
+            made, make_seconds = None, 0.0
+            if isinstance(loaded, IndexLoadReport):
+                # AD-11, row `r6`: only over an index that is loaded and
+                # was found to hold what pgvector holds.
+                make_started = time.monotonic()
+                made = await make_knowledge_base(settings, transports.search)
+                make_seconds = time.monotonic() - make_started
+            return JobResult(
+                outcomes, different, loaded, load_seconds, made, make_seconds
+            )
+    finally:
+        # Each resource is closed even if the one before it failed to close.
+        try:
+            await gateway.aclose()
+        finally:
+            try:
+                await layout.aclose()
+            finally:
+                await database.dispose()
+
+
+def _note_failure(span: trace.Span, error: IngestError) -> None:
+    span.set_attribute("retrieval.ingest.outcome", "failed")
+    span.set_attribute("error.type", error.code.value)
+    span.set_attribute("retrieval.ingest.reason", error.reason)
+
+
+def _code_of(error: Exception) -> ErrorCode:
+    return error.code if isinstance(error, IngestError) else ErrorCode.INTERNAL_ERROR
+
+
+def _reason_of(error: Exception) -> str:
+    """A short code for a set's failure: the run's own reason, or the error's type, never its message."""
+    return error.reason if isinstance(error, IngestError) else type(error).__qualname__
+
+
+def main(settings: Settings | None = None, transports: Transports | None = None) -> int:
+    """Run the job once and say how it ended; the return value is the exit status."""
+    configure_logging()
+    started = time.monotonic()
+    telemetry_on = False
+    try:
+        try:
+            if settings is None:
+                settings = get_settings()
+            missing = missing_settings(settings)
+            if not missing:
+                telemetry_on = configure_telemetry(settings)
+        except Exception as error:  # noqa: BLE001 - a job that cannot be set up says so in its one line, like any other failure
+            # The type only: a settings error's message repeats the values
+            # it refused, and one of them may be a connection string.
+            logger.error(
+                "ingestion failed: code=%s reason=setup_%s",
+                ErrorCode.INTERNAL_ERROR.value,
+                type(error).__qualname__,
+            )
+            return FAILED
+        if missing:
+            # Said before anything is built: the service runs without
+            # these, the job does not.
+            logger.error(
+                "ingestion failed: code=%s reason=not_configured missing=%s",
+                ErrorCode.INTERNAL_ERROR.value,
+                ",".join(missing),
+            )
+            return FAILED
+        return _run_and_report(settings, transports, started)
+    finally:
+        if telemetry_on:
+            # The process ends after this: what the run's spans and log
+            # lines hold is sent first.
+            shutdown_telemetry()
+
+
+def _run_and_report(
+    settings: Settings, transports: Transports | None, started: float
+) -> int:
+    try:
+        result = asyncio.run(run(settings, transports))
+    except IngestError as error:
+        _log_failure(error, "-", started)
+        return FAILED
+    except Exception as error:  # noqa: BLE001 - whatever went wrong, the job says so and ends non-zero
+        _log_unexpected(error, "-", started)
+        return FAILED
+    status = OK
+    for chunk_set, outcome in result.chunk_sets.items():
+        if isinstance(outcome, IngestError):
+            _log_failure(outcome, chunk_set.value, started)
+            status = FAILED
+        elif isinstance(outcome, Exception):
+            _log_unexpected(outcome, chunk_set.value, started)
+            status = FAILED
+        else:
+            logger.info(
+                "ingestion done: pages=%d chunks=%d written=%d moved=%d removed=%d "
+                "unchanged=%d skipped=%s chunk_set=%s seconds=%.1f",
+                outcome.pages,
+                outcome.chunks,
+                outcome.written,
+                outcome.moved,
+                outcome.removed,
+                outcome.unchanged,
+                "yes" if outcome.skipped else "no",
+                chunk_set.value,
+                time.monotonic() - started,
+            )
+    if result.different_manuals:
+        # An error of its own, whatever each set's run said: a search on one
+        # row and a search on another no longer read the same manual.
+        logger.error(
+            "ingestion failed: code=%s reason=%s chunk_sets=%s manual_sha256=%s",
+            ErrorCode.STAGE_FAILED.value,
+            DIFFERENT_MANUALS,
+            ",".join(chunk_set.value for chunk_set in result.different_manuals),
+            ",".join(result.different_manuals.values()),
+        )
+        status = FAILED
+    loaded = result.index_load
+    index = settings.search_service_index_name
+    if isinstance(loaded, IngestError):
+        # A line of its own: pgvector is as the lines above say.
+        logger.error(
+            "index load failed: code=%s reason=%s where=%s index=%s seconds=%.1f",
+            loaded.code.value,
+            loaded.reason,
+            loaded.where or "-",
+            index,
+            result.index_load_seconds,
+        )
+        status = FAILED
+    elif isinstance(loaded, Exception):
+        logger.error(
+            "index load failed: code=%s reason=%s at=%s index=%s seconds=%.1f",
+            ErrorCode.INTERNAL_ERROR.value,
+            type(loaded).__qualname__,
+            " <- ".join(reversed(code_locations(loaded))),
+            index,
+            result.index_load_seconds,
+        )
+        status = FAILED
+    elif loaded is not None:
+        logger.info(
+            "index load done: documents=%d uploaded=%d removed=%d unchanged=%d "
+            "created=%s index=%s seconds=%.1f",
+            loaded.documents,
+            loaded.uploaded,
+            loaded.removed,
+            loaded.unchanged,
+            "yes" if loaded.created else "no",
+            index,
+            result.index_load_seconds,
+        )
+    return _report_knowledge_base(settings, result, status)
+
+
+def _report_knowledge_base(settings: Settings, result: JobResult, status: int) -> int:
+    """Say how row `r6`'s knowledge base ended, in a line of its own; the job's status after it."""
+    made = result.knowledge_base
+    if made is None:
+        return status
+    names = (
+        settings.search_agentic_knowledge_source_name,
+        settings.search_agentic_knowledge_base_name,
+    )
+    if isinstance(made, Exception):
+        # A line of its own: pgvector and the index are as the lines above say.
+        logger.error(
+            "knowledge base failed: code=%s reason=%s source=%s base=%s seconds=%.1f",
+            _code_of(made).value,
+            _reason_of(made),
+            *names,
+            result.knowledge_base_seconds,
+        )
+        return FAILED
+    logger.info(
+        "knowledge base done: source=%s base=%s source_created=%s base_created=%s "
+        "seconds=%.1f",
+        *names,
+        "yes" if made.source_created else "no",
+        "yes" if made.base_created else "no",
+        result.knowledge_base_seconds,
+    )
+    return status
+
+
+def _log_unexpected(error: Exception, chunk_set: str, started: float) -> None:
+    # The error's type and where it was raised, never its message, which
+    # can hold a statement or an address.
+    logger.error(
+        "ingestion failed: code=%s reason=%s at=%s chunk_set=%s seconds=%.1f",
+        ErrorCode.INTERNAL_ERROR.value,
+        type(error).__qualname__,
+        " <- ".join(reversed(code_locations(error))),
+        chunk_set,
+        time.monotonic() - started,
+    )
+
+
+def _log_failure(error: IngestError, chunk_set: str, started: float) -> None:
+    # security rule 31: codes and ids only.
+    logger.error(
+        "ingestion failed: code=%s reason=%s where=%s chunk_set=%s seconds=%.1f",
+        error.code.value,
+        error.reason,
+        error.where or "-",
+        chunk_set,
+        time.monotonic() - started,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

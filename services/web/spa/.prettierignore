@@ -1,0 +1,5 @@
+dist/
+coverage/
+# Written by the contracts package in its own JSON layout.
+src/api/contracts.schema.json
+package-lock.json

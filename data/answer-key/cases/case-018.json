@@ -1,0 +1,345 @@
+{
+  "case_id": "case-018",
+  "file_name": "case-018.pdf",
+  "summary": "Type 2 diabetes with two HbA1c readings in different bands, the later one in mmol/mol: the manual rates the most recent; a blank page.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "other",
+      "is_medical": false,
+      "layout": "blank",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": false
+    },
+    {
+      "page_number": 3,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Jamie Fixturedean",
+      "pages": [
+        1,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "45 Example Bank, Demoborough, ZZ 00226",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0118",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "jamie.fixturedean@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-38-7822",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0007034",
+      "pages": [
+        1,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Devon Specimenrow",
+      "pages": [
+        1,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "10 Test Square, Demoborough, ZZ 00229",
+      "pages": [
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0118",
+      "pages": [
+        1,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "10 Test Square",
+    "45 Example Bank",
+    "Demoborough",
+    "Demoborough Surgery",
+    "Devon",
+    "Dr Devon Specimenrow",
+    "Example Mutual Life Assurance",
+    "Fixturedean",
+    "Jamie",
+    "Pharmacy assistant",
+    "SP-2026-000118",
+    "Specimen Diagnostics Laboratory",
+    "Specimenrow",
+    "ZZ 00226",
+    "ZZ 00229"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Type 2 diabetes mellitus, diagnosed 2017-02-06",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Type 2 diabetes mellitus, diagnosed 2017-02-06"
+        },
+        {
+          "page_number": 3,
+          "quote": "Type 2 diabetes mellitus 2017-02-06 Metformin 1000 mg twice daily"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 29.0 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 29.0 kg/m2"
+        },
+        {
+          "page_number": 3,
+          "quote": "Body mass index (BMI) 29.0 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: never smoked",
+      "measure": "smoking_status",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Never smoked"
+        },
+        {
+          "page_number": 3,
+          "quote": "Smoking status Never smoked"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 126 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "2026-09-22 126 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 78 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "2026-09-22 126 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Type 2 diabetes mellitus: HbA1c 8.3 %",
+      "measure": "hba1c",
+      "rule_ids": [
+        "UW-DM-003"
+      ],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "Latest HbA1c 67 mmol/mol on 2026-09-22"
+        },
+        {
+          "page_number": 4,
+          "quote": "HbA1c 67 mmol/mol"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Type 2 diabetes mellitus: HbA1c 7.6 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "HbA1c 7.6 % on 2026-03-10"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 112 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 4,
+          "quote": "LDL cholesterol 112 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 86 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 4,
+          "quote": "eGFR 86 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-DM-003"
+  ],
+  "expected_verdict": {
+    "verdict": "loaded",
+    "loading_pct": 100,
+    "system_reasons": []
+  }
+}

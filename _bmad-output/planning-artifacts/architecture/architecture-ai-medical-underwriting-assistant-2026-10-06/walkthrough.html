@@ -1,0 +1,231 @@
+<title>Underwriting RAG Walkthrough</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap">
+<style>
+/* Layout: one reading column for prose; tables, the ladder and diagrams break out to a wider measure. */
+:root {
+  --bg: #f6f8f8;
+  --surface: #ffffff;
+  --fg: #16211f;
+  --muted: #55655f;
+  --line: #d5dedb;
+  --accent: #0b6b5c;
+  --pg: #2f5fa8;
+  --ais: #9a5a12;
+  --pg-soft: #e4ecf7;
+  --ais-soft: #f6ead8;
+  --code-bg: #eaf0ee;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101816; --surface: #17211f; --fg: #e6eeeb; --muted: #9fb0aa; --line: #2b3a36;
+    --accent: #5fd0bb; --pg: #8fb4ee; --ais: #e6b06a; --pg-soft: #1b2a41; --ais-soft: #38290f;
+    --code-bg: #1e2a27; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101816; --surface: #17211f; --fg: #e6eeeb; --muted: #9fb0aa; --line: #2b3a36;
+  --accent: #5fd0bb; --pg: #8fb4ee; --ais: #e6b06a; --pg-soft: #1b2a41; --ais-soft: #38290f;
+  --code-bg: #1e2a27; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 16px; line-height: 1.6; }
+.page { max-width: 62rem; margin-inline: auto; padding-inline: 20px; padding-block: 40px 72px; display: flex; flex-direction: column; gap: 56px; }
+header, section { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; line-height: 1.15; margin: 0; text-wrap: balance; }
+h1 { font-size: 2.5rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.65rem; padding-top: 20px; border-top: 2px solid var(--fg); }
+h3 { font-size: 1.15rem; font-weight: 500; margin-top: 8px; }
+p, ul, ol { margin: 0; max-width: 68ch; }
+ul, ol { padding-left: 1.25rem; display: flex; flex-direction: column; gap: 6px; }
+.lede { font-size: 1.15rem; color: var(--fg); }
+.status { font-family: var(--mono); font-size: 0.8rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.note { border-left: 3px solid var(--accent); padding: 4px 0 4px 16px; color: var(--muted); max-width: 68ch; }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 3px; }
+pre { margin: 0; }
+pre.code { background: var(--code-bg); padding: 14px 16px; border-radius: 4px; overflow-x: auto; font-family: var(--mono); font-size: 0.85rem; line-height: 1.5; }
+pre.code code { background: none; padding: 0; font-size: inherit; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.94rem; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; font-size: 0.78rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); border-bottom-color: var(--fg); }
+td:last-child, th:last-child { padding-right: 0; }
+
+/* The ladder: each rung is offset to the right, so the climb is visible. */
+.ladder { display: flex; flex-direction: column; gap: 8px; }
+.rung { display: grid; grid-template-columns: 3rem minmax(0, 1fr); gap: 14px; align-items: start; background: var(--surface); border: 1px solid var(--line); padding: 12px 16px; margin-left: calc(var(--i) * 3.5%); }
+.rung .id { font-family: var(--mono); font-weight: 500; font-size: 1.05rem; }
+.rung .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rung .delta { font-weight: 600; }
+.rung .detail { color: var(--muted); font-size: 0.92rem; }
+.rung.pg { border-left: 5px solid var(--pg); }
+.rung.ais { border-left: 5px solid var(--ais); }
+.chip { display: inline-block; font-family: var(--mono); font-size: 0.74rem; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }
+.chip.pg { background: var(--pg-soft); color: var(--pg); }
+.chip.ais { background: var(--ais-soft); color: var(--ais); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 28px; }
+.two > div { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.diagram { background: var(--surface); border: 1px solid var(--line); padding: 16px; overflow-x: auto; }
+footer { color: var(--muted); font-size: 0.88rem; border-top: 1px solid var(--line); padding-top: 16px; }
+@media (max-width: 560px) { h1 { font-size: 1.9rem; } .rung { margin-left: 0; } }
+</style>
+
+<div class="page">
+
+<header>
+  <div class="status">Design walkthrough · 6 October 2026 · nothing is built or measured yet</div>
+  <h1>AI Medical Underwriting Assistant: the retrieval design and how it will be judged</h1>
+  <p class="lede">A proof of concept that reads a medical record, extracts the facts that move a rating, retrieves the matching rules from an underwriting manual, and suggests a verdict an underwriter can audit line by line. This page is for a reviewer who knows retrieval-augmented generation well and wants to see where the design could be wrong.</p>
+  <p class="note">Every number on the scoreboards will come from a runner, not from this page. There are no results here, only the design and the measurement plan.</p>
+</header>
+
+<section>
+  <h2>What the system does</h2>
+  <p>A customer uploads a PDF. Personal identifiers are redacted first, by Azure AI Language's document redaction, and every later step reads only the redacted copy. Each page is classified as medical or not, with a confidence. Pages under 90% confidence go to an underwriter, who accepts or denies them. Facts are extracted from accepted pages, each with a page number and a verbatim quote that code checks against the page text. A verdict agent then searches the manual and suggests one of four verdicts: standard, loaded premium, decline, or refer to underwriter.</p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  U[Upload PDF] --> P[Redact personal identifiers]
+  P --> C{Classify each page}
+  C -->|medical, 90% or more| E[Extract facts with page and quote]
+  C -->|under 90%| Q[Underwriter triage]
+  C -->|non-medical, 90% or more| A{Customer: keep or discard}
+  A -->|keep| Q
+  Q -->|accept| E
+  E --> V[Verdict agent]
+  V <-->|search, read rule| R[Retrieval: one interface, six configurations]
+  V --> W[Result: PDF beside cited findings]
+</pre>
+  </div>
+  <p>Redaction replaces names, addresses, phone numbers, email addresses, and identity and policy numbers with their type, such as <code>[Person]</code>. Dates, ages and medical terms are kept, because the rating depends on them. Each synthetic case carries planted identifiers, and the bake-off runner fails if any of them survives into stored page text.</p>
+  <p>All data is synthetic. The manual is an original 200-page document modelled on the structure of public carrier impairment guides: impairment, key questions, probable rating. It is generated from a rule table of about 40 impairments, and that table is the answer key.</p>
+</section>
+
+<section>
+  <h2>Chunking the manual</h2>
+  <div class="two">
+    <div>
+      <h3>Fixed chunks: the baseline</h3>
+      <p>Fixed-size windows over the parsed text. They exist only so the first rung of the ladder has something honest to beat.</p>
+    </div>
+    <div>
+      <h3>Smart chunks</h3>
+      <ul>
+        <li>One rule per chunk, cut on the manual's own structure.</li>
+        <li>The parent section travels with it (small-to-big).</li>
+        <li>An LLM-written context line says where the rule sits.</li>
+      </ul>
+    </div>
+  </div>
+  <p>The manual is parsed once from its PDF with a layout model. One ingestion produces the chunk records and the vectors, and loads the same records into both stores, so neither store can win by indexing better text.</p>
+  <p>A chunk is tagged only with the rules it <em>defines</em>, never the rules it merely refers to. Without that, a cross-reference would count as a hit and inflate recall.</p>
+  <p>Embeddings are <code>text-embedding-3-large</code> at 3,072 dimensions. The corpus is a few hundred chunks, so both stores use exact nearest-neighbour search. Approximate indexes would add a variable and no benefit at this size.</p>
+</section>
+
+<section>
+  <h2>The six-row ladder</h2>
+  <p>Each row changes one thing from the row before it. A gain or a loss can then be traced to its cause, instead of two products being compared as black boxes.</p>
+  <p><span class="chip pg">pgvector</span><span class="chip ais">Azure AI Search</span></p>
+  <div class="ladder">
+    <div class="rung pg" style="--i:0"><div class="id">r1</div><div class="what"><span class="delta">Baseline</span><span class="detail">Fixed chunks, vector search only.</span></div></div>
+    <div class="rung pg" style="--i:1"><div class="id">r2</div><div class="what"><span class="delta">Changes the chunks</span><span class="detail">Smart chunks, vector search only. Measures what chunking alone buys.</span></div></div>
+    <div class="rung pg" style="--i:2"><div class="id">r3</div><div class="what"><span class="delta">Adds keyword search</span><span class="detail">Vector plus PostgreSQL full-text search, fused with reciprocal rank fusion.</span></div></div>
+    <div class="rung pg" style="--i:3"><div class="id">r4</div><div class="what"><span class="delta">Adds a reranker</span><span class="detail">r3, then rerank. Cohere Rerank on Foundry or an LLM reranker; chosen when this row is built.</span></div></div>
+    <div class="rung ais" style="--i:4"><div class="id">r5</div><div class="what"><span class="delta">Changes the store</span><span class="detail">Azure AI Search hybrid with its semantic ranker, on the same chunks and vectors.</span></div></div>
+    <div class="rung ais" style="--i:5"><div class="id">r6</div><div class="what"><span class="delta">Hands planning to the service</span><span class="detail">Azure AI Search agentic retrieval: a knowledge base with LLM query planning. Preview API.</span></div></div>
+  </div>
+  <p class="note">The weakest step is r4 to r5: it changes the store and the reranker together. The side-by-side Compare view defaults to that pair for exactly this reason, so the difference can be inspected case by case.</p>
+</section>
+
+<section>
+  <h2>How it is measured</h2>
+  <p>Twenty synthetic cases, each with expected facts, expected rules and an expected verdict, covering all four verdicts. Two measurements are kept apart on purpose.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Metric</th><th>What it isolates</th><th>How</th></tr></thead>
+    <tbody>
+      <tr><td>Rule recall at 5</td><td>The retriever alone</td><td>One search per expected fact, with the query built by one fixed function. A hit is the expected <code>rule_id</code> in the top 5.</td></tr>
+      <tr><td>Verdict accuracy</td><td>The whole chain</td><td>Each case is uploaded once and judged six times, once per row, on the same extracted facts.</td></tr>
+      <tr><td>Latency</td><td>The retriever</td><td>Retrieval time per fact, reported by the retrieval service.</td></tr>
+      <tr><td>Cost and effort</td><td>The running bill and the build</td><td>Declared inputs with their sources, from current Azure price lists.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Recall is measured with a fixed query because the agent writes its own queries. If recall were read off the agent's searches, a better retriever and a better query writer would be indistinguishable.</p>
+  <h3>Fairness rules</h3>
+  <ul>
+    <li>Same chunks, same vectors, same chat model and same embedding model for every row.</li>
+    <li>One search operation with one result shape; no row has its own endpoint.</li>
+    <li>The answer key is never indexed and no service can read it.</li>
+    <li>The classifier that Azure AI Document Intelligence trains is scored on pages it was not trained on.</li>
+  </ul>
+  <p>The winner is decided on verdict accuracy, then rule recall, then latency.</p>
+</section>
+
+<section>
+  <h2>The verdict agent</h2>
+  <p>The fixed parts of the process (the gate, the triage wait, the audit trail) run as a deterministic workflow on Azure Durable Task Scheduler. Only the verdict stage is agentic, and it is boxed in.</p>
+  <div class="two">
+    <div>
+      <h3>Three tools, no others</h3>
+      <ul>
+        <li><code>list_facts</code>: the case's extracted facts.</li>
+        <li><code>search_rules</code>: free query text, through the row under test.</li>
+        <li><code>read_rule</code>: a rule already returned by a search, or cross-referenced by a rule already read.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Rules enforced in code, not in the prompt</h3>
+      <ul>
+        <li>A reason is stored only if it cites a fact and a rule seen in that run.</li>
+        <li>No matching rule, conflicting rules, an unverified quote on a deciding fact, low confidence or hitting the step limit all force "refer to underwriter".</li>
+        <li>The agent cannot accept, deny or decide. The screen says "AI suggestion, not a decision".</li>
+      </ul>
+    </div>
+  </div>
+  <p>In row r6 the agent's own search loop is switched off. Azure AI Search plans the retrieval, one request per fact, and the verdict is composed from what comes back. Otherwise the comparison would be two agents stacked on each other.</p>
+  <h3>Querying the agent log</h3>
+  <p>Every tool call is one append-only row: run, case, step number, tool, arguments, the fact it was about, the rules returned or read, latency and time. The demo will query it live.</p>
+<pre class="code"><code># every search the agent made for one case
+GET /api/cases/&lt;case_id&gt;/agent-steps?tool=search_rules
+
+# every time it touched one rule
+GET /api/cases/&lt;case_id&gt;/agent-steps?rule_id=UW-DM-003</code></pre>
+</section>
+
+<section>
+  <h2>The second comparison: page classification</h2>
+  <p>An LLM classifier against an Azure AI Document Intelligence custom classifier, behind one interface, on the same labelled pages. The LLM's confidence is the agreement rate across repeated runs.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Metric</th><th>Measure</th></tr></thead>
+    <tbody>
+      <tr><td>Accuracy</td><td>Medical or non-medical, correct</td></tr>
+      <tr><td>Calibration</td><td>Of pages scored 90% or more, the share that are right. It should be at least 90%.</td></tr>
+      <tr><td>Queue rate</td><td>Share of pages sent to the underwriter</td></tr>
+      <tr><td>Cost</td><td>Per page</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The winner is the more accurate contender among those that are calibrated, then the one that queues fewer pages.</p>
+</section>
+
+<section>
+  <h2>Where to push on this design</h2>
+  <ul>
+    <li><strong>Twenty cases is a small set.</strong> Differences of one or two cases between rows are noise, and the scoreboard should be read that way.</li>
+    <li><strong>The manual is synthetic and tidy.</strong> One rule per chunk works because the manual was generated from a rule table. A real manual would chunk less cleanly.</li>
+    <li><strong>Row r6 runs on a preview API</strong> and a pre-release SDK. Its behaviour and price can change.</li>
+    <li><strong>Exact search hides index effects.</strong> At a few hundred chunks that is correct; it says nothing about recall under approximate search at scale.</li>
+    <li><strong>The fixed query builder is a choice.</strong> Recall depends on it, and a different builder could reorder the rows.</li>
+    <li><strong>Redaction can miss.</strong> The service does not read text inside embedded images, and the check only covers identifiers planted in the test cases.</li>
+    <li><strong>There is no sign-in.</strong> The demo is open, with a switch between a customer role and an underwriter role. That is accepted for synthetic data only.</li>
+  </ul>
+</section>
+
+<footer>
+  Source: the architecture spine and decision log in the project repository, under <code>_bmad-output/planning-artifacts/architecture/</code>. Decisions AD-11 to AD-17 cover retrieval, chunking, the agent and scoring.
+</footer>
+
+</div>

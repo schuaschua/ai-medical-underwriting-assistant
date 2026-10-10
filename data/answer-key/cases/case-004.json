@@ -1,0 +1,416 @@
+{
+  "case_id": "case-004",
+  "file_name": "case-004.pdf",
+  "summary": "A former smoker with epilepsy long free of seizures: two rules met, neither with a debit; an invoice.",
+  "pages": [
+    {
+      "page_number": 1,
+      "page_type": "application_form",
+      "is_medical": true,
+      "layout": "application_form",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 2,
+      "page_type": "attending_physician_statement",
+      "is_medical": true,
+      "layout": "attending_physician_statement",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 3,
+      "page_type": "lab_report",
+      "is_medical": true,
+      "layout": "lab_report",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    },
+    {
+      "page_number": 4,
+      "page_type": "invoice",
+      "is_medical": false,
+      "layout": "invoice",
+      "rotation": 0,
+      "drawn_rotation": 0,
+      "has_text_layer": true
+    }
+  ],
+  "identifiers": [
+    {
+      "category": "person_name",
+      "value": "Casey Mockwell",
+      "pages": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 2
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "9 Stub Row, Mockingham, ZZ 00128",
+      "pages": [
+        1,
+        4
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 4,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(303) 555-0104",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "email_address",
+      "value": "casey.mockwell@example.com",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "identity_number",
+      "value": "000-24-2516",
+      "pages": [
+        1
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "policy_number",
+      "value": "POL-SYN-0005452",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "person_name",
+      "value": "Emery Stubfield",
+      "pages": [
+        1,
+        2,
+        3
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        },
+        {
+          "page_number": 3,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "address",
+      "value": "2 Fixture Green, Mockingham, ZZ 00131",
+      "pages": [
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    },
+    {
+      "category": "phone_number",
+      "value": "(404) 555-0104",
+      "pages": [
+        1,
+        2
+      ],
+      "occurrences": [
+        {
+          "page_number": 1,
+          "count": 1
+        },
+        {
+          "page_number": 2,
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "may_also_be_redacted": [
+    "2 Fixture Green",
+    "9 Stub Row",
+    "Casey",
+    "Dr Emery Stubfield",
+    "Emery",
+    "Example Mutual Life Assurance",
+    "MSI-20718",
+    "Mockingham",
+    "Mockingham Surgery",
+    "Mockingham Survey Instruments",
+    "Mockwell",
+    "SP-2026-000104",
+    "Specimen Diagnostics Laboratory",
+    "Stubfield",
+    "Surveyor",
+    "ZZ 00128",
+    "ZZ 00131"
+  ],
+  "expected_facts": [
+    {
+      "kind": "diagnosis",
+      "statement": "Epilepsy, diagnosed 2003-05-14",
+      "measure": null,
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Epilepsy, diagnosed 2003-05-14"
+        },
+        {
+          "page_number": 2,
+          "quote": "Epilepsy 2003-05-14 Lamotrigine 100 mg twice daily"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "body mass index 23.5 kg/m2",
+      "measure": "bmi",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Body mass index (BMI) 23.5 kg/m2"
+        },
+        {
+          "page_number": 2,
+          "quote": "Body mass index (BMI) 23.5 kg/m2"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "smoking status: former smoker",
+      "measure": "smoking_status",
+      "rule_ids": [
+        "UW-TOB-003"
+      ],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Former smoker, 10 cigarettes a day for 8 years, stopped in 2012"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Former smoker, 10 cigarettes a day for 8 years, stopped in 2012"
+        }
+      ]
+    },
+    {
+      "kind": "derived",
+      "statement": "lifetime smoking 4 pack-years",
+      "measure": "pack_years",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 1,
+          "quote": "Smoking status Former smoker, 10 cigarettes a day for 8 years, stopped in 2012"
+        },
+        {
+          "page_number": 2,
+          "quote": "Smoking status Former smoker, 10 cigarettes a day for 8 years, stopped in 2012"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 118 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-05-18 118 76"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 76 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-05-18 118 76"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "systolic blood pressure 120 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-08-24 120 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "diastolic blood pressure 78 mmHg",
+      "measure": "diastolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-08-24 120 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "HbA1c 5.3 %",
+      "measure": "hba1c",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Latest HbA1c 5.3 % on 2026-08-24"
+        },
+        {
+          "page_number": 3,
+          "quote": "HbA1c 5.3 %"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "Epilepsy: time since the last seizure 14 years",
+      "measure": "years_since_last_seizure",
+      "rule_ids": [
+        "UW-EPI-003"
+      ],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "Time since the last seizure 14 years"
+        }
+      ]
+    },
+    {
+      "kind": "derived",
+      "statement": "systolic blood pressure 119 mmHg",
+      "measure": "systolic_blood_pressure",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 2,
+          "quote": "2026-05-18 118 76"
+        },
+        {
+          "page_number": 2,
+          "quote": "2026-08-24 120 78"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "LDL cholesterol 112 mg/dL",
+      "measure": "ldl_cholesterol",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "LDL cholesterol 112 mg/dL"
+        }
+      ]
+    },
+    {
+      "kind": "reading",
+      "statement": "eGFR 94 mL/min/1.73 m2",
+      "measure": "egfr",
+      "rule_ids": [],
+      "places": [
+        {
+          "page_number": 3,
+          "quote": "eGFR 94 mL/min/1.73 m2"
+        }
+      ]
+    }
+  ],
+  "expected_rule_ids": [
+    "UW-TOB-003",
+    "UW-EPI-003"
+  ],
+  "expected_verdict": {
+    "verdict": "standard",
+    "loading_pct": null,
+    "system_reasons": []
+  }
+}

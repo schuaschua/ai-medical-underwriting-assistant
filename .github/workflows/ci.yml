@@ -1,0 +1,590 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # Same version as the `uv_build` pin in packages/contracts/pyproject.toml.
+          version: "0.11.8"
+          enable-cache: true
+
+      - name: Install dependencies
+        # --locked fails the run when uv.lock is out of date instead of rewriting it.
+        run: uv sync --locked
+
+      - name: No stand-in figures among the published scoreboards
+        # AD-17: `data/scoreboards` holds results only. A file a local run
+        # wrote says `"stand_ins": true` and is never committed there.
+        run: |
+          if grep --extended-regexp --files-with-matches \
+            '"stand_ins"[[:space:]]*:[[:space:]]*true' data/scoreboards/*.json 2>/dev/null; then
+            echo "::error::A file in data/scoreboards holds stand-in figures."
+            exit 1
+          fi
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        # `evals` is the bake-off runner: a workspace member that is no service.
+        run: uv run mypy packages services evals
+
+      - name: Start PostgreSQL, the blob emulator and the scheduler emulator
+        # The integration tests need a real database, a blob store and, for
+        # `workflow`, the Durable Task Scheduler emulator. These are the
+        # containers of compose.yaml, the same ones a developer runs; each
+        # test makes a database of its own and applies the migrations to it,
+        # and the scheduler tests use a task hub of their own. No test calls
+        # Azure: where `intake` would call Azure AI Language, the tests run
+        # its stand-in (packages/synthdata, a dev dependency that `uv sync`
+        # installed) over the blob emulator, in the test process and once as
+        # a process of its own. Where `classification`, `extraction` and
+        # `verdict` would call the Foundry chat deployment, they run that
+        # package's stand-in for it, in the test process. `retrieval`'s ingestion job is run the same way over
+        # the manual in the blob emulator, with the stand-ins for Document
+        # Intelligence's layout model and for the Foundry deployments.
+        run: docker compose up --detach --wait postgres azurite scheduler
+
+      - name: Test with coverage
+        # Test paths, measured packages and the 80% threshold come from pyproject.toml.
+        # One of the tests fails when the contract schema the SPA's types are
+        # generated from no longer matches packages/contracts.
+        run: uv run pytest --cov
+
+      - name: Show the containers' logs
+        if: ${{ failure() }}
+        run: |
+          docker compose logs --no-color postgres || true
+          docker compose logs --no-color azurite || true
+          docker compose logs --no-color scheduler || true
+
+      - name: Stop the containers
+        if: ${{ always() }}
+        run: docker compose down --volumes
+
+  spa:
+    name: SPA checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/web/spa
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: services/web/spa/.node-version
+          cache: npm
+          cache-dependency-path: services/web/spa/package-lock.json
+
+      - name: Install dependencies
+        # npm ci fails when package-lock.json is out of date instead of rewriting it.
+        run: npm ci
+
+      - name: Lint and format check
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Generated contract types are current
+        run: npm run contracts:check
+
+      - name: Test with coverage
+        # The 60% threshold comes from vite.config.ts.
+        run: npm test -- --run
+
+      - name: Build
+        run: npm run build
+
+  image:
+    name: Container images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      WEB_IMAGE: aiuw-web:ci
+      WEB_CONTAINER: aiuw-web-ci
+      WEB_URL: http://127.0.0.1:18080
+      INTAKE_IMAGE: aiuw-intake:ci
+      INTAKE_CONTAINER: aiuw-intake-ci
+      INTAKE_URL: http://127.0.0.1:18081
+      WORKFLOW_IMAGE: aiuw-workflow:ci
+      WORKFLOW_CONTAINER: aiuw-workflow-ci
+      WORKFLOW_URL: http://127.0.0.1:18082
+      CLASSIFICATION_IMAGE: aiuw-classification:ci
+      CLASSIFICATION_CONTAINER: aiuw-classification-ci
+      CLASSIFICATION_URL: http://127.0.0.1:18083
+      RETRIEVAL_IMAGE: aiuw-retrieval:ci
+      RETRIEVAL_CONTAINER: aiuw-retrieval-ci
+      RETRIEVAL_URL: http://127.0.0.1:18084
+      EXTRACTION_IMAGE: aiuw-extraction:ci
+      EXTRACTION_CONTAINER: aiuw-extraction-ci
+      EXTRACTION_URL: http://127.0.0.1:18085
+      VERDICT_IMAGE: aiuw-verdict:ci
+      VERDICT_CONTAINER: aiuw-verdict-ci
+      VERDICT_URL: http://127.0.0.1:18086
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build web
+        run: docker build --file services/web/Dockerfile --tag "$WEB_IMAGE" .
+
+      - name: Build intake
+        run: docker build --file services/intake/Dockerfile --tag "$INTAKE_IMAGE" .
+
+      - name: Build workflow
+        run: docker build --file services/workflow/Dockerfile --tag "$WORKFLOW_IMAGE" .
+
+      - name: Build classification
+        run: docker build --file services/classification/Dockerfile --tag "$CLASSIFICATION_IMAGE" .
+
+      - name: Build retrieval
+        run: docker build --file services/retrieval/Dockerfile --tag "$RETRIEVAL_IMAGE" .
+
+      - name: Build extraction
+        run: docker build --file services/extraction/Dockerfile --tag "$EXTRACTION_IMAGE" .
+
+      - name: Build verdict
+        run: docker build --file services/verdict/Dockerfile --tag "$VERDICT_IMAGE" .
+
+      - name: Run web
+        run: docker run --detach --publish 127.0.0.1:18080:8000 --name "$WEB_CONTAINER" "$WEB_IMAGE"
+
+      - name: Run intake
+        # No database is given to it. The first value names the blob
+        # emulator's built-in account, the second the place of the Language
+        # stand-in and the third that of the read model's stand-in; nothing
+        # is listening at any of them and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18081:8001 \
+            --env INTAKE_BLOB_CONNECTION_STRING=UseDevelopmentStorage=true \
+            --env INTAKE_LANGUAGE_ENDPOINT=http://127.0.0.1:5100 \
+            --env INTAKE_READ_ENDPOINT=http://127.0.0.1:5102 \
+            --name "$INTAKE_CONTAINER" "$INTAKE_IMAGE"
+
+      - name: Run workflow
+        # No database and no scheduler are given to it: its worker keeps
+        # trying to reach one in the background, and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18082:8002 \
+            --name "$WORKFLOW_CONTAINER" "$WORKFLOW_IMAGE"
+
+      - name: Run classification
+        # No database is given to it. The first value is the place of the
+        # model stand-in and the second a deployment name; nothing is
+        # listening there and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18083:8003 \
+            --env CLASSIFICATION_MODEL_ENDPOINT=http://127.0.0.1:5101 \
+            --env CLASSIFICATION_CHAT_DEPLOYMENT=local-stand-in \
+            --name "$CLASSIFICATION_CONTAINER" "$CLASSIFICATION_IMAGE"
+
+      - name: Run retrieval
+        # No database is given to it, and nothing else: the service has its
+        # probes only, and needs neither the models nor the manual.
+        run: |
+          docker run --detach --publish 127.0.0.1:18084:8004 \
+            --name "$RETRIEVAL_CONTAINER" "$RETRIEVAL_IMAGE"
+
+      - name: Run extraction
+        # No database is given to it. The first value is the place of the
+        # model stand-in and the second a deployment name; nothing is
+        # listening there and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18085:8005 \
+            --env EXTRACTION_MODEL_ENDPOINT=http://127.0.0.1:5101 \
+            --env EXTRACTION_CHAT_DEPLOYMENT=local-stand-in \
+            --name "$EXTRACTION_CONTAINER" "$EXTRACTION_IMAGE"
+
+      - name: Run verdict
+        # No database is given to it. The first value is the place of the
+        # model stand-in and the second a deployment name; nothing is
+        # listening there and nothing is called.
+        run: |
+          docker run --detach --publish 127.0.0.1:18086:8006 \
+            --env VERDICT_MODEL_ENDPOINT=http://127.0.0.1:5101 \
+            --env VERDICT_CHAT_DEPLOYMENT=local-stand-in \
+            --name "$VERDICT_CONTAINER" "$VERDICT_IMAGE"
+
+      - name: Check web's health, the SPA page and the user
+        run: |
+          fetch() {
+            curl --fail --silent --show-error --max-time 5 \
+              --retry 10 --retry-delay 1 --retry-all-errors "$@"
+          }
+          fetch --output /dev/null "${WEB_URL}/api/health"
+          content_type="$(fetch --output /dev/null --write-out '%{content_type}' "${WEB_URL}/")"
+          if [[ "$content_type" != text/html* ]]; then
+            echo "::error::/ answered with content type '${content_type}', not HTML."
+            exit 1
+          fi
+          if [[ "$(docker exec "$WEB_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The web container runs as root."
+            exit 1
+          fi
+          # AD-17: the bake-off runner and the answer key are in no image,
+          # and `web` is the service the runner talks to.
+          if docker exec "$WEB_CONTAINER" python -c "import bakeoff" 2>/dev/null; then
+            echo "::error::The web image holds the bake-off runner."
+            exit 1
+          fi
+          if [[ -n "$(docker exec "$WEB_CONTAINER" find / -xdev \
+            \( -name 'answer-key' -o -name 'static-metrics.yaml' -o -name 'rule-table.json' \) \
+            -print -quit 2>/dev/null)" ]]; then
+            echo "::error::The web image holds a file of the answer key or of the runner."
+            exit 1
+          fi
+          # Story 3.5: of `data/`, the image holds the scoreboards folder and
+          # nothing else, the setting points at that copy (its note is
+          # there), and `web` answers for it: the published file when the
+          # checkout holds one, "not run yet" when it does not.
+          if [[ "$(docker exec "$WEB_CONTAINER" ls /app/data)" != "scoreboards" ]]; then
+            echo "::error::The web image must hold data/scoreboards and nothing else of data/."
+            exit 1
+          fi
+          if ! docker exec "$WEB_CONTAINER" python -c \
+            "from web.settings import get_settings; import sys; sys.exit(0 if (get_settings().scoreboards_dir / 'README.md').is_file() else 1)"; then
+            echo "::error::WEB_SCOREBOARDS_DIR in the web image is not the folder the image copied."
+            exit 1
+          fi
+          expected_status=404
+          if [[ -f data/scoreboards/retrieval.json ]]; then
+            expected_status=200
+          fi
+          scoreboard_status="$(curl --silent --show-error --max-time 5 --output /dev/null \
+            --write-out '%{http_code}' --header 'X-Demo-Role: underwriter' \
+            "${WEB_URL}/api/scoreboards/retrieval")"
+          if [[ "$scoreboard_status" != "$expected_status" ]]; then
+            echo "::error::/api/scoreboards/retrieval answered ${scoreboard_status}, not ${expected_status}."
+            exit 1
+          fi
+
+      - name: Check intake's health, its readiness and the user
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${INTAKE_URL}/health"
+          # The image carries its migrations, and with no database at their
+          # head the service must say it is not ready (azure.md rule 22):
+          # exactly 502 in the error shape. A request that fails, or any
+          # other answer, fails this step.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/ready.json" --write-out '%{http_code}' \
+            "${INTAKE_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::intake's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/ready.json" > /dev/null; then
+            echo "::error::intake's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$INTAKE_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The intake container runs as root."
+            exit 1
+          fi
+          # The image reads PDFs (story 1.7), and it never holds the Language
+          # stand-in, which is a dev tool.
+          docker exec "$INTAKE_CONTAINER" python -c "import pymupdf"
+          if docker exec "$INTAKE_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The intake image holds the Language stand-in."
+            exit 1
+          fi
+
+      - name: Check workflow's health, its readiness and the user
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${WORKFLOW_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/workflow-ready.json" --write-out '%{http_code}' \
+            "${WORKFLOW_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::workflow's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/workflow-ready.json" > /dev/null; then
+            echo "::error::workflow's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$WORKFLOW_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The workflow container runs as root."
+            exit 1
+          fi
+
+      - name: Check classification's health, its readiness, the user and the training job
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${CLASSIFICATION_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/classification-ready.json" --write-out '%{http_code}' \
+            "${CLASSIFICATION_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::classification's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/classification-ready.json" > /dev/null; then
+            echo "::error::classification's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$CLASSIFICATION_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The classification container runs as root."
+            exit 1
+          fi
+          # The image carries its prompt (story 1.8), and it never holds the
+          # model stand-in, which is a dev tool.
+          docker exec "$CLASSIFICATION_CONTAINER" python -c \
+            "from classification.prompts import CLASSIFY_PAGE, load_prompt; assert load_prompt(CLASSIFY_PAGE)"
+          if docker exec "$CLASSIFICATION_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The classification image holds the model stand-in."
+            exit 1
+          fi
+          # Story 4.2: the image holds no training page. The pages are data
+          # in a blob container, redacted before they get there.
+          if docker run --rm "$CLASSIFICATION_IMAGE" sh -c \
+            'find / -xdev \( -name "*.pdf" -o -name "redacted-pages.json" -o -path "*classifier-training*" \) -print -quit 2>/dev/null | grep -q .'; then
+            echo "::error::The classification image holds a training page."
+            exit 1
+          fi
+          # The training job is the same image with another command. With
+          # nothing configured it must end non-zero and say so, not hang.
+          if docker run --rm "$CLASSIFICATION_IMAGE" python -m classification.train \
+            > "$RUNNER_TEMP/train.log" 2>&1; then
+            echo "::error::The training job ended with status 0 without any setting."
+            exit 1
+          fi
+          if ! grep --quiet "training failed: code=internal_error reason=not_configured" "$RUNNER_TEMP/train.log"; then
+            echo "::error::The training job did not say why it failed."
+            cat "$RUNNER_TEMP/train.log"
+            exit 1
+          fi
+
+      - name: Check retrieval's health, its readiness, the user and the ingestion job
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${RETRIEVAL_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/retrieval-ready.json" --write-out '%{http_code}' \
+            "${RETRIEVAL_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::retrieval's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/retrieval-ready.json" > /dev/null; then
+            echo "::error::retrieval's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$RETRIEVAL_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The retrieval container runs as root."
+            exit 1
+          fi
+          # The image carries its prompt and the vector column's type (story
+          # 2.2), and it never holds a stand-in, which is a dev tool.
+          docker exec "$RETRIEVAL_CONTAINER" python -c \
+            "from retrieval.prompts import CHUNK_CONTEXT, load_prompt; assert load_prompt(CHUNK_CONTEXT)"
+          docker exec "$RETRIEVAL_CONTAINER" python -c "import pgvector.sqlalchemy"
+          if docker exec "$RETRIEVAL_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The retrieval image holds a stand-in."
+            exit 1
+          fi
+          # The ingestion job is the same image with another command. With
+          # nothing configured it must end non-zero and say so, not hang.
+          if docker run --rm "$RETRIEVAL_IMAGE" python -m retrieval.ingest \
+            > "$RUNNER_TEMP/ingest.log" 2>&1; then
+            echo "::error::The ingestion job ended with status 0 without any setting."
+            exit 1
+          fi
+          if ! grep --quiet "ingestion failed: code=internal_error reason=not_configured" "$RUNNER_TEMP/ingest.log"; then
+            echo "::error::The ingestion job did not say why it failed."
+            cat "$RUNNER_TEMP/ingest.log"
+            exit 1
+          fi
+
+      - name: Check extraction's health, its readiness and the user
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${EXTRACTION_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/extraction-ready.json" --write-out '%{http_code}' \
+            "${EXTRACTION_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::extraction's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/extraction-ready.json" > /dev/null; then
+            echo "::error::extraction's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$EXTRACTION_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The extraction container runs as root."
+            exit 1
+          fi
+          # The image carries its prompt and the contracts' quote finder
+          # (story 2.4), and it never holds the model stand-in, which is a
+          # dev tool.
+          docker exec "$EXTRACTION_CONTAINER" python -c \
+            "from extraction.prompts import EXTRACT_FACTS, load_prompt; assert load_prompt(EXTRACT_FACTS)"
+          docker exec "$EXTRACTION_CONTAINER" python -c \
+            "from contracts.text import find_quote; assert find_quote('HbA1c\n7.4 %', 'hba1c 7.4 %')"
+          if docker exec "$EXTRACTION_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The extraction image holds the model stand-in."
+            exit 1
+          fi
+
+      - name: Check verdict's health, its readiness and the user
+        run: |
+          curl --fail --silent --show-error --max-time 5 \
+            --retry 10 --retry-delay 1 --retry-all-errors \
+            --output /dev/null "${VERDICT_URL}/health"
+          # As for intake: with no database at the migration head bundled in
+          # the image, the service must say it is not ready, in the error shape.
+          status="$(curl --silent --show-error --max-time 30 \
+            --output "$RUNNER_TEMP/verdict-ready.json" --write-out '%{http_code}' \
+            "${VERDICT_URL}/ready")"
+          if [[ "$status" != "502" ]]; then
+            echo "::error::verdict's /ready answered '${status}' without a database, not 502."
+            exit 1
+          fi
+          if ! jq --exit-status '
+            .error.code == "upstream_unavailable"
+            and (.error.message | type == "string")
+            and (.error.trace_id | type == "string")
+          ' "$RUNNER_TEMP/verdict-ready.json" > /dev/null; then
+            echo "::error::verdict's /ready did not answer in the error shape."
+            exit 1
+          fi
+          if [[ "$(docker exec "$VERDICT_CONTAINER" id -u)" == "0" ]]; then
+            echo "::error::The verdict container runs as root."
+            exit 1
+          fi
+          # The image carries the agent's prompt (stories 2.5 and 2.6), and
+          # it never holds the model stand-in, which is a dev tool.
+          docker exec "$VERDICT_CONTAINER" python -c \
+            "from verdict.prompts import SUGGEST_VERDICT, load_prompt; assert load_prompt(SUGGEST_VERDICT)"
+          if docker exec "$VERDICT_CONTAINER" python -c "import synthdata" 2>/dev/null; then
+            echo "::error::The verdict image holds the model stand-in."
+            exit 1
+          fi
+
+      - name: Show the containers' logs
+        if: ${{ failure() }}
+        # Each on its own: a container that never started must not hide the other's log.
+        run: |
+          docker logs "$WEB_CONTAINER" || true
+          docker logs "$INTAKE_CONTAINER" || true
+          docker logs "$WORKFLOW_CONTAINER" || true
+          docker logs "$CLASSIFICATION_CONTAINER" || true
+          docker logs "$RETRIEVAL_CONTAINER" || true
+          docker logs "$EXTRACTION_CONTAINER" || true
+          docker logs "$VERDICT_CONTAINER" || true
+
+      - name: Remove the containers
+        if: ${{ always() }}
+        run: |
+          docker rm --force "$WEB_CONTAINER" || true
+          docker rm --force "$INTAKE_CONTAINER" || true
+          docker rm --force "$WORKFLOW_CONTAINER" || true
+          docker rm --force "$CLASSIFICATION_CONTAINER" || true
+          docker rm --force "$RETRIEVAL_CONTAINER" || true
+          docker rm --force "$EXTRACTION_CONTAINER" || true
+          docker rm --force "$VERDICT_CONTAINER" || true
+
+  dependency-scan:
+    # security.md rule 28: any known vulnerability in a locked Python package,
+    # or a high or critical one in a shipped npm package, fails the run.
+    name: Dependency scans
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.11.8"
+          enable-cache: true
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: services/web/spa/.node-version
+
+      - name: Scan Python dependencies
+        # Every package in uv.lock, for every workspace member, by hash.
+        run: |
+          uv export --locked --all-packages --no-emit-workspace \
+            --format requirements-txt --output-file "$RUNNER_TEMP/requirements.txt" > /dev/null
+          uvx pip-audit==2.10.1 --require-hashes --disable-pip \
+            --requirement "$RUNNER_TEMP/requirements.txt"
+
+      - name: Scan SPA dependencies
+        # Reads package-lock.json; nothing is installed.
+        run: npm --prefix services/web/spa audit --omit=dev --audit-level=high

@@ -1,0 +1,133 @@
+# Build session hand-off
+
+Written by the coding agent on 2026-10-08, at the end of the session that built the last eight stories. Read `CLAUDE.md` first (Azure stays down while coding; the test suite is kept at about 500 cases).
+
+## The Azure session of 2026-10-10 is over: the environment is torn down
+
+Read this section first. The owner started the Azure session on 2026-10-10 and had it torn down the same day: `rg-aiuw-demo-wus3` is empty and nothing costs money. What follows is the session's record; the web address it names is gone.
+
+**How it was deployed.** Pull request #1 is still open: this session's permission settings refused the merge, so the deploy workflow (which deploys only the head of `main`) was not used. The images are built by hand with `az acr build` and the `app` stack applied locally, all by `.work/azure/redeploy.sh` (gitignored; it builds the seven images from the checked-out commit and applies `infra/demo/app`). The branch is pushed after every fix. The deployed commit is the branch head at the time of the last redeploy (`git log` and the script's last line `sha=...` in its output).
+
+**Done in Azure.** Foundation and app stacks; database roles, migrations and grants for the six services (README sections 4 to 9); the manual uploaded and ingested (111 `smart`, 152 `fixed` chunks; index loaded; knowledge base made); all six rows answer a search; a case runs end to end and matched the answer key; the training pages prepared (45; `.work/classifier-training/`) and uploaded to `classifier-training`.
+
+**What the real services showed, fixed and deployed in this session** (each is a commit on the branch): the chunker for the real layout result; the services' Foundry role scoped to the account; the redaction request (`redactionPolicies` with one default; the category `PolicyNumber` is unknown to the service and left out, so policy numbers are not masked); the result file's `type` field; OCR after redaction with Document Intelligence's read model, because the real redacted PDF has picture pages and no text layer (owner's decision); only types and mask labels kept from the result file (it holds found values in clear); a document without text is checked with the read model and passed on only if blank (owner's decision); row `r6` searches once per distinct statement outside the model's step limit; the Cohere deployment at capacity 20, the whole quota.
+
+**Results so far.** First real retrieval bake-off (22 cases, 53 minutes): recall `r1` 38/39, `r2` to `r5` 39/39, `r6` 37/39; verdicts right `r1` 11, `r2` 14, `r3` 13, `r4` 13, `r5` 14, `r6` 6 of 22; winner `r2` on latency. NOT final: three cases (13, 17, 19) failed at classification on the chat deployment's rate limit (100 thousand tokens a minute; run the runner with `--case-concurrency 1`), and `r6`'s figure predates its fix. Its two files in `data/scoreboards/` were committed with the `r6` fix by mistake (the commit took every changed file); they are real but incomplete and are replaced by the rerun. Redaction is not clean: 87 leaks in all 22 cases (35 names, 30 identity numbers, 22 policy numbers) and 44 of 332 expected quotes not found. The owner decides what to do about that once the figures are complete.
+
+**The classifier is trained (2026-10-10, later the same day).** The first build failed with `InvalidRequest`, detail `TrainingContentMissing`: Document Intelligence trains only on folders that hold each page's layout result (`<page>.pdf.ocr.json`). Fixed in `88dbbd8` (deployed): an operator tool, `bakeoff.training_layout`, makes the files and names their MD5 in the list (README section 10, step 1b; owner's decision); the job accepts a layout result only when the list vouches for it, and a failed build now logs the service's nested codes. The container holds 91 files; execution `caj-aiuw-demo-wus3-train-ht09u9p` ended `trained=yes pages=45 page_types=6`. One case with `doc-intelligence` (section 10, step 4; `case-002`, case id `01a1253b-b41d-7d1d-87f8-211982812b36`, left `awaiting_human` in the underwriter's queue): all six pages got the answer key's type, confidence 0.68 to 0.95.
+
+**Both bake-offs are complete and committed (2026-10-10).** Retrieval (eval run `01a124f4-0ba8-7b58-8ae9-a6af39c0d1ee`, all 22 cases, `d78f2c6`): recall `r1` 38/39, `r2` 39/39, `r3` 39/39, `r4` 38/39, `r5` 39/39, `r6` 36/39; verdicts right `r1` 15, `r2` 16, `r3` 18, `r4` 16, `r5` 18, `r6` 17 of 22; winner `r3`; one `r4` search failed (`upstream_unavailable`, case 18). Redaction still leaks in every case; 44 of 332 expected quotes not found. Classification (eval run `01a1254b-ab1a-7c7b-83ac-0da091ad5c0e`, `3dd95b9`): `llm` 94/94 right with 2 pages queued; `doc-intelligence` 90/94 right with 86 of 94 pages queued (only 8 at or above the gate's threshold); winner `llm`; reasons clean.
+
+**Where it stopped.** Closed short by the owner's decision of 2026-10-10. The deployed commit `de3d0d2` serves the three scoreboard files. Four stored redaction result files were read and hold no found text. The findings, and the list of "Final Azure test session" checks that were NOT done (every screen in a browser among them), are the last five entries of `deferred-work.md`; the out-of-band log has the session's entry; the spine says what changed (AD-13, AD-21, the role table). The teardown is done and logged. Next, outside Azure: the owner's two decisions (the redaction leaks, the `doc-intelligence` classifier), pull request #1, and the screens in a browser against `./tools/dev.sh`.
+
+**Open with the owner from this session.** Whether to raise the chat deployment's capacity (quota allows ten times more; `security.md` names low capacity as a spending guard); what to do about the redaction leaks; the classifier's confidence looks to be always 1.0; the Foundry role's wider scope and `intake` reading an original for the blank check, both changed in `azure.md`/code and to be confirmed; `intake` is at 51 tests, one over its budget; a Cohere quota increase if `r4` is wanted at speed.
+
+**Temporary access.** The operator's own sign-in was given short-lived roles for diagnosis and for the documented uploads, each removed again. Check none is left: `az role assignment list --assignee <own object id> --all` should show nothing inside `rg-aiuw-demo-wus3`. One probe output of a synthetic case is under `operator-probe/` in the `cases` container.
+
+## Where the build stands
+
+Every story of the four epics is built. Branch `architecture/spine-redaction-diagrams`, pushed on 2026-10-08 with pull request #1 into `main` open (https://github.com/schuaschua/ai-medical-underwriting-assistant/pull/1); its six CI checks passed on `ec9df73`. Azure resource group `rg-aiuw-demo-wus3` is empty and stays torn down; nothing in this session touched Azure.
+
+| Story | State | Commit |
+| --- | --- | --- |
+| 1.7 to 3.2, 4.1 | done in earlier sessions | up to `9bd6744` |
+| 3.3 row `r5` on Azure AI Search | done | `b9ac324` |
+| 3.4 bake-off runner | done | `672d314` |
+| 3.5 retrieval scoreboard | done | `4991d65` |
+| 3.6 Compare two rows on one case | done | `d28b713` |
+| 3.7 row `r4` with a reranker (first an LLM reranker, `a61ea1c`; changed to Cohere Rerank on Foundry, not committed yet) | done | `a61ea1c` |
+| 3.8 row `r6` with agentic retrieval | done | `a4de0a7` |
+| 4.2 Document Intelligence classifier and its training job | done | `dbce613` |
+| 4.3 runner scores both classifiers | done | `d03bd7a` |
+
+The working tree was clean at `d03bd7a` and the last full run there was green: 545 Python tests (coverage 90.8%), 279 SPA tests, lint and types clean, the images build, `infra/demo/app` validates. No background agent was running, no local stack was left up, and the compose containers were stopped.
+
+Sprint status marks every story `review`; no epic is marked done and no retrospective was run.
+
+## What was proven locally, and what was not
+
+Proven on 2026-10-08 against `./tools/dev.sh` with real Dapr sidecars and the stand-ins:
+
+- The ingestion job loaded the search stand-in's index and made the knowledge base.
+- The retrieval bake-off ran over all 22 cases: all six rows answered and were scored, redaction clean, both files written.
+- The training pages were prepared through `web`, the training job trained the local classifier, and a second run trained nothing.
+- The classification bake-off scored both contenders over 94 pages; the reasons check was clean.
+- `web` answered the three scoreboard files to the underwriter and refused the customer; a case uploaded as the customer completed, and the two verdict runs Compare asks for (`r4`, `r5`) were made beside its `r3` run.
+
+Every figure from that run is a stand-in figure and says nothing about the real models.
+
+Not done: nobody has looked at any screen in a real browser. The result view, the agent log, the Scoreboard and Compare are proven by tests and by their routes answering. Compare's two panes stack by a container query that only tests have exercised.
+
+## Decisions the coding agent made that the owner has not confirmed
+
+Each spec of this session says it was not reviewed before implementation. The choices are listed in `deferred-work.md` as "Owner to confirm" or "Owner to decide" entries (35 in all, earlier sessions included). The ones that shape the design:
+
+- **4.2, how training pages are redacted.** The spine says the training job calls no service and only `intake` may call Azure AI Language, so nothing in it says who redacts the training pages. Built: a dev tool (`python -m bakeoff.training_pages`) uploads each page through `web` as a hidden case, fetches the redacted file, and an operator uploads the folder to `classifier-training`. The job refuses any blob whose content is not the one the prepared list names. The owner was asked on 2026-10-08 and had not answered; the alternatives are a job that calls `intake`, or `classification` calling the Language service itself.
+- **3.8, a verdict run on `r6`.** The service lists the facts, makes one search per fact itself, and asks the model once, with no tools, to compose the proposal. A rule counts as read when a search returned its chunk, so the "rule not read" check cannot fail on that row.
+- **3.8, REST and not the SDK.** `azure-search-documents` 12.1.0b2 installs but sends through its own transport, refuses the plain-HTTP stand-in and brings its own retries, so the knowledge base calls are REST on `2026-08-01-preview`. The package is not a dependency.
+- **3.7, the reranker.** Cohere Rerank on Foundry (`Cohere-rerank-v4.0-fast`, the owner's choice of 2026-10-08, after the catalogue listed it for West US 3), in place of the LLM reranker the row was first built with (`spec-3-7b-row-r4-on-cohere-rerank.md`). Built against the local stand-in; the deployment and the call are unproven in Azure.
+- **3.7, `verdict`'s wait for one upstream call** went from 12 s to 25 s so that it stays above `r4`'s and `r6`'s 20 s deadline. It is one setting and applies to every row and to `extraction` calls.
+- **3.6, the Compare pair** is a setting of `web` (`r4`, `r5`; fallback `r3`, `r5`); the SPA finds out which rows can run by asking.
+- **4.2, the role on the training container.** `classification` holds write access as `azure.md` lists, though the job only reads.
+- **Costs.** Every cost on both scoreboards is stated (2026-10-08, by the owner's request), worked out from Azure's Retail Prices API: unit prices with their query and date in each figure's source, the arithmetic and the assumptions in the comments of `evals/static-metrics.yaml`. The POC volume (268 searches a row, the store up 730 hours), the whole PostgreSQL server for `r1` to `r4`, `r6`'s planning tokens and the `llm` classifier's tokens per call are the coding agent's assumptions, listed in the last entry of `deferred-work.md` for the owner to confirm.
+
+## Things a later change must respect
+
+- The three lists of rows (`retrieval`, `verdict`, `workflow`) are held equal by a test in `packages/synthdata/tests/test_foundry_standin.py`, which also reads `dapr.yaml` and `infra/demo/app`. All six rows are listed locally and in the `app` stack.
+- A retrieve on `r6` and a timed-out rerank call on `r4` are never sent again: a second attempt could not finish inside the row's deadline.
+- The index definition has a vectorizer; an index made before story 3.8 has none and the job refuses to make the knowledge base over it. No index exists in Azure yet.
+- The local stand-ins keep the search index, the knowledge base and the classifier in memory: `./tools/dev.sh` reloads the first two at every start; the classifier needs `./tools/train-local.sh` after every start.
+- A scoreboard file from before story 3.5 does not fit the model and is shown as an error; run the runner again.
+- Tests are over budget in `verdict` (58 of 55), `workflow` (117 of 110), `synthdata` (50 of 45), `contracts` (64 of 60), `intake` (55 of 50) and `classification` (42 of 40); the suite is 545 against about 500. No story of this session raised a package's count except `evals`, which is new and at its 15.
+
+## How each story was built
+
+The `bmad-build` workflow from the project's own copy (`.claude/skills/bmad-build`; the global copy does not render with this project's BMad 6.12.1): spec, implementation by a subagent given only the spec, three reviewers on the diff (blind, edge-case, verification-gap), triage into the spec's Review Triage Log, fixes by the same implementer, full verification by the main session, local commit.
+
+Things learned:
+
+- Two test runs that use the scheduler emulator at the same time fail each other. Stories were built one at a time for that reason and because they share `README.md`, `deferred-work.md` and `dapr.yaml`.
+- A reviewer's "this has no test" finding is acted on only for real risk, and then inside an existing test.
+- `./tools/dev.sh` started in the background does not stop on a signal to its wrapper: send `TERM` to the `bash ./tools/dev.sh` process itself, then check ports 8000 to 8006, 5100 to 5103 and 3500 to 3506.
+- The machine's disk fills with Docker's build cache. `docker builder prune -f` and `docker image prune -f` are safe; the owner agreed to clearing unused images and containers. Volumes were left alone.
+- Scratch files go in `.work/` inside the project, never outside it (owner's global rule).
+
+## Open with the owner (from earlier sessions, still open)
+
+- A rule id typed as a whole search query: keep pure fusion and require the top 3 (recommended, tests assume it), or guarantee first place.
+- Decided by the owner on 2026-10-08, and built: the manual's page footer no longer says every number is invented. It says the document is synthetic, its ratings are invented, its clinical thresholds follow public guidelines, and how many of the items to check have been checked ("0 of 145 items checked against their sources", counted from the review file).
+- Decided by the owner on 2026-10-08: no Dapr access policy is added for the demo, so any service in the environment may call `workflow`'s decision operation.
+- Decided by the owner on 2026-10-08, and built: an attempt by the model to call a tool that does not exist is logged as a refused step (`AgentStep.tool` null, `AgentStep.asked_tool` the name asked for; migration `0002` of `verdict`).
+- Decided by the owner on 2026-10-08, and built: the manual is generated from a review file, `packages/synthdata/src/synthdata/manual-review.yaml`, which lists its 38 citations, 80 band edges said to follow a guideline, 18 unit conversions and 9 reading rules. All 145 are still `unreviewed`: the medical expert or anyone with the sources works through it (`uv run python -m synthdata review`; how to record a check is in `data/README.md`). A corrected citation or conversion is applied on generation; a corrected band edge or reading rule is refused until a developer carries it into the manual's definition and the cases.
+- Whether the SPA's tests (279) should be cut as the Python suite was.
+
+## After the stories: the owner's decisions of 2026-10-08
+
+The owner went through the open decisions on 2026-10-08. What was changed for them, each verified with the full suite before its commit:
+
+| Change | Commit |
+| --- | --- |
+| `classification` reads the training container and no longer writes it; a classifier needs 10 pages scored 0.90 or more to count as calibrated (the number is the coding agent's); the redaction report counts expected-fact quotes no longer found; no Dapr access policy | `0e0c850` |
+| SPA suite cut from 279 to 145 cases | `8492cd8` |
+| Row `r4` reranks with Cohere Rerank (`Cohere-rerank-v4.0-fast`) in place of the LLM reranker | `50200bb` |
+| Python suite cut to the per-package budgets, 545 to 515 cases | `e75de42` |
+| A call to a tool that does not exist is logged as a refused step (migration `0002` of `verdict`) | `aeac3ca` |
+| The manual is generated from `packages/synthdata/src/synthdata/manual-review.yaml` (145 items, all unreviewed) and its footer reworded | `f0f858e` |
+
+The last full run, at `f0f858e`: 515 Python tests (coverage 90.7%), 146 SPA tests, lint and types clean. Every package is at its budget. The local stack was not started again after these changes: local databases need `verdict`'s migration `0002`, the manual must be ingested again (its file changed), and the scoreboard files under `.work/scoreboards` predate the new redaction counts.
+
+Confirmed by the owner as built: the training pages' redaction route, the `r6` verdict run, the two cautions of story 2.5, a case nobody decides staying open for the demo, pure fusion for a rule id typed as a query, the Compare pair's order, `verdict`'s 25 s wait, the effort measure, and the `evals` line in `CLAUDE.md`. Costs on the scoreboards were worked out from Azure's price list on 2026-10-08 at the owner's request; their assumptions are the owner's to confirm (`deferred-work.md`, last entry).
+
+The owner confirmed on 2026-10-08 that the accepted exception in `security.md` covers the Cohere model, and the calibration floor of 10 pages. Still open with the owner: the 145 items of the review file, for the medical expert or anyone with the sources.
+
+## Where the session of 2026-10-08 stopped
+
+The owner stopped the session after the push and said the Azure session is for the next day. State at the stop: tree clean, branch pushed, pull request #1 open and green, local stack and compose containers stopped, nothing running. The whole stack was run locally once more after the owner's decisions (both bake-offs, the classifier's training, the scoreboard routes with their costs, Compare's runs), with no error in its log.
+
+To carry on: get the owner's go-ahead, then the Azure session as under "Next". The deploy workflow is started by hand and can run from this branch. The pieces written without being tried, likeliest to need a correction from configuration: the Cohere rerank call's address and its deployment (`infra/bootstrap/README.md`, section 2), the agentic retrieval calls of `r6`, and the Document Intelligence classifier's build.
+
+## Next
+
+1. The owner reads the unconfirmed decisions above and the "Owner to confirm" entries of `deferred-work.md`.
+2. Look at the screens once in a real browser against `./tools/dev.sh`.
+3. With the owner's go-ahead, the one Azure session: bring the environment up (`infra/bootstrap/README.md` section 2), run every check listed in `deferred-work.md` as "Final Azure test session" (79 entries), then tear down (section 3). The seeding order is the ingestion job, the training pages and the training job (section 10), then the two bake-offs. The database role steps for each service are sections 4 to 9; migrations are a manual step because the deploy has none.

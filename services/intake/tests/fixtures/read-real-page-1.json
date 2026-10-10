@@ -1,0 +1,1556 @@
+{
+ "_about": "A trimmed copy of what the real services answered for page 1 of the synthetic case-001 in the Azure session of 2026-10-10: Document Intelligence's prebuilt-read answer (API version 2024-11-30) for the redacted PDF, the words of that PDF's own text layer (text, x0, y0, x1, y1 in PDF points), and the redaction result file without each entity's found text. Synthetic data only.",
+ "read": {
+  "status": "succeeded",
+  "analyzeResult": {
+   "apiVersion": "2024-11-30",
+   "modelId": "prebuilt-read",
+   "pages": [
+    {
+     "pageNumber": 1,
+     "angle": 0,
+     "width": 8.2639,
+     "height": 11.6944,
+     "unit": "inch",
+     "words": [
+      {
+       "content": "1.",
+       "polygon": [
+        0.7763,
+        1.762,
+        0.8983,
+        1.7624,
+        0.8978,
+        1.9285,
+        0.7763,
+        1.928
+       ],
+       "confidence": 0.993,
+       "span": {
+        "offset": 62,
+        "length": 2
+       }
+      },
+      {
+       "content": "Applicant",
+       "polygon": [
+        0.947,
+        1.7626,
+        1.6599,
+        1.7592,
+        1.6599,
+        1.9229,
+        0.9464,
+        1.9287
+       ],
+       "confidence": 0.993,
+       "span": {
+        "offset": 65,
+        "length": 9
+       }
+      },
+      {
+       "content": "Full",
+       "polygon": [
+        0.7784,
+        2.0075,
+        0.9931,
+        2.0085,
+        0.9931,
+        2.142,
+        0.7784,
+        2.142
+       ],
+       "confidence": 0.992,
+       "span": {
+        "offset": 75,
+        "length": 4
+       }
+      },
+      {
+       "content": "name",
+       "polygon": [
+        1.0435,
+        2.0087,
+        1.3959,
+        2.01,
+        1.3959,
+        2.1419,
+        1.0435,
+        2.142
+       ],
+       "confidence": 0.992,
+       "span": {
+        "offset": 80,
+        "length": 4
+       }
+      },
+      {
+       "content": "PER",
+       "polygon": [
+        3.0355,
+        1.9948,
+        3.3445,
+        1.9897,
+        3.348,
+        2.1292,
+        3.0355,
+        2.1369
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 85,
+        "length": 3
+       }
+      },
+      {
+       "content": "1",
+       "polygon": [
+        3.3289,
+        1.9541,
+        3.3749,
+        1.9541,
+        3.372,
+        2.0403,
+        3.326,
+        2.0388
+       ],
+       "confidence": 0.994,
+       "span": {
+        "offset": 89,
+        "length": 1
+       }
+      },
+      {
+       "content": "Date",
+       "polygon": [
+        0.7743,
+        2.2269,
+        1.0658,
+        2.2231,
+        1.0658,
+        2.364,
+        0.7743,
+        2.3653
+       ],
+       "confidence": 0.989,
+       "span": {
+        "offset": 91,
+        "length": 4
+       }
+      },
+      {
+       "content": "of",
+       "polygon": [
+        1.1091,
+        2.223,
+        1.223,
+        2.2236,
+        1.223,
+        2.3638,
+        1.1091,
+        2.3639
+       ],
+       "confidence": 0.998,
+       "span": {
+        "offset": 96,
+        "length": 2
+       }
+      },
+      {
+       "content": "birth",
+       "polygon": [
+        1.2663,
+        2.2242,
+        1.5381,
+        2.2302,
+        1.5381,
+        2.3653,
+        1.2663,
+        2.3638
+       ],
+       "confidence": 0.998,
+       "span": {
+        "offset": 99,
+        "length": 5
+       }
+      },
+      {
+       "content": "1974-03-18",
+       "polygon": [
+        3.0535,
+        2.2214,
+        3.7763,
+        2.2307,
+        3.7731,
+        2.3654,
+        3.0502,
+        2.3685
+       ],
+       "confidence": 0.992,
+       "span": {
+        "offset": 105,
+        "length": 10
+       }
+      },
+      {
+       "content": "Home",
+       "polygon": [
+        0.7709,
+        3.1197,
+        1.1446,
+        3.1203,
+        1.1427,
+        3.2523,
+        0.7677,
+        3.2535
+       ],
+       "confidence": 0.992,
+       "span": {
+        "offset": 162,
+        "length": 4
+       }
+      },
+      {
+       "content": "address",
+       "polygon": [
+        1.1878,
+        3.1205,
+        1.6903,
+        3.125,
+        1.6903,
+        3.2535,
+        1.1861,
+        3.2522
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 167,
+        "length": 7
+       }
+      },
+      {
+       "content": "ADR2",
+       "polygon": [
+        3.0355,
+        3.1084,
+        3.3858,
+        3.0759,
+        3.3858,
+        3.1882,
+        3.0355,
+        3.2343
+       ],
+       "confidence": 0.865,
+       "span": {
+        "offset": 175,
+        "length": 4
+       }
+      },
+      {
+       "content": "Email",
+       "polygon": [
+        0.7665,
+        3.5632,
+        1.136,
+        3.5632,
+        1.136,
+        3.6951,
+        0.7665,
+        3.6951
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 195,
+        "length": 5
+       }
+      },
+      {
+       "content": "EML4",
+       "polygon": [
+        3.0406,
+        3.5633,
+        3.3694,
+        3.553,
+        3.3705,
+        3.6819,
+        3.0406,
+        3.6951
+       ],
+       "confidence": 0.901,
+       "span": {
+        "offset": 201,
+        "length": 4
+       }
+      },
+      {
+       "content": "4",
+       "polygon": [
+        3.3265,
+        3.5175,
+        3.3858,
+        3.5175,
+        3.3834,
+        3.5986,
+        3.3238,
+        3.5966
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 206,
+        "length": 1
+       }
+      },
+      {
+       "content": "National",
+       "polygon": [
+        0.7731,
+        3.7817,
+        1.2807,
+        3.7855,
+        1.2775,
+        3.9326,
+        0.7699,
+        3.9314
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 208,
+        "length": 8
+       }
+      },
+      {
+       "content": "identity",
+       "polygon": [
+        1.3293,
+        3.7857,
+        1.7543,
+        3.7854,
+        1.7511,
+        3.9326,
+        1.3261,
+        3.9326
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 217,
+        "length": 8
+       }
+      },
+      {
+       "content": "number",
+       "polygon": [
+        1.7835,
+        3.7853,
+        2.2886,
+        3.7811,
+        2.2854,
+        3.9314,
+        1.7802,
+        3.9326
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 226,
+        "length": 6
+       }
+      },
+      {
+       "content": "000-12-3456",
+       "polygon": [
+        3.0426,
+        3.7858,
+        3.8528,
+        3.788,
+        3.8454,
+        3.9185,
+        3.0426,
+        3.9185
+       ],
+       "confidence": 0.993,
+       "span": {
+        "offset": 233,
+        "length": 11
+       }
+      },
+      {
+       "content": "Policy",
+       "polygon": [
+        0.772,
+        4.0084,
+        1.1332,
+        4.0097,
+        1.1319,
+        4.1541,
+        0.772,
+        4.1544
+       ],
+       "confidence": 0.998,
+       "span": {
+        "offset": 245,
+        "length": 6
+       }
+      },
+      {
+       "content": "number",
+       "polygon": [
+        1.1643,
+        4.0098,
+        1.67,
+        4.0098,
+        1.6682,
+        4.157,
+        1.1629,
+        4.1543
+       ],
+       "confidence": 0.998,
+       "span": {
+        "offset": 252,
+        "length": 6
+       }
+      },
+      {
+       "content": "PHN5",
+       "polygon": [
+        3.0365,
+        3.954,
+        3.3603,
+        3.959,
+        3.3577,
+        4.1265,
+        3.0339,
+        4.1215
+       ],
+       "confidence": 0.874,
+       "span": {
+        "offset": 259,
+        "length": 4
+       }
+      },
+      {
+       "content": "PHHealth",
+       "polygon": [
+        0.7561,
+        4.3068,
+        1.409,
+        4.3109,
+        1.4057,
+        4.4811,
+        0.7528,
+        4.4787
+       ],
+       "confidence": 0.257,
+       "span": {
+        "offset": 264,
+        "length": 8
+       }
+      },
+      {
+       "content": "declaration",
+       "polygon": [
+        1.4607,
+        4.3118,
+        2.2792,
+        4.332,
+        2.276,
+        4.4819,
+        1.4574,
+        4.4813
+       ],
+       "confidence": 0.993,
+       "span": {
+        "offset": 273,
+        "length": 11
+       }
+      },
+      {
+       "content": "Condition",
+       "polygon": [
+        0.8446,
+        5.9109,
+        1.4518,
+        5.917,
+        1.4471,
+        6.0489,
+        0.8413,
+        6.0472
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 429,
+        "length": 9
+       }
+      },
+      {
+       "content": "Type",
+       "polygon": [
+        3.0385,
+        5.9106,
+        3.3598,
+        5.9092,
+        3.3594,
+        6.0654,
+        3.0385,
+        6.0629
+       ],
+       "confidence": 0.989,
+       "span": {
+        "offset": 439,
+        "length": 4
+       }
+      },
+      {
+       "content": "2",
+       "polygon": [
+        3.4023,
+        5.909,
+        3.474,
+        5.9087,
+        3.4735,
+        6.0663,
+        3.4019,
+        6.0657
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 444,
+        "length": 1
+       }
+      },
+      {
+       "content": "diabetes",
+       "polygon": [
+        3.5191,
+        5.9085,
+        4.0263,
+        5.9062,
+        4.0253,
+        6.0685,
+        3.5186,
+        6.0665
+       ],
+       "confidence": 0.994,
+       "span": {
+        "offset": 446,
+        "length": 8
+       }
+      },
+      {
+       "content": "mellitus,",
+       "polygon": [
+        4.0582,
+        5.9061,
+        4.584,
+        5.9037,
+        4.5823,
+        6.0689,
+        4.0571,
+        6.0686
+       ],
+       "confidence": 0.993,
+       "span": {
+        "offset": 455,
+        "length": 9
+       }
+      },
+      {
+       "content": "diagnosed",
+       "polygon": [
+        4.6291,
+        5.9035,
+        5.2665,
+        5.9005,
+        5.2641,
+        6.0665,
+        4.6274,
+        6.0688
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 465,
+        "length": 9
+       }
+      },
+      {
+       "content": "2019-05-06",
+       "polygon": [
+        5.309,
+        5.9003,
+        6.0355,
+        5.8967,
+        6.0355,
+        6.0602,
+        5.3065,
+        6.0663
+       ],
+       "confidence": 0.993,
+       "span": {
+        "offset": 475,
+        "length": 10
+       }
+      },
+      {
+       "content": "3.",
+       "polygon": [
+        0.7624,
+        6.6798,
+        0.8974,
+        6.6797,
+        0.8972,
+        6.8423,
+        0.7624,
+        6.8406
+       ],
+       "confidence": 0.998,
+       "span": {
+        "offset": 598,
+        "length": 2
+       }
+      },
+      {
+       "content": "Attending",
+       "polygon": [
+        0.947,
+        6.6797,
+        1.6522,
+        6.6781,
+        1.6505,
+        6.8471,
+        0.9466,
+        6.8429
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 601,
+        "length": 9
+       }
+      },
+      {
+       "content": "physician",
+       "polygon": [
+        1.7101,
+        6.6779,
+        2.4213,
+        6.6733,
+        2.4213,
+        6.8451,
+        1.7082,
+        6.8471
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 611,
+        "length": 9
+       }
+      },
+      {
+       "content": "Physician",
+       "polygon": [
+        0.7731,
+        6.926,
+        1.3807,
+        6.9254,
+        1.3807,
+        7.0748,
+        0.7699,
+        7.0703
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 621,
+        "length": 9
+       }
+      },
+      {
+       "content": "DrPER®",
+       "polygon": [
+        3.0417,
+        6.9058,
+        3.5162,
+        6.9101,
+        3.515,
+        7.0663,
+        3.0416,
+        7.0559
+       ],
+       "confidence": 0.677,
+       "span": {
+        "offset": 631,
+        "length": 6
+       }
+      },
+      {
+       "content": "Exampleby",
+       "polygon": [
+        3.5932,
+        6.9111,
+        4.2893,
+        6.9259,
+        4.2893,
+        7.0857,
+        3.5917,
+        7.0681
+       ],
+       "confidence": 0.994,
+       "span": {
+        "offset": 638,
+        "length": 9
+       }
+      },
+      {
+       "content": "Practice",
+       "polygon": [
+        0.7656,
+        7.1479,
+        1.2893,
+        7.1523,
+        1.2893,
+        7.2778,
+        0.7656,
+        7.2836
+       ],
+       "confidence": 0.997,
+       "span": {
+        "offset": 648,
+        "length": 8
+       }
+      },
+      {
+       "content": "Practice",
+       "polygon": [
+        0.7688,
+        7.3655,
+        1.2738,
+        7.3749,
+        1.271,
+        7.5159,
+        0.7688,
+        7.5156
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 657,
+        "length": 8
+       }
+      },
+      {
+       "content": "telephone",
+       "polygon": [
+        1.3161,
+        7.3753,
+        1.9391,
+        7.3744,
+        1.9369,
+        7.5171,
+        1.3131,
+        7.516
+       ],
+       "confidence": 0.995,
+       "span": {
+        "offset": 666,
+        "length": 9
+       }
+      },
+      {
+       "content": "Exampleton",
+       "polygon": [
+        3.0448,
+        7.1445,
+        3.7831,
+        7.1375,
+        3.7804,
+        7.2989,
+        3.0448,
+        7.2987
+       ],
+       "confidence": 0.992,
+       "span": {
+        "offset": 676,
+        "length": 10
+       }
+      },
+      {
+       "content": "Family",
+       "polygon": [
+        3.8358,
+        7.1373,
+        4.234,
+        7.1373,
+        4.2296,
+        7.2989,
+        3.8329,
+        7.2989
+       ],
+       "confidence": 0.996,
+       "span": {
+        "offset": 687,
+        "length": 6
+       }
+      },
+      {
+       "content": "Practice",
+       "polygon": [
+        4.2815,
+        7.1374,
+        4.7918,
+        7.1412,
+        4.7891,
+        7.2989,
+        4.2769,
+        7.2989
+       ],
+       "confidence": 0.992,
+       "span": {
+        "offset": 694,
+        "length": 8
+       }
+      },
+      {
+       "content": "PHN1",
+       "polygon": [
+        3.0369,
+        7.3293,
+        3.3908,
+        7.3293,
+        3.3908,
+        7.5019,
+        3.0369,
+        7.5019
+       ],
+       "confidence": 0.637,
+       "span": {
+        "offset": 703,
+        "length": 4
+       }
+      },
+      {
+       "content": ".7",
+       "polygon": [
+        3.2995,
+        7.309,
+        3.4037,
+        7.309,
+        3.4009,
+        7.4205,
+        3.2995,
+        7.4179
+       ],
+       "confidence": 0.632,
+       "span": {
+        "offset": 708,
+        "length": 2
+       }
+      }
+     ],
+     "lines": [
+      {
+       "content": "1. Applicant",
+       "polygon": [
+        0.7716,
+        1.7613,
+        1.6548,
+        1.7562,
+        1.6548,
+        1.9186,
+        0.7716,
+        1.9237
+       ],
+       "spans": [
+        {
+         "offset": 62,
+         "length": 12
+        }
+       ]
+      },
+      {
+       "content": "Full name",
+       "polygon": [
+        0.7766,
+        2.0049,
+        1.3909,
+        2.0049,
+        1.3909,
+        2.1369,
+        0.7766,
+        2.1369
+       ],
+       "spans": [
+        {
+         "offset": 75,
+         "length": 9
+        }
+       ]
+      },
+      {
+       "content": "PER",
+       "polygon": [
+        3.0355,
+        2.0049,
+        3.3451,
+        1.9897,
+        3.3401,
+        2.1318,
+        3.0355,
+        2.1318
+       ],
+       "spans": [
+        {
+         "offset": 85,
+         "length": 3
+        }
+       ]
+      },
+      {
+       "content": "1",
+       "polygon": [
+        3.2944,
+        1.9541,
+        3.3705,
+        1.9592,
+        3.3705,
+        2.0404,
+        3.2944,
+        2.0404
+       ],
+       "spans": [
+        {
+         "offset": 89,
+         "length": 1
+        }
+       ]
+      },
+      {
+       "content": "Date of birth",
+       "polygon": [
+        0.7716,
+        2.2181,
+        1.533,
+        2.2232,
+        1.533,
+        2.3602,
+        0.7716,
+        2.3602
+       ],
+       "spans": [
+        {
+         "offset": 91,
+         "length": 13
+        }
+       ]
+      },
+      {
+       "content": "1974-03-18",
+       "polygon": [
+        3.0457,
+        2.2181,
+        3.7715,
+        2.2232,
+        3.7665,
+        2.3653,
+        3.0457,
+        2.3653
+       ],
+       "spans": [
+        {
+         "offset": 105,
+         "length": 10
+        }
+       ]
+      },
+      {
+       "content": "Home address",
+       "polygon": [
+        0.7665,
+        3.1165,
+        1.6853,
+        3.1165,
+        1.6853,
+        3.2535,
+        0.7665,
+        3.2485
+       ],
+       "spans": [
+        {
+         "offset": 162,
+         "length": 12
+        }
+       ]
+      },
+      {
+       "content": "ADR2",
+       "polygon": [
+        3.0355,
+        3.1063,
+        3.3807,
+        3.0759,
+        3.3807,
+        3.1825,
+        3.0355,
+        3.2383
+       ],
+       "spans": [
+        {
+         "offset": 175,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "content": "Email",
+       "polygon": [
+        0.7716,
+        3.5632,
+        1.132,
+        3.5682,
+        1.1269,
+        3.69,
+        0.7665,
+        3.6951
+       ],
+       "spans": [
+        {
+         "offset": 195,
+         "length": 5
+        }
+       ]
+      },
+      {
+       "content": "EML4",
+       "polygon": [
+        3.0457,
+        3.5733,
+        3.3655,
+        3.553,
+        3.3655,
+        3.685,
+        3.0406,
+        3.69
+       ],
+       "spans": [
+        {
+         "offset": 201,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "content": "4",
+       "polygon": [
+        3.3045,
+        3.5175,
+        3.3807,
+        3.5225,
+        3.3756,
+        3.5987,
+        3.2995,
+        3.5987
+       ],
+       "spans": [
+        {
+         "offset": 206,
+         "length": 1
+        }
+       ]
+      },
+      {
+       "content": "National identity number",
+       "polygon": [
+        0.7665,
+        3.7814,
+        2.2842,
+        3.7763,
+        2.2842,
+        3.9286,
+        0.7665,
+        3.9286
+       ],
+       "spans": [
+        {
+         "offset": 208,
+         "length": 24
+        }
+       ]
+      },
+      {
+       "content": "000-12-3456",
+       "polygon": [
+        3.0406,
+        3.7814,
+        3.8477,
+        3.7814,
+        3.8477,
+        3.9134,
+        3.0406,
+        3.9134
+       ],
+       "spans": [
+        {
+         "offset": 233,
+         "length": 11
+        }
+       ]
+      },
+      {
+       "content": "Policy number",
+       "polygon": [
+        0.7716,
+        4.0047,
+        1.665,
+        4.0047,
+        1.665,
+        4.1519,
+        0.7716,
+        4.1519
+       ],
+       "spans": [
+        {
+         "offset": 245,
+         "length": 13
+        }
+       ]
+      },
+      {
+       "content": "PHN5",
+       "polygon": [
+        3.0304,
+        3.954,
+        3.3553,
+        3.9591,
+        3.3553,
+        4.1266,
+        3.0254,
+        4.1215
+       ],
+       "spans": [
+        {
+         "offset": 259,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "content": "PHHealth declaration",
+       "polygon": [
+        0.7513,
+        4.3042,
+        2.2741,
+        4.3144,
+        2.269,
+        4.4819,
+        0.7513,
+        4.4717
+       ],
+       "spans": [
+        {
+         "offset": 264,
+         "length": 20
+        }
+       ]
+      },
+      {
+       "content": "Condition",
+       "polygon": [
+        0.8376,
+        5.9081,
+        1.4467,
+        5.9081,
+        1.4467,
+        6.0452,
+        0.8376,
+        6.0401
+       ],
+       "spans": [
+        {
+         "offset": 429,
+         "length": 9
+        }
+       ]
+      },
+      {
+       "content": "Type 2 diabetes mellitus, diagnosed 2019-05-06",
+       "polygon": [
+        3.0355,
+        5.9031,
+        6.0304,
+        5.8929,
+        6.0304,
+        6.0604,
+        3.0355,
+        6.0706
+       ],
+       "spans": [
+        {
+         "offset": 439,
+         "length": 46
+        }
+       ]
+      },
+      {
+       "content": "3. Attending physician",
+       "polygon": [
+        0.7614,
+        6.6746,
+        2.4162,
+        6.6695,
+        2.4162,
+        6.8421,
+        0.7614,
+        6.8421
+       ],
+       "spans": [
+        {
+         "offset": 598,
+         "length": 22
+        }
+       ]
+      },
+      {
+       "content": "Physician",
+       "polygon": [
+        0.7665,
+        6.9233,
+        1.3756,
+        6.9233,
+        1.3756,
+        7.0705,
+        0.7665,
+        7.0705
+       ],
+       "spans": [
+        {
+         "offset": 621,
+         "length": 9
+        }
+       ]
+      },
+      {
+       "content": "DrPER® Exampleby",
+       "polygon": [
+        3.0406,
+        6.903,
+        4.2842,
+        6.9233,
+        4.2792,
+        7.0806,
+        3.0406,
+        7.0552
+       ],
+       "spans": [
+        {
+         "offset": 631,
+         "length": 16
+        }
+       ]
+      },
+      {
+       "content": "Practice",
+       "polygon": [
+        0.7614,
+        7.1466,
+        1.2843,
+        7.1466,
+        1.2843,
+        7.2786,
+        0.7614,
+        7.2786
+       ],
+       "spans": [
+        {
+         "offset": 648,
+         "length": 8
+        }
+       ]
+      },
+      {
+       "content": "Practice telephone",
+       "polygon": [
+        0.7665,
+        7.3649,
+        1.934,
+        7.3699,
+        1.934,
+        7.5171,
+        0.7665,
+        7.5121
+       ],
+       "spans": [
+        {
+         "offset": 657,
+         "length": 18
+        }
+       ]
+      },
+      {
+       "content": "Exampleton Family Practice",
+       "polygon": [
+        3.0406,
+        7.1365,
+        4.7868,
+        7.1365,
+        4.7868,
+        7.2938,
+        3.0406,
+        7.2989
+       ],
+       "spans": [
+        {
+         "offset": 676,
+         "length": 26
+        }
+       ]
+      },
+      {
+       "content": "PHN1",
+       "polygon": [
+        3.0304,
+        7.3293,
+        3.3858,
+        7.3293,
+        3.3858,
+        7.5019,
+        3.0254,
+        7.5019
+       ],
+       "spans": [
+        {
+         "offset": 703,
+         "length": 4
+        }
+       ]
+      },
+      {
+       "content": ".7",
+       "polygon": [
+        3.2995,
+        7.309,
+        3.401,
+        7.3141,
+        3.401,
+        7.4207,
+        3.3045,
+        7.4207
+       ],
+       "spans": [
+        {
+         "offset": 708,
+         "length": 2
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "layer_words": [
+  [
+   "PER",
+   219.7,
+   144.41,
+   239.21,
+   155.0
+  ],
+  [
+   "1",
+   239.21,
+   141.09,
+   242.38,
+   147.44
+  ],
+  [
+   "ADR",
+   219.34,
+   224.01,
+   240.02,
+   234.93
+  ],
+  [
+   "2",
+   240.02,
+   220.58,
+   243.29,
+   227.13
+  ],
+  [
+   "PHN",
+   220.06,
+   239.85,
+   240.74,
+   250.77
+  ],
+  [
+   "3",
+   240.74,
+   236.42,
+   244.01,
+   242.98
+  ],
+  [
+   "EML",
+   219.34,
+   256.78,
+   239.48,
+   267.7
+  ],
+  [
+   "4",
+   239.48,
+   253.35,
+   242.75,
+   259.9
+  ],
+  [
+   "PHN",
+   219.7,
+   288.11,
+   239.09,
+   298.35
+  ],
+  [
+   "5",
+   239.09,
+   284.9,
+   242.15,
+   291.04
+  ],
+  [
+   "PHN",
+   55.47,
+   311.52,
+   74.73,
+   321.7
+  ],
+  [
+   "5",
+   74.73,
+   308.32,
+   77.78,
+   314.43
+  ],
+  [
+   "PER",
+   231.59,
+   497.71,
+   250.24,
+   507.83
+  ],
+  [
+   "6",
+   250.24,
+   494.53,
+   253.27,
+   500.6
+  ],
+  [
+   "PHN",
+   219.7,
+   530.12,
+   241.03,
+   541.39
+  ],
+  [
+   "7",
+   241.03,
+   526.59,
+   244.4,
+   533.34
+  ]
+ ],
+ "result_file": {
+  "id": "probe-2",
+  "entities": [
+   {
+    "type": "Person",
+    "entityId": "1",
+    "mask": "PER",
+    "length": 14,
+    "confidenceScore": 1.0,
+    "tags": [
+     {
+      "name": "Person",
+      "confidenceScore": 1.0
+     }
+    ]
+   },
+   {
+    "type": "Address",
+    "entityId": "2",
+    "mask": "ADR",
+    "length": 41,
+    "confidenceScore": 1.0,
+    "tags": [
+     {
+      "name": "Address",
+      "confidenceScore": 1.0
+     }
+    ]
+   },
+   {
+    "type": "PhoneNumber",
+    "entityId": "3",
+    "mask": "PHN",
+    "length": 14,
+    "confidenceScore": 1.0,
+    "tags": [
+     {
+      "name": "PhoneNumber",
+      "confidenceScore": 1.0
+     }
+    ]
+   },
+   {
+    "type": "Email",
+    "entityId": "4",
+    "mask": "EML",
+    "length": 26,
+    "confidenceScore": 0.8,
+    "tags": [
+     {
+      "name": "Email",
+      "confidenceScore": 0.8
+     }
+    ]
+   },
+   {
+    "type": "PhoneNumber",
+    "entityId": "5",
+    "mask": "PHN",
+    "length": 9,
+    "confidenceScore": 0.8,
+    "tags": [
+     {
+      "name": "PhoneNumber",
+      "confidenceScore": 0.8
+     }
+    ]
+   },
+   {
+    "type": "Person",
+    "entityId": "6",
+    "mask": "PER",
+    "length": 5,
+    "confidenceScore": 0.9,
+    "tags": [
+     {
+      "name": "Person",
+      "confidenceScore": 0.9
+     }
+    ]
+   },
+   {
+    "type": "PhoneNumber",
+    "entityId": "7",
+    "mask": "PHN",
+    "length": 14,
+    "confidenceScore": 1.0,
+    "tags": [
+     {
+      "name": "PhoneNumber",
+      "confidenceScore": 1.0
+     }
+    ]
+   }
+  ],
+  "warnings": []
+ }
+}

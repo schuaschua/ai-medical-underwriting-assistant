@@ -1,0 +1,677 @@
+{
+  "run": {
+    "eval_run_id": "01a124f4-0ba8-7b58-8ae9-a6af39c0d1ee",
+    "started_at": "2026-10-10T10:05:59.897608Z",
+    "finished_at": "2026-10-10T10:11:04.351488Z",
+    "web_address": "https://ca-aiuw-demo-wus3-web.whiteflower-7e9a6f55.westus3.azurecontainerapps.io",
+    "stand_ins": false
+  },
+  "clean": false,
+  "cases_checked": 22,
+  "pages_checked": 94,
+  "identifiers_checked": 198,
+  "leaks": [
+    {
+      "case_key": "case-001",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 5,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 5,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 6,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-003",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-003",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-003",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-003",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-003",
+      "page_number": 4,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-005",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-005",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-006",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-006",
+      "page_number": 3,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-006",
+      "page_number": 4,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-006",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-007",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-007",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-007",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 4,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-009",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-009",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-009",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-009",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-009",
+      "page_number": 5,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-009",
+      "page_number": 5,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-010",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-010",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-010",
+      "page_number": 2,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-010",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-010",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-010",
+      "page_number": 5,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-011",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-011",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-011",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 4,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-013",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-013",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-014",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-014",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-014",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-014",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-014",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-015",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-015",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-015",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-016",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-016",
+      "page_number": 2,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-016",
+      "page_number": 2,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-016",
+      "page_number": 3,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-017",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-017",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-017",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 3,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-018",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 2,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 4,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-020",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-020",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 1,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 2,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 2,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 4,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 4,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-021",
+      "page_number": 5,
+      "category": "person_name"
+    },
+    {
+      "case_key": "case-022",
+      "page_number": 1,
+      "category": "identity_number"
+    },
+    {
+      "case_key": "case-022",
+      "page_number": 2,
+      "category": "policy_number"
+    },
+    {
+      "case_key": "case-022",
+      "page_number": 4,
+      "category": "person_name"
+    }
+  ],
+  "may_also_be_redacted": 366,
+  "may_also_be_redacted_masked": 189,
+  "cases_not_checked": [],
+  "quotes_checked": 332,
+  "quotes_not_found": 44,
+  "quotes_not_found_at": [
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "fact_number": 4
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "fact_number": 5
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "fact_number": 6
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "fact_number": 7
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "fact_number": 9
+    },
+    {
+      "case_key": "case-001",
+      "page_number": 2,
+      "fact_number": 9
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "fact_number": 5
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "fact_number": 6
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "fact_number": 7
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-002",
+      "page_number": 2,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "fact_number": 5
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "fact_number": 6
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "fact_number": 7
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "fact_number": 11
+    },
+    {
+      "case_key": "case-004",
+      "page_number": 2,
+      "fact_number": 11
+    },
+    {
+      "case_key": "case-006",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-007",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "fact_number": 5
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "fact_number": 6
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "fact_number": 7
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-008",
+      "page_number": 2,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "fact_number": 5
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "fact_number": 6
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "fact_number": 7
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-012",
+      "page_number": 2,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-013",
+      "page_number": 2,
+      "fact_number": 7
+    },
+    {
+      "case_key": "case-013",
+      "page_number": 2,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 8
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 9
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 10
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 11
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 12
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 13
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 14
+    },
+    {
+      "case_key": "case-019",
+      "page_number": 3,
+      "fact_number": 14
+    },
+    {
+      "case_key": "case-022",
+      "page_number": 2,
+      "fact_number": 3
+    },
+    {
+      "case_key": "case-022",
+      "page_number": 2,
+      "fact_number": 4
+    }
+  ]
+}
