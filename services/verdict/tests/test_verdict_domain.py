@@ -933,7 +933,7 @@ def test_story_2_5_a_debit_is_kept_only_on_a_rule_the_run_read_and_checked_again
 # --- row r6: the run searches, the model composes (story 3.8) --------------------
 
 
-def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_with_no_tool(
+def test_story_3_8_on_r6_the_run_searches_once_per_statement_and_the_model_composes_with_no_tool(
     case_id: str,
     facts: FakeFacts,
     rules: FakeRules,
@@ -945,7 +945,10 @@ def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_w
     glucose, pressure, smoker = (
         fact(case_id, f"SECRET-FACT  {name}\treading") for name in ("a", "b", "c")
     )
-    facts.facts.extend([glucose, pressure, smoker])
+    # The first statement stands on a second page too: a fact of its own
+    # that states the same thing.
+    again = fact(case_id, "SECRET-FACT a reading")
+    facts.facts.extend([glucose, pressure, smoker, again])
     # The queries are the contracts' query builder's: whitespace collapsed.
     queries = [f"SECRET-FACT {name} reading" for name in ("a", "b", "c")]
     rules.by_query = dict(zip(queries, [[DM_50, DM_25], [HT_50], []], strict=True))
@@ -973,8 +976,9 @@ def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_w
     with caplog.at_level(logging.INFO):
         result, repository = run_with(agent)
 
-    # The steps: the facts listed, one search per fact with the query made
-    # from its statement, and no other search and no rule read.
+    # The steps: the facts listed, one search per distinct statement with
+    # the query made from it, under the first fact that states it, and no
+    # other search and no rule read.
     assert [
         (step.step_no, step.tool, step.fact_id, step.rule_ids, step.outcome)
         for step in repository.steps
@@ -995,6 +999,7 @@ def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_w
         glucose.fact_id,
         pressure.fact_id,
         smoker.fact_id,
+        again.fact_id,
     ]
     assert [
         (item["fact_id"], [rule["rule_ids"] for rule in item["rules"]])
@@ -1003,6 +1008,8 @@ def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_w
         (glucose.fact_id, [[DM_50], [DM_25]]),
         (pressure.fact_id, [[HT_50]]),
         (smoker.fact_id, []),
+        # The fact that repeats a statement has the rules of its one search.
+        (again.fact_id, [[DM_50], [DM_25]]),
     ]
     assert material["searches"][0]["rules"][0]["text"] == rule_text(
         DM_50, DIABETES, "a debit of +50 %", HT_50
@@ -1040,12 +1047,12 @@ def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_w
     assert (referred.verdict, run.reasons) == (Verdict.REFER, [])
     assert run.system_reasons == [SystemReason.NO_MATCHING_RULE]
 
-    # More facts than the run has steps: referred as at the step limit,
-    # as soon as the facts are listed. No search is made and paid for,
-    # and the model is not asked.
+    # More distinct statements than the run may search for: referred as
+    # at the step limit, as soon as the facts are listed. No search is made
+    # and paid for, and the model is not asked.
     stopped = StubAgent(composes=final_answer())
     searched = len(rules.searches)
-    limited, repository = run_with(stopped, step_limit=3)
+    limited, repository = run_with(stopped, composed_search_limit=2)
     assert limited.verdict is Verdict.REFER
     assert repository.stored_run().system_reasons == [SystemReason.STEP_LIMIT]
     assert [
@@ -1055,10 +1062,14 @@ def test_story_3_8_on_r6_the_run_searches_once_per_fact_and_the_model_composes_w
         (ToolName.SEARCH_RULES, StepOutcome.REFUSED, ErrorCode.STEP_LIMIT),
     ]
     assert stopped.materials == [] and len(rules.searches) == searched
-    # With a step for each search the run goes through.
-    assert run_with(StubAgent(composes=final_answer()), step_limit=4)[0].status is (
-        StageStatus.DONE
-    )
+    # The model's step limit does not bound these searches: no model makes
+    # them. With more facts than that limit has steps, and a search for
+    # each distinct statement allowed, the case is searched and composed.
+    composed = StubAgent(composes=final_answer())
+    through, repository = run_with(composed, step_limit=1, composed_search_limit=3)
+    assert (through.status, len(composed.materials)) == (StageStatus.DONE, 1)
+    assert repository.stored_run().system_reasons == []
+    assert [step.outcome for step in repository.steps] == [StepOutcome.DONE] * 4
 
     # A search the toolbox refuses (a statement longer than a query may
     # be) was not made: the run fails there, and nothing is composed as if

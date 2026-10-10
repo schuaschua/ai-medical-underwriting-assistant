@@ -165,6 +165,10 @@ def row_not_available_message(available: frozenset[RetrieverConfig]) -> str:
     )
 
 
+# VERDICT_COMPOSED_SEARCH_LIMIT: see the settings for what it means in time.
+DEFAULT_COMPOSED_SEARCH_LIMIT = 40
+
+
 @dataclass(frozen=True, slots=True)
 class RunOptions:
     """The settings a verdict run works with (VERDICT_*: see the settings)."""
@@ -184,6 +188,11 @@ class RunOptions:
     search_top_k: int = DEFAULT_TOP_K
     # AD-11: the ladder rows a verdict may be commanded with here.
     retriever_configs: frozenset[RetrieverConfig] = DEFAULT_AVAILABLE_RETRIEVER_CONFIGS
+    # Row `r6`: the most searches the run itself makes for one case, one
+    # per distinct fact statement. In place of `step_limit` on that row,
+    # where no model calls a tool. A case that needs more is referred
+    # (`step_limit`) before any search is made.
+    composed_search_limit: int = DEFAULT_COMPOSED_SEARCH_LIMIT
 
 
 @dataclass(slots=True)
@@ -462,6 +471,7 @@ async def _suggest(
         # can match nothing: the agent is not asked.
         suggestion = without_facts()
     else:
+        composed = key.retriever_config in SERVICE_PLANNED_RETRIEVER_CONFIGS
         toolbox = Toolbox(
             verdict_run_id=run.verdict_run_id,
             case_id=key.case_id,
@@ -470,10 +480,16 @@ async def _suggest(
             ports=ToolPorts(rules=ports.rules, repository=ports.repository),
             trace_context=trace_context,
             now=now,
-            step_limit=options.step_limit,
+            # AD-15: the step limit stops a model that keeps calling
+            # tools. On a row where the run makes the searches itself
+            # their number is known and no model can add to it: there the
+            # bound is the run's own limit on searches, and one step for
+            # listing the facts.
+            step_limit=1 + options.composed_search_limit
+            if composed
+            else options.step_limit,
             search_top_k=options.search_top_k,
-            searches_count_as_reads=key.retriever_config
-            in SERVICE_PLANNED_RETRIEVER_CONFIGS,
+            searches_count_as_reads=composed,
         )
         suggestion, kept = await _work(toolbox, ports.agent, options)
         steps = toolbox.state.steps

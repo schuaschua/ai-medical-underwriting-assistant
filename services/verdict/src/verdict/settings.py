@@ -11,6 +11,7 @@ from contracts.enums import RetrieverConfig
 from contracts.models.retrieval import DEFAULT_TOP_K, MAX_TOP_K
 from verdict.domain.run import (
     DEFAULT_AVAILABLE_RETRIEVER_CONFIGS,
+    DEFAULT_COMPOSED_SEARCH_LIMIT,
     RUNNABLE_RETRIEVER_CONFIGS,
 )
 
@@ -128,6 +129,23 @@ class Settings(BaseSettings):
     # AD-15: the most tool calls one run may make. A run that would make one
     # more is stopped, and its case referred (`step_limit`).
     step_limit: Annotated[int, Field(ge=1, le=200)] = 30
+    # AD-15, row `r6`: the most searches one run makes itself, one per
+    # distinct fact statement, in place of the step limit above: on that
+    # row no model calls a tool, so there is no loop to stop, and a real
+    # case stores more facts than the step limit has steps (28 for a case
+    # of three pages). A case with more distinct statements is referred
+    # (`step_limit`) before any search is made. The searches go one after
+    # the other inside the agent's time budget below, with the one
+    # composing call after them. Measured on the real search service
+    # (2026-10-10): 1.95 s a search at the median, 2.8 s at the 95th
+    # percentile. So 40 searches take about 78 s as a rule and 112 s when
+    # every one is slow, which leaves the composing call its whole 35 s
+    # (VERDICT_MODEL_TIMEOUT_SECONDS) inside the 150 s. 60 would take
+    # 117 s and 168 s: past the budget when searches are slow. Raise this
+    # only together with a look at those two figures.
+    composed_search_limit: Annotated[int, Field(ge=1, le=200)] = (
+        DEFAULT_COMPOSED_SEARCH_LIMIT
+    )
     # AD-15: how long the agent may work in all, model calls and tool calls
     # together. When it is spent the agent is stopped and the case referred
     # (`step_limit`), as at the step limit. It must leave the stage time to

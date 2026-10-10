@@ -977,13 +977,19 @@ does against the same need.
   and the other rows work as before.
 - *A verdict run on `r6`* does not run the agent's loop: a model that could search again on top of
   the service's own planning would be a second agent, and the row would measure both. `verdict`
-  lists the facts and makes one search per fact itself, with the query the contracts' query builder
-  makes from the fact's statement, each logged as a step like a tool call; then the model is asked
+  lists the facts and makes one search per distinct fact statement itself, with the query the
+  contracts' query builder makes from the statement, each logged as a step like a tool call under
+  the first fact that states it (the same statement on three pages is one search, and each of those
+  facts is given its rules); then the model is asked
   once, with another prompt (`prompts/compose_verdict.md`) and no tool, to compose its proposal
   from the facts and the rules those searches returned. Every check on a proposal is the same as on
   the other rows; a rule counts as read when a search of the run returned its chunk, and an effect
-  is checked against that text. A case with more facts than the run has steps left is referred as
-  at the step limit as soon as the facts are listed, before any search is paid for. A search that
+  is checked against that text. These searches are not bounded by the agent's step limit, which
+  exists to stop a model that keeps calling tools: no model makes them. They have a limit of their
+  own, `VERDICT_COMPOSED_SEARCH_LIMIT` (default 40: about 78 s of searches at the measured median
+  of 1.95 s each and 112 s at the 95th percentile of 2.8 s, inside the agent's 150 s with the
+  composing call). A case with more distinct statements than that is referred with `step_limit` as
+  soon as the facts are listed, before any search is paid for. A search that
   fails ends the run as on every row, and a search the toolbox refuses fails it (`stage_failed`):
   nothing is composed over a search that was not made.
 

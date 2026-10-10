@@ -47,6 +47,7 @@ def run_options(settings: Settings) -> RunOptions:
         confidence_floor=settings.confidence_floor,
         search_top_k=settings.search_top_k,
         retriever_configs=frozenset(settings.available_retriever_configs),
+        composed_search_limit=settings.composed_search_limit,
     )
 
 

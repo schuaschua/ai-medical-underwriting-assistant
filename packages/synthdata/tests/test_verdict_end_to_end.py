@@ -468,6 +468,9 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
     extracted = extraction.facts(case_id).facts
     case_facts = {fact.fact_id for fact in extracted}
     steps = {row: verdict.steps(run.verdict_run_id).steps for row, run in runs.items()}
+    first_stating: dict[str, str] = {}
+    for fact in extracted:
+        first_stating.setdefault(build_fact_query(fact.statement), fact.fact_id)
     for row in rows:
         assert steps[row][0].tool is ToolName.LIST_FACTS
         searched = {
@@ -475,9 +478,10 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
         }
         assert searched and searched <= case_facts
         # The agent picks the facts it searches for, the same on every row
-        # it runs on. On `r6` it picks nothing: every fact is searched for.
+        # it runs on. On `r6` it picks nothing: every distinct statement is
+        # searched for, under the first fact that states it.
         assert (
-            searched == case_facts
+            searched == set(first_stating.values())
             if row == "r6"
             else searched
             == {
@@ -488,25 +492,21 @@ def test_story_3_2_a_case_started_with_several_rows_gets_a_run_for_each_on_the_s
         )
 
     # Story 3.8, row `r6`: the agent's own search loop is off. The steps
-    # are the facts listed and one search per fact, in the facts' order,
-    # each with the query the one query builder makes of the statement,
-    # and each is one retrieve request to the knowledge base. No rule is
-    # read and nothing else is searched.
+    # are the facts listed and one search per distinct statement, in the
+    # facts' order, under the first fact that states it, each with the
+    # query the one query builder makes of the statement, and each is one
+    # retrieve request to the knowledge base. No rule is read and nothing
+    # else is searched.
     assert [
         (step.tool, step.fact_id, step.arguments.get("query"), step.outcome)
         for step in steps["r6"][1:]
     ] == [
-        (
-            ToolName.SEARCH_RULES,
-            fact.fact_id,
-            build_fact_query(fact.statement),
-            StepOutcome.DONE,
-        )
-        for fact in extracted
+        (ToolName.SEARCH_RULES, fact_id, query, StepOutcome.DONE)
+        for query, fact_id in first_stating.items()
     ]
     assert [
         sent["messages"][0]["content"][0]["text"] for sent in search_service.retrievals
-    ] == [build_fact_query(fact.statement) for fact in extracted]
+    ] == list(first_stating)
     # Then the model was asked once, with no tool to search or read with,
     # and composed its proposal from the facts and what those searches
     # returned.
